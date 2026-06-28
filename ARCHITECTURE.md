@@ -114,10 +114,17 @@ this repo is the proof you can hand him and run in front of him.
   hand-drawn dimension lines into a parametric model is a research problem. So
   you **set scale yourself** with two clicks and pick the unit (mm / cm / in /
   px). A wrong auto-scale wastes filament.
-- **A side view is a silhouette; a top view gives real width.** The importer
-  feeds both into the model automatically: side → roofline + sill, top → width
-  curve. **Front/rear are detected and labelable but not yet used** to shape the
-  cross-section — that's the next math step (front view → section roundness).
+- **All three views now feed the model — side, top, AND front.** The importer
+  reads them automatically: side → roofline + sill, top → width curve, **front →
+  the real cross-section shape** (replacing the single "roundness" slider). The
+  cross-section is anchored so the body's sides drop to the sill (a closed,
+  printable canopy). Validated on the real Countach blueprint: side + top + front
+  → watertight model. Rear is detected and labelable; it's used as a section
+  fallback if no front is assigned.
+- **One cross-section is lofted along the whole length (honest limit).** The
+  front view gives one representative section that's scaled by the per-station
+  width and height. That's a real improvement over a slider, but it's not yet a
+  full skin that morphs the section from nose to tail — that's the next step.
 - **Edge extraction picks the outermost ink per column.** That means the side
   "sill" follows the ground line if it's inside the crop (a flat underside —
   fine for an open-bottom shell, trim the box to exclude it), and the roofline

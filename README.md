@@ -29,27 +29,31 @@ Live app: enable Pages on this repo (below) →
 
 ## How to use it
 
-### Import a multi-view blueprint (the fast path)
+### The assembly line: one sheet → trace each side → build
 Got one image with several views on it — like a side/front/rear/top blueprint?
-Use the **Import Sheet** tab:
+The views move down a pipeline, **Import → Reference &amp; Trace → 3D Preview**:
 
-1. **Load the sheet** (button or drag-and-drop). One file, all the views.
-2. **Auto-detect views** — each view is cut out as an editable box. The tool
-   guesses which is the *side* and which is the *top*; the title strip is
-   excluded automatically.
-3. **Fix the boxes** if needed — drag to move, drag a corner to resize, use the
-   dropdown to set each box's role (side / top / front / rear / ignore), or
-   add/delete boxes. Getting the cut-outs right is what makes the result good.
-4. **Pick units and set scale** — choose mm / cm / in / px, click **Set scale**,
-   click two points a known distance apart, and type the real distance. (In px
-   mode, 1 px = 1 unit and no calibration is needed.)
-5. **Build model from sheet** — the side view becomes the roofline + sill, the
-   top view becomes the real width, and you jump to the 3D preview. Re-edit the
-   boxes and rebuild any time.
+1. **Import Sheet — load the sheet** (button or drag-and-drop). One file, all the
+   views. The view **scrolls**, so you can zoom in on detail and see everything.
+2. **Auto-detect views** — each view is cut out as an editable box (adaptive
+   ink threshold, so scans that aren't pure black-on-white still work). It guesses
+   side / top / front; the title strip is excluded.
+3. **Fix the cut-outs** — drag to move, drag a corner to resize, set each box's
+   role from the dropdown (side / top / front / rear / ignore), add or delete
+   boxes. Getting the trims right is what makes the model good.
+4. **Pick units + set scale** — mm / cm / in / px, click two points a known
+   distance apart, type the real distance. (px mode = 1 px : 1 unit, no calibration.)
+5. **Send views to Reference &amp; Trace** — each cut-out is loaded into its own
+   view with a **traced outline already laid on top**.
+6. **Reference &amp; Trace — anchor down each side, one by one.** Switch between
+   Side / Top / Front. The outline is pre-traced from the drawing; refine it:
+   **click to add a point, drag a point to move it, right-click to delete.** Trim
+   and trace until each side is right. Hit **Save** to download the profile.
+7. **3D Preview — build.** Open the 3D tab; the model is assembled from the views
+   you traced. Go back, refine a side, and it updates.
 
-*Validated on a real Lamborghini Countach blueprint: 5 views segmented, model
-came out watertight.* Front/rear views are detected and labelable now; using
-them to shape the cross-section is the next step. PDF? Screenshot a page (or use
+*Validated on a real Lamborghini Countach blueprint: 5 views segmented, side +
+top + front traced, model came out watertight.* PDF? Screenshot a page (or use
 the backend's `/import/pdf`) and load that image.
 
 ### Or build it by hand (full control)
@@ -61,12 +65,13 @@ the backend's `/import/pdf`) and load that image.
    (mm). Every dimension is now true to size.
 4. **Trace the side view** — top edge and lower edge. Those drive the silhouette.
 5. **Trace a top view (optional, for real width)** — flip the view switch to
-   *Top view*, set its scale, and trace the left and right edges of the plan
-   outline. The width curve is derived from the actual drawing instead of
-   sliders. This matches how your friend works: each view drawn separately.
-6. **Set the wheels** to the chassis your friend already has — wheelbase, track,
+   *Top*, set its scale, and trace the left and right edges of the plan outline.
+6. **Trace a front view (optional, for the real cross-section)** — flip to
+   *Front* and trace the outline from one side, over the roof, to the other. No
+   scale needed; it sets the section shape (replacing the roundness slider).
+7. **Set the wheels** to the chassis your friend already has — wheelbase, track,
    radius, ride height. The arches are cut to clear them.
-7. **Export STL** for the slicer, or **Profile JSON** to send to the backend.
+8. **Export STL** for the slicer, or **Profile JSON** to send to the backend.
 
 ### Connect the backend (optional)
 In *Export & library*, set the **Backend URL** (default `http://localhost:8000`)

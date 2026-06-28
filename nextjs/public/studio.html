@@ -191,10 +191,11 @@
     .proj-name{width:130px}
   }
   /* ---------- blueprint import ---------- */
-  #sheetHost{flex:1;position:relative;overflow:hidden;display:grid;place-items:center;
+  #sheetHost{flex:1;position:relative;overflow:auto;display:block;
     background:repeating-linear-gradient(0deg,#0a0e13,#0a0e13 1px,transparent 1px,transparent 24px),
       repeating-linear-gradient(90deg,#0a0e13,#0a0e13 1px,transparent 1px,transparent 24px),#0c1119;}
-  #sheetImg{max-width:100%;max-height:100%;display:block;user-select:none;-webkit-user-drag:none}
+  #sheetWrap{position:relative;margin:12px auto;width:fit-content}
+  #sheetImg{display:block;user-select:none;-webkit-user-drag:none}
   #cropLayer,#calLayer{position:absolute;inset:0}
   #calLayer{pointer-events:none}
   .cropbox{position:absolute;border:2px solid var(--accent);background:rgba(255,122,47,.06);box-sizing:border-box;cursor:move}
@@ -207,6 +208,7 @@
   .cropbox .h.ne{right:-6px;top:-6px;cursor:nesw-resize}
   .cropbox .h.sw{left:-6px;bottom:-6px;cursor:nesw-resize}
   .cropbox .h.se{right:-6px;bottom:-6px;cursor:nwse-resize}
+  #viewSeg button.traced::after{content:"●";color:var(--good);margin-left:4px;font-size:9px;vertical-align:middle}
 </style>
 </head>
 <body>
@@ -287,6 +289,8 @@
         <div class="field"><label>Widest point <span class="val"><span id="vWP">0.45</span></span></label><input type="range" id="sWP" min="0.20" max="0.80" value="0.45" step="0.01"></div>
         <div class="field"><label>Tail width <span class="val"><span id="vTW">22</span></span></label><input type="range" id="sTW" min="4" max="90" value="22"></div>
         <div class="field"><label>Section roundness <span class="val"><span id="vRound">1.4</span></span></label><input type="range" id="sRound" min="0.6" max="3.0" value="1.4" step="0.05"></div>
+        <div class="hint" id="secMode">Source: <span class="tag">parametric</span> — a <b>front view</b> sets the real cross-section.</div>
+        <button class="btn ghost" id="clearSection" style="display:none">↺ Back to parametric section</button>
         <button class="btn ghost" id="clearWidth" style="display:none">↺ Back to parametric width</button>
       </div>
     </details>
@@ -310,6 +314,12 @@
     <details class="sec">
       <summary><span class="idx">06</span><span class="ttl">Shell &amp; mesh</span><span class="chev">▶</span></summary>
       <div class="sec-body">
+        <label style="font-size:12px;color:var(--ink-dim);display:block;margin-bottom:5px">Reconstruction method</label>
+        <div class="seg" id="modeSeg" style="margin:0 0 4px;width:100%">
+          <button data-m="loft" class="on">Smooth loft</button>
+          <button data-m="projection">Orthographic</button>
+        </div>
+        <div class="hint" id="modeHint">Smooth loft: stretches the front section along the body — softer, approximate. Orthographic: intersects the side + front + top silhouettes so every line projects to its true place (needs a front view).</div>
         <div class="field"><label>Wall thickness <span class="val"><span id="vWall">1.8</span> mm</span></label><input type="range" id="sWall" min="0.6" max="5.0" value="1.8" step="0.1"></div>
         <div class="field"><label>Loft stations <span class="val"><span id="vSt">72</span></span></label><input type="range" id="sSt" min="16" max="160" value="72" step="1"></div>
         <div class="field"><label>Arc segments <span class="val"><span id="vSeg">56</span></span></label><input type="range" id="sSeg" min="12" max="120" value="56" step="1"></div>
@@ -362,14 +372,16 @@
           <button class="btn" id="iScale">⊹ Set scale</button>
           <button class="btn" id="iDetect">▣ Auto-detect views</button>
           <button class="btn" id="iAdd">＋ Add box</button>
-          <button class="btn primary" id="iBuild" style="width:auto">▶ Build model from sheet</button>
+          <button class="btn primary" id="iBuild" style="width:auto">▶ Send views to Reference &amp; Trace</button>
           <span class="hint" id="iStatus" style="margin:0 0 0 4px"></span>
         </div>
         <div id="sheetHost">
-          <img id="sheetImg" alt="" draggable="false">
-          <div id="cropLayer"></div>
-          <div id="calLayer"></div>
-          <div class="drop-note" id="iDrop"><div class="box"><b>Drop a blueprint / multi-view sheet</b><span>One image with the side, top, front… views drawn on it. Auto-detect cuts each view out — fix the boxes, set scale, and build.</span></div></div>
+          <div id="sheetWrap">
+            <img id="sheetImg" alt="" draggable="false">
+            <div id="cropLayer"></div>
+            <div id="calLayer"></div>
+          </div>
+          <div class="drop-note" id="iDrop"><div class="box"><b>Drop a blueprint / multi-view sheet</b><span>One image with the side, top, front… views drawn on it. Auto-detect cuts each view out — fix the boxes, set scale, then send them down the line to trace each side.</span></div></div>
         </div>
       </div>
     </div>
@@ -379,6 +391,7 @@
       <canvas id="gl"></canvas>
       <div class="vp-tools">
         <button class="btn" id="tWire">Wireframe</button>
+        <button class="btn" id="tRef">Reference</button>
         <button class="btn" id="tReset">Recenter</button>
       </div>
       <div class="vp-overlay">
@@ -391,21 +404,25 @@
     <div class="view hide" id="viewTrace">
       <div class="trace-wrap">
         <div class="trace-bar">
-          <div class="seg" id="viewSeg" style="margin:0;width:148px;flex:0 0 auto">
-            <button data-v="side" class="on">Side view</button>
-            <button data-v="top">Top view</button>
+          <div class="seg" id="viewSeg" style="margin:0;width:210px;flex:0 0 auto">
+            <button data-v="side" class="on">Side</button>
+            <button data-v="top">Top</button>
+            <button data-v="front">Front</button>
           </div>
           <button class="btn" id="bCal">⊹ Set scale</button>
           <button class="btn" id="bTop">⌢ <span id="bTopLbl">top edge</span></button>
           <button class="btn" id="bBot">⌣ <span id="bBotLbl">lower edge</span></button>
-          <button class="btn ghost" id="bUndo">↶ undo point</button>
+          <button class="btn ghost" id="bUndo">↶ undo</button>
           <button class="btn ghost" id="bClear">⌫ clear view</button>
+          <button class="btn" id="bSave">💾 Save</button>
+          <button class="btn primary" id="b3D" style="width:auto">→ 3D Preview</button>
           <span class="hint" id="traceStatus" style="margin:0 0 0 4px"></span>
         </div>
         <div id="canvasHost">
           <canvas id="trace"></canvas>
           <div class="drop-note" id="dropNote"><div class="box"><b id="dropTitle">Drop a side-view drawing</b><span id="dropSub">Side view = the silhouette. Switch to Top view to trace real width. Set scale, then trace two edges.</span></div></div>
         </div>
+        <div class="hint" style="padding:6px 12px 0">Click empty space to add a point · drag a point to move it · right-click a point to delete · refine each side, then open 3D Preview.</div>
       </div>
     </div>
   </section>
@@ -458,25 +475,43 @@ function makeBody(p){
   const rows=M+1; const gi=(i,j)=>i*rows+j;
   const outer=new Array((N+1)*rows);
 
+  const section=(p.section&&p.section.length>1)?p.section:null;
+  // Orthographic projection mode: the upper surface is the intersection of the side
+  // (height-vs-length) and front (cross-section, absolute mm) silhouettes, with the
+  // top view limiting width. This projects each view's lines to where they belong.
+  const proj=(p.mode==="projection" && p.frontHull && p.frontHull.length>1);
+  const FH=proj?p.frontHull:null, fW=FH?Math.max(...FH.map(q=>Math.abs(q[0]))):0;
+  const fUp=FH?(yy)=>{
+    if(yy<=FH[0][0])return FH[0][1]; if(yy>=FH[FH.length-1][0])return FH[FH.length-1][1];
+    for(let k=0;k<FH.length-1;k++){const a=FH[k],b=FH[k+1];if(yy>=a[0]&&yy<=b[0]){const t=(b[0]-a[0])?(yy-a[0])/(b[0]-a[0]):0;return a[1]+(b[1]-a[1])*t;}}
+    return FH[FH.length-1][1];
+  }:null;
   for(let i=0;i<=N;i++){
     const xf=i/N, x=(xf-0.5)*L;
     const zTop=sampleProfile(p.topProfile,xf), zBot=sampleProfile(p.bottomProfile,xf);
     const halfW=Math.max(0.05,sampleProfile(p.widthProfile,xf));
+    const Y=proj?Math.max(0.05,Math.min(halfW,fW)):halfW;   // width = intersection of top & front
     for(let j=0;j<=M;j++){
-      const s=j/M, th=Math.PI*s, ct=Math.cos(th), st=Math.sin(th);
-      const y=-halfW*ct;
-      let z=zBot+(zTop-zBot)*Math.pow(Math.max(0,st),pow);
+      const u=j/M;
+      let yNorm, z;
+      if(proj){
+        yNorm=2*u-1; const yy=yNorm*Y;
+        let zUp=Math.min(zTop, fUp(yy));                     // ceiling = min(side, front) -> the projection
+        const e=(Math.abs(yNorm)-0.92)/0.08; if(e>0)zUp=zBot+(zUp-zBot)*(1-clamp(e,0,1)); // sides drop to sill
+        z=Math.max(zBot,zUp);
+      } else if(section){ yNorm=2*u-1; z=zBot+(zTop-zBot)*clamp(sampleProfile(section,u),0,1.4); }
+      else { const th=Math.PI*u; yNorm=-Math.cos(th); z=zBot+(zTop-zBot)*Math.pow(Math.max(0,Math.sin(th)),pow); }
+      const y=yNorm*Y;
       let lift=0;
       for(const w of wheels){
         const half=(w.r??8)*1.15, d=Math.abs(x-(w.x??0));
         if(d<half){
-          const bump=smoothstep(1-d/half), side=Math.pow(Math.abs(ct),1.5);
+          const bump=smoothstep(1-d/half), side=Math.pow(Math.abs(yNorm),1.5);
           const amt=(w.r??8)*1.4*bump*side*archLift;
           if(amt>lift)lift=amt;
         }
       }
-      z+=lift;
-      outer[gi(i,j)]=[x,y,z];
+      outer[gi(i,j)]=[x,y,z+lift];
     }
   }
   const tris=[];
@@ -557,8 +592,8 @@ const PRESETS={
   sedan :{len:230,nose:30,cowl:44,roof:62,roofPos:.52,tail:46,sill:9, nw:22,mw:46,wp:.5 ,tw:40,round:1.8, wb:.64,track:72,wr:16,ww:26,rh:13,arch:.9},
   suv   :{len:210,nose:38,cowl:56,roof:84,roofPos:.5 ,tail:74,sill:14,nw:26,mw:52,wp:.5 ,tw:48,round:2.2, wb:.62,track:80,wr:22,ww:34,rh:18,arch:1.1},
 };
-const S={...PRESETS.hotrod, wall:1.8, st:72, seg:56, opacity:.55};
-let traced={top:null,bottom:null,width:null}; // mm-space [[xf,value]] when user traces
+const S={...PRESETS.hotrod, wall:1.8, st:72, seg:56, opacity:.55, mode:"loft"};
+let traced={top:null,bottom:null,width:null,section:null,frontHull:null}; // mm-space / normalized profiles when traced
 
 function buildTop(){
   if(traced.top)return traced.top;
@@ -574,6 +609,10 @@ function buildWidth(){
   if(traced.width)return traced.width;
   return [[0,S.nw],[0.16,S.mw*0.82],[S.wp,S.mw],[0.85,S.tw],[1,S.tw*0.8]];
 }
+function buildSection(){
+  // normalized cross-section: [[xf 0..1 across width, zNorm 0..1 height]]. null = parametric arc.
+  return traced.section&&traced.section.length>1?traced.section:null;
+}
 function buildWheels(){
   const L=S.len, wbX=S.wb*L/2;
   return [{x:-wbX,z:S.rh,r:S.wr,width:S.ww},{x:wbX,z:S.rh,r:S.wr,width:S.ww}];
@@ -584,6 +623,8 @@ function currentProfile(){
     length:S.len, stations:S.st, arcSegments:S.seg, roofFlatness:S.round,
     wallThickness:S.wall, archLift:S.arch,
     topProfile:buildTop(), bottomProfile:buildBottom(), widthProfile:buildWidth(),
+    section:buildSection(),
+    mode:S.mode, frontHull:(S.mode==="projection"?traced.frontHull:null),
     wheels:buildWheels(),
     wheelLayout:{wheelbaseFrac:S.wb, track:S.track, radius:S.wr, width:S.ww, rideHeight:S.rh},
   };
@@ -593,10 +634,10 @@ function currentProfile(){
    THREE.JS VIEWPORT  (custom orbit controller, no external deps)
    ========================================================================= */
 const glCanvas=document.getElementById("gl");
-let renderer,scene,camera,bodyMesh,wireMesh,wheelGroup,grid;
+let renderer,scene,camera,bodyMesh,wireMesh,wheelGroup,grid,refGroup;
 let target=new THREE.Vector3(0,0,0);
 let cam={az:-0.7,pol:1.15,rad:300};
-let wireOn=false;
+let wireOn=false, refOn=false;
 
 function initThree(){
   renderer=new THREE.WebGLRenderer({canvas:glCanvas,antialias:true,alpha:true});
@@ -613,9 +654,29 @@ function initThree(){
   const axis=new THREE.AxesHelper(40);axis.position.y=0.2;scene.add(axis);
 
   wheelGroup=new THREE.Group();scene.add(wheelGroup);
+  refGroup=new THREE.Group();scene.add(refGroup);
   resize();updateCam();animate();
 }
 function disposeMesh(m){if(m){m.geometry.dispose();if(m.material.map)m.material.map.dispose();m.material.dispose();scene.remove(m);}}
+function texFrom(src){
+  const t = (src instanceof HTMLCanvasElement) ? new THREE.CanvasTexture(src) : new THREE.Texture(src);
+  t.needsUpdate=true; return t;
+}
+// place the traced drawings as reference planes around the model (world: x=length, y=up, z=-width)
+function makeRefPlanes(bb){
+  if(refGroup){refGroup.traverse(o=>{if(o.material){if(o.material.map)o.material.map.dispose();o.material.dispose();}if(o.geometry)o.geometry.dispose();});refGroup.clear();}
+  if(!refOn||!bb)return;
+  const Lx=bb.max.x-bb.min.x, Ly=bb.max.y-bb.min.y, Lz=bb.max.z-bb.min.z;
+  const cX=(bb.min.x+bb.max.x)/2, cW=(bb.min.y+bb.max.y)/2, cH=(bb.min.z+bb.max.z)/2;
+  const m=Math.max(Lx,Ly,Lz)*0.06, wMax=Math.max(Math.abs(bb.min.y),Math.abs(bb.max.y));
+  const mat=src=>new THREE.MeshBasicMaterial({map:texFrom(src),transparent:true,opacity:0.9,side:THREE.DoubleSide});
+  if(V.side.img){const mesh=new THREE.Mesh(new THREE.PlaneGeometry(Lx,Lz),mat(V.side.img));
+    mesh.position.set(cX,cH,-(wMax+m));refGroup.add(mesh);}                 // length×height, off to the side
+  if(V.top.img){const mesh=new THREE.Mesh(new THREE.PlaneGeometry(Lx,Ly),mat(V.top.img));
+    mesh.rotation.x=-Math.PI/2;mesh.position.set(cX,bb.min.z-m,-cW);refGroup.add(mesh);}  // plan as a floor
+  if(V.front.img){const mesh=new THREE.Mesh(new THREE.PlaneGeometry(Ly,Lz),mat(V.front.img));
+    mesh.rotation.y=Math.PI/2;mesh.position.set(bb.min.x-m,cH,-cW);refGroup.add(mesh);}    // cross-section at the nose
+}
 
 function rebuild(){
   const prof=currentProfile();
@@ -656,6 +717,7 @@ function rebuild(){
   const tri=indices.length/3;
   const man=checkManifold(indices);
   const bb=geo.boundingBox;
+  makeRefPlanes(bb);
   const dx=(bb.max.x-bb.min.x), dy=(bb.max.y-bb.min.y), dz=(bb.max.z-bb.min.z);
   rLen.textContent=fmtLen(S.len);
   rTris.textContent=tri.toLocaleString();
@@ -669,6 +731,7 @@ function rebuild(){
   else{stamp.classList.add("warn");
     stamp.querySelector(".t").textContent="CHECK MESH";
     stamp.querySelector(".d").textContent=man.boundary+" open edges";}
+  updateViewDots();
 }
 
 function resize(){
@@ -717,7 +780,7 @@ const tctx=traceCanvas.getContext("2d");
 let fit={s:1,ox:0,oy:0};
 // Per-view tracing state. side: A=roof/top edge, B=sill/lower edge.
 //                          top:  A=left edge,     B=right edge.
-const V={ side:{img:null,scale:null,A:[],B:[]}, top:{img:null,scale:null,A:[],B:[]} };
+const V={ side:{img:null,scale:null,A:[],B:[]}, top:{img:null,scale:null,A:[],B:[]}, front:{img:null,scale:null,A:[],B:[]} };
 let activeView="side";
 let traceMode=null;              // 'cal' | 'A' | 'B'
 let calPts=[];                   // canvas px
@@ -746,6 +809,17 @@ function deriveWidth(A,B,scale){
     out.push([xf,Math.max(0.5,Math.abs(interpY(sb,xpx)-interpY(sa,xpx))/scale/2)]);}
   return out;
 }
+// a front-view upper outline -> normalized cross-section [[xf 0..1, zNorm 0..1]],
+// anchored so the sides drop to the sill (a closed canopy). pts: array of [x,y] px.
+function sectionFromTopEdge(pts,base,peak){
+  const s=[...pts].sort((a,b)=>a[0]-b[0]);
+  if(s.length<2)return null;
+  const minX=s[0][0],maxX=s[s.length-1][0],span=Math.max(1,maxX-minX),H=Math.max(1,base-peak);
+  const N=Math.min(40,s.length),inner=[];
+  for(let i=0;i<N;i++){const k=Math.round(i*(s.length-1)/(N-1)),x=s[k][0],y=s[k][1];
+    inner.push([0.04+0.92*clamp((x-minX)/span,0,1),clamp((base-y)/H,0,1)]);}
+  return [[0,0],...inner,[1,0]];
+}
 
 function fitTrace(){
   const host=document.getElementById("canvasHost");
@@ -758,6 +832,8 @@ function fitTrace(){
     fit.s=sc;fit.ox=(w-v.img.width*sc)/2;fit.oy=(h-v.img.height*sc)/2;}
   drawTrace();
 }
+function img2canvas(p){return {x:fit.ox+p.x*fit.s, y:fit.oy+p.y*fit.s};}
+function canvas2img(cx,cy){return {x:(cx-fit.ox)/fit.s, y:(cy-fit.oy)/fit.s};}
 function drawTrace(){
   const v=cv();
   const w=traceCanvas.width/devicePixelRatio,h=traceCanvas.height/devicePixelRatio;
@@ -768,24 +844,40 @@ function drawTrace(){
   const dp=(pts,color)=>{
     if(!pts.length)return;
     tctx.strokeStyle=color;tctx.lineWidth=2;tctx.beginPath();
-    pts.forEach((p,i)=>i?tctx.lineTo(p.x,p.y):tctx.moveTo(p.x,p.y));tctx.stroke();
-    tctx.fillStyle=color;pts.forEach(p=>{tctx.beginPath();tctx.arc(p.x,p.y,3.5,0,7);tctx.fill();});
+    pts.forEach((p,i)=>{const c=img2canvas(p);i?tctx.lineTo(c.x,c.y):tctx.moveTo(c.x,c.y);});tctx.stroke();
+    tctx.fillStyle=color;pts.forEach(p=>{const c=img2canvas(p);tctx.beginPath();tctx.arc(c.x,c.y,4,0,7);tctx.fill();});
   };
   dp(v.A,"#FF7A2F");dp(v.B,"#46B7D9");
   if(calPts.length){tctx.strokeStyle="#E5B45B";tctx.setLineDash([6,5]);tctx.lineWidth=2;
-    tctx.beginPath();calPts.forEach((p,i)=>i?tctx.lineTo(p.x,p.y):tctx.moveTo(p.x,p.y));tctx.stroke();tctx.setLineDash([]);
-    tctx.fillStyle="#E5B45B";calPts.forEach(p=>{tctx.beginPath();tctx.arc(p.x,p.y,4,0,7);tctx.fill();});}
+    tctx.beginPath();calPts.forEach((p,i)=>{const c=img2canvas(p);i?tctx.lineTo(c.x,c.y):tctx.moveTo(c.x,c.y);});tctx.stroke();tctx.setLineDash([]);
+    tctx.fillStyle="#E5B45B";calPts.forEach(p=>{const c=img2canvas(p);tctx.beginPath();tctx.arc(c.x,c.y,5,0,7);tctx.fill();});}
 }
-function canvasPt(e){
-  const r=traceCanvas.getBoundingClientRect();
-  return {x:e.clientX-r.left,y:e.clientY-r.top};
+function tcXY(e){const r=traceCanvas.getBoundingClientRect();return {x:e.clientX-r.left,y:e.clientY-r.top};}
+function nearestPoint(v,cx,cy){
+  let best=null;
+  for(const edge of ["A","B"]) v[edge].forEach((p,idx)=>{const c=img2canvas(p);const d=Math.hypot(c.x-cx,c.y-cy);if(d<12&&(!best||d<best.dist))best={edge,idx,dist:d};});
+  return best;
 }
-traceCanvas.addEventListener("click",e=>{
-  if(!traceMode)return;const pt=canvasPt(e);
-  if(traceMode==="cal"){calPts.push(pt);if(calPts.length===2)openModal();}
-  else if(traceMode==="A")cv().A.push(pt);
-  else if(traceMode==="B")cv().B.push(pt);
+let pointDrag=null;
+traceCanvas.addEventListener("pointerdown",e=>{
+  if(!traceMode)return;
+  const {x:cx,y:cy}=tcXY(e);
+  if(traceMode==="cal"){calPts.push(canvas2img(cx,cy));drawTrace();if(calPts.length===2)openModal();return;}
+  const v=cv();
+  const hit=nearestPoint(v,cx,cy);                       // grab an existing point to refine
+  if(hit){pointDrag={edge:hit.edge,idx:hit.idx};try{traceCanvas.setPointerCapture(e.pointerId);}catch(_){}return;}
+  v[traceMode].push(canvas2img(cx,cy));                  // else add a new point
   drawTrace();commitTrace();
+});
+traceCanvas.addEventListener("pointermove",e=>{
+  if(!pointDrag)return;const {x:cx,y:cy}=tcXY(e);
+  cv()[pointDrag.edge][pointDrag.idx]=canvas2img(cx,cy);drawTrace();
+});
+traceCanvas.addEventListener("pointerup",()=>{if(pointDrag){pointDrag=null;commitTrace();}});
+traceCanvas.addEventListener("contextmenu",e=>{
+  if(!traceMode||traceMode==="cal")return;e.preventDefault();
+  const {x:cx,y:cy}=tcXY(e);const hit=nearestPoint(cv(),cx,cy);
+  if(hit){cv()[hit.edge].splice(hit.idx,1);drawTrace();commitTrace();}
 });
 
 function syncLen(){sLen.value=S.len;vLen.textContent=S.len;}
@@ -802,6 +894,13 @@ function markWidth(on){
     document.getElementById("clearWidth").style.display="block";}
   else{e.innerHTML='Source: <span class="tag">parametric</span> — trace a <b>top view</b> to derive width.';
     document.getElementById("clearWidth").style.display="none";}
+}
+function markSection(on){
+  const e=document.getElementById("secMode");if(!e)return;
+  if(on){e.innerHTML='Source: <span class="tag" style="color:var(--accent);border-color:var(--accent-soft)">front view</span> — roundness paused.';
+    document.getElementById("clearSection").style.display="block";}
+  else{e.innerHTML='Source: <span class="tag">parametric</span> — a <b>front view</b> sets the real cross-section.';
+    document.getElementById("clearSection").style.display="none";}
 }
 
 function commitTrace(){
@@ -825,14 +924,31 @@ function commitTrace(){
         S.len=Math.max(20,Math.round((maxX-minX)/tv.scale));syncLen();}
     }
   }
-  setTraceStatus();requestRebuild();
+  // FRONT view -> cross-section (normalized for loft) + absolute silhouette (for projection)
+  const fv=V.front;
+  if(fv.A.length>=2){
+    const ys=fv.A.map(p=>p.y), xs=fv.A.map(p=>p.x);
+    const sec=sectionFromTopEdge(fv.A.map(p=>[p.x,p.y]),Math.max(...ys),Math.min(...ys));
+    if(sec){traced.section=sec;markSection(true);}
+    if(fv.scale){
+      const yc=(Math.min(...xs)+Math.max(...xs))/2, datum=Math.max(...ys);
+      traced.frontHull=[...fv.A].sort((a,b)=>a.x-b.x).map(p=>[(p.x-yc)/fv.scale,(datum-p.y)/fv.scale]);
+    } else traced.frontHull=null;
+  }
+  setTraceStatus();requestRebuild();updateViewDots();
+}
+function updateViewDots(){
+  const has={side:!!(traced.top||traced.bottom),top:!!traced.width,front:!!traced.section};
+  document.querySelectorAll("#viewSeg button").forEach(b=>b.classList.toggle("traced",!!has[b.dataset.v]));
 }
 function setTraceStatus(){
   const v=cv(),s=document.getElementById("traceStatus"),parts=[];
-  parts.push(v.scale?`<span class="tag" style="color:var(--good);border-color:rgba(91,214,160,.3)">${v.scale.toFixed(2)} px/mm</span>`:'<span class="tag">scale not set</span>');
-  const la=activeView==="side"?"top":"left", lb=activeView==="side"?"lower":"right";
+  const needScale=activeView!=="front";
+  if(needScale)parts.push(v.scale?`<span class="tag" style="color:var(--good);border-color:rgba(91,214,160,.3)">${v.scale.toFixed(2)} px/mm</span>`:'<span class="tag">scale not set</span>');
+  else parts.push('<span class="tag">no scale needed</span>');
+  const la={side:"top",top:"left",front:"outline"}[activeView], lb={side:"lower",top:"right",front:"base"}[activeView];
   if(v.A.length)parts.push(`${la}: ${v.A.length}`);
-  if(v.B.length)parts.push(`${lb}: ${v.B.length}`);
+  if(v.B.length&&activeView!=="front")parts.push(`${lb}: ${v.B.length}`);
   if(traceMode)parts.push(`<b style="color:var(--accent)">● ${traceMode==="cal"?"click 2 points":"clicking…"}</b>`);
   s.innerHTML=parts.join(" &nbsp; ");
 }
@@ -853,14 +969,18 @@ const host=document.getElementById("canvasHost");
 ["dragleave","drop"].forEach(ev=>host.addEventListener(ev,e=>{e.preventDefault();host.style.outline="none";}));
 host.addEventListener("drop",e=>{if(e.dataTransfer.files[0])loadImageFile(e.dataTransfer.files[0]);});
 
-/* view switch (side / top) */
+/* view switch (side / top / front) */
 function updateEdgeLabels(){
-  document.getElementById("bTopLbl").textContent=activeView==="side"?"top edge":"left edge";
-  document.getElementById("bBotLbl").textContent=activeView==="side"?"lower edge":"right edge";
-  document.getElementById("dropTitle").textContent=activeView==="side"?"Drop a side-view drawing":"Drop a top-view drawing";
-  document.getElementById("dropSub").textContent=activeView==="side"
-    ?"Side view sets the silhouette. Set scale, then trace the top and lower edges."
-    :"Top view sets the real width. Set scale, then trace the left and right edges.";
+  const A={side:"top edge",top:"left edge",front:"section outline"}[activeView];
+  const B={side:"lower edge",top:"right edge",front:"baseline (opt)"}[activeView];
+  document.getElementById("bTopLbl").textContent=A;
+  document.getElementById("bBotLbl").textContent=B;
+  document.getElementById("dropTitle").textContent={side:"Drop a side-view drawing",top:"Drop a top-view drawing",front:"Drop a front-view drawing"}[activeView];
+  document.getElementById("dropSub").textContent={
+    side:"Side view sets the silhouette. Set scale, then trace the top and lower edges.",
+    top:"Top view sets the real width. Set scale, then trace the left and right edges.",
+    front:"Front view sets the cross-section. Trace the outline from one side, over the roof, to the other — no scale needed."
+  }[activeView];
 }
 function updateScaleInfo(){
   const f=v=>v?`<span class="tag" style="color:var(--good);border-color:rgba(91,214,160,.3)">${v.toFixed(2)} px/mm</span>`:'<span class="tag">not set</span>';
@@ -890,11 +1010,27 @@ document.getElementById("bUndo").onclick=()=>{const v=cv();
   drawTrace();commitTrace();};
 document.getElementById("bClear").onclick=()=>{const v=cv();v.A=[];v.B=[];calPts=[];
   if(activeView==="side"){traced.top=null;traced.bottom=null;markSil(false);}
-  else{traced.width=null;markWidth(false);}
+  else if(activeView==="top"){traced.width=null;markWidth(false);}
+  else{traced.section=null;traced.frontHull=null;markSection(false);}
   drawTrace();setTraceStatus();requestRebuild();};
 document.getElementById("clearTrace").onclick=()=>{V.side.A=[];V.side.B=[];traced.top=null;traced.bottom=null;markSil(false);if(activeView==="side")drawTrace();requestRebuild();};
 document.getElementById("clearWidth").onclick=()=>{V.top.A=[];V.top.B=[];traced.width=null;markWidth(false);if(activeView==="top")drawTrace();requestRebuild();};
-function backToParametric(){markSil(false);markWidth(false);}
+document.getElementById("clearSection").onclick=()=>{V.front.A=[];V.front.B=[];traced.section=null;traced.frontHull=null;markSection(false);if(activeView==="front")drawTrace();requestRebuild();};
+function backToParametric(){markSil(false);markWidth(false);markSection(false);}
+document.getElementById("b3D").onclick=()=>switchTab("three");
+document.querySelectorAll("#modeSeg button").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll("#modeSeg button").forEach(x=>x.classList.remove("on"));b.classList.add("on");
+  S.mode=b.dataset.m;
+  if(S.mode==="projection"&&!traced.frontHull)
+    toast("Orthographic needs a front view with a scale. Trace/Import a front view, then it projects all three silhouettes.");
+  requestRebuild();
+});
+document.getElementById("bSave").onclick=()=>{
+  const prof=currentProfile(), name=(projName.value||"body").trim().replace(/\s+/g,"-").replace(/[^A-Za-z0-9._-]/g,"")||"body";
+  download(new Blob([JSON.stringify(prof,null,2)],{type:"application/json"}),name+".profile.json");
+  const have=[traced.top&&"side",traced.width&&"top",traced.section&&"front"].filter(Boolean).join(" + ")||"parametric";
+  toast(`Saved <span class="mono">${name}.profile.json</span> (${have}). Use the Export panel to push it into LEE3D-Lib.`);
+};
 
 /* calibration modal */
 const modalBg=document.getElementById("modalBg");
@@ -956,8 +1092,8 @@ document.querySelectorAll("#presetSeg button").forEach(b=>{
     document.querySelectorAll("#presetSeg button").forEach(x=>x.classList.remove("on"));
     b.classList.add("on");
     const P=PRESETS[b.dataset.p];Object.assign(S,P);
-    traced={top:null,bottom:null,width:null};
-    V.side.A=[];V.side.B=[];V.top.A=[];V.top.B=[];
+    traced={top:null,bottom:null,width:null,section:null,frontHull:null};
+    V.side.A=[];V.side.B=[];V.top.A=[];V.top.B=[];V.front.A=[];V.front.B=[];
     backToParametric();
     syncSlidersFromState();requestRebuild();drawTrace();
     toast("Loaded preset: <span class='mono'>"+b.textContent+"</span>");
@@ -986,7 +1122,7 @@ function switchTab(t){
   document.getElementById("viewImport").classList.toggle("hide",t!=="import");
   if(t==="three")resize();
   else if(t==="trace")fitTrace();
-  else if(t==="import"){if(IMP.img)setTimeout(renderCrops,30);}
+  else if(t==="import"){if(IMP.img)setTimeout(()=>{layoutSheet();renderCrops();},30);}
 }
 document.querySelectorAll(".tab").forEach(x=>x.onclick=()=>switchTab(x.dataset.tab));
 
@@ -994,6 +1130,11 @@ document.querySelectorAll(".tab").forEach(x=>x.onclick=()=>switchTab(x.dataset.t
 document.getElementById("tWire").onclick=function(){wireOn=!wireOn;this.classList.toggle("active",wireOn);
   if(wireMesh)wireMesh.visible=wireOn;if(bodyMesh)bodyMesh.material.opacity=wireOn?0.45:1,bodyMesh.material.transparent=wireOn;};
 document.getElementById("tReset").onclick=frameModel;
+document.getElementById("tRef").onclick=function(){
+  refOn=!refOn;this.classList.toggle("active",refOn);
+  if(refOn&&!(V.side.img||V.top.img||V.front.img)){toast("No traced views yet — import a sheet or load drawings, then the side/top/front planes appear here.");}
+  if(bodyMesh)makeRefPlanes(bodyMesh.geometry.boundingBox);
+};
 
 /* export */
 function download(blob,name){const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;
@@ -1021,6 +1162,10 @@ function applyProfile(p){
   traced.top=p.topProfile&&p.topProfile.length?p.topProfile:null;
   traced.bottom=p.bottomProfile&&p.bottomProfile.length?p.bottomProfile:null;
   traced.width=p.widthProfile&&p.widthProfile.length?p.widthProfile:null;
+  traced.section=p.section&&p.section.length>1?p.section:null;
+  traced.frontHull=p.frontHull&&p.frontHull.length>1?p.frontHull:null;
+  if(p.mode==="loft"||p.mode==="projection"){S.mode=p.mode;
+    document.querySelectorAll("#modeSeg button").forEach(x=>x.classList.toggle("on",x.dataset.m===S.mode));}
   if(p.name){projName.value=p.name;}
   if(traced.top||traced.bottom){
     document.getElementById("silMode").innerHTML='Source: <span class="tag" style="color:var(--accent);border-color:var(--accent-soft)">imported profile</span>';
@@ -1030,6 +1175,10 @@ function applyProfile(p){
     document.getElementById("widMode").innerHTML='Source: <span class="tag" style="color:var(--accent);border-color:var(--accent-soft)">imported profile</span>';
     document.getElementById("clearWidth").style.display="block";
   } else markWidth(false);
+  if(traced.section){
+    document.getElementById("secMode").innerHTML='Source: <span class="tag" style="color:var(--accent);border-color:var(--accent-soft)">imported profile</span>';
+    document.getElementById("clearSection").style.display="block";
+  } else markSection(false);
   syncSlidersFromState();requestRebuild();
 }
 /* ---- backend wiring (LEE3D-Backend-A) ---- */
@@ -1150,6 +1299,17 @@ function extractEdges(lum,w,h,box,thr){
     if(mn>=0){top.push([x,mn]);bot.push([x,mx]);}}
   return {top,bot,cw,ch};
 }
+// Otsu threshold (adapts ink/paper split to the scan's brightness), clamped to a sane band
+function autoThreshold(lum){
+  const hist=new Array(256).fill(0);
+  for(let i=0;i<lum.length;i++){let v=lum[i]|0;if(v<0)v=0;else if(v>255)v=255;hist[v]++;}
+  const total=lum.length;let sum=0;for(let t=0;t<256;t++)sum+=t*hist[t];
+  let sumB=0,wB=0,maxVar=-1,thr=160;
+  for(let t=0;t<256;t++){wB+=hist[t];if(!wB)continue;const wF=total-wB;if(!wF)break;
+    sumB+=t*hist[t];const mB=sumB/wB,mF=(sum-sumB)/wF,v=wB*wF*(mB-mF)*(mB-mF);
+    if(v>maxVar){maxVar=v;thr=t;}}
+  return Math.max(120,Math.min(210,thr));
+}
 
 /* ---- canvas helpers ---- */
 function fullLum(){
@@ -1174,15 +1334,22 @@ function lumOfCanvas(c){
   return lum;
 }
 
-/* ---- display <-> source coordinate mapping ---- */
+/* ---- display <-> source coordinate mapping (overlays live inside #sheetWrap) ---- */
 function sheetMetrics(){
-  const host=document.getElementById("sheetHost").getBoundingClientRect();
-  const img=document.getElementById("sheetImg").getBoundingClientRect();
-  const sc=IMP.natW?img.width/IMP.natW:1;
-  return {ox:img.left-host.left,oy:img.top-host.top,sc,imgLeft:img.left,imgTop:img.top};
+  const img=document.getElementById("sheetImg");
+  const sc=IMP.natW?(img.clientWidth/IMP.natW):1;
+  const r=img.getBoundingClientRect();
+  return {sc,imgLeft:r.left,imgTop:r.top};
 }
-function s2d(x,y){const m=sheetMetrics();return {x:m.ox+x*m.sc,y:m.oy+y*m.sc};}
+function s2d(x,y){const m=sheetMetrics();return {x:x*m.sc,y:y*m.sc};}   // relative to the image/wrap origin
 function clientToSrc(cx,cy){const m=sheetMetrics();return {x:(cx-m.imgLeft)/m.sc,y:(cy-m.imgTop)/m.sc};}
+function layoutSheet(){
+  if(!IMP.img)return;
+  const host=document.getElementById("sheetHost");
+  const dw=Math.max(60,Math.min(IMP.natW*2, host.clientWidth-24));   // fit width, allow vertical scroll
+  document.getElementById("sheetImg").style.width=dw+"px";
+  document.getElementById("sheetWrap").style.width=dw+"px";
+}
 
 /* ---- crop box rendering + editing ---- */
 function renderCrops(){
@@ -1243,7 +1410,7 @@ function loadSheet(file){
   const url=URL.createObjectURL(file),img=new Image();
   img.onload=()=>{IMP.img=img;IMP.natW=img.naturalWidth;IMP.natH=img.naturalHeight;IMP.boxes=[];IMP.scalePxPerMm=null;
     document.getElementById("sheetImg").src=url;document.getElementById("iDrop").style.display="none";
-    switchTab("import");setTimeout(()=>{renderCrops();updateImpStatus();},60);
+    switchTab("import");setTimeout(()=>{layoutSheet();renderCrops();updateImpStatus();},60);
     toast("Sheet loaded. <span class='mono'>Auto-detect views</span>, then set scale and build.");};
   img.src=url;
 }
@@ -1271,14 +1438,18 @@ function guessRoles(){
   const top=bs.filter(b=>b!==side).map(b=>({b,ar:(b.x1-b.x0)/(b.y1-b.y0),area:(b.x1-b.x0)*(b.y1-b.y0)}))
     .filter(o=>o.ar>=1.3&&o.ar<=2.4).sort((p,q)=>q.area-p.area)[0];
   if(top)top.b.role="top";
+  const front=bs.filter(b=>b.role==="ignore").map(b=>({b,ar:(b.x1-b.x0)/(b.y1-b.y0)}))
+    .filter(o=>o.ar>=1.1&&o.ar<=2.2).sort((p,q)=>p.b.x0-q.b.x0)[0];
+  if(front)front.b.role="front";
 }
 document.getElementById("iDetect").onclick=()=>{
   if(!IMP.img){toast("Load a sheet first.");return;}
   const {lum,w,h,sc}=fullLum();
-  const panels=detectPanels(lum,w,h);
+  const thr=autoThreshold(lum);
+  const panels=detectPanels(lum,w,h,{thr});
   IMP.boxes=panels.map(p=>({x0:p.x0/sc,y0:p.y0/sc,x1:p.x1/sc,y1:p.y1/sc,role:"ignore"}));
   guessRoles();renderCrops();
-  toast(`Detected ${IMP.boxes.length} views. Fix boxes/roles, set scale, then build.`);
+  toast(`Detected ${IMP.boxes.length} views (ink threshold ${thr}). Fix boxes/roles, set scale, then build.`);
 };
 document.getElementById("iAdd").onclick=()=>{
   if(!IMP.img){toast("Load a sheet first.");return;}
@@ -1306,47 +1477,43 @@ document.getElementById("sheetHost").addEventListener("click",e=>{
   if(IMP.calPts.length===2)openModal();
 });
 
-/* ---- build the model from assigned views ---- */
-function applySideFromBox(bx,sPxPerMm){
-  const {canvas,cf}=cropCanvas(bx),lum=lumOfCanvas(canvas);
-  const {top,bot}=extractEdges(lum,canvas.width,canvas.height,{x0:0,y0:0,x1:canvas.width,y1:canvas.height});
-  if(top.length<2)return false;
-  const cropPxPerMm=sPxPerMm*cf,minX=top[0][0],maxX=top[top.length-1][0],span=Math.max(1,maxX-minX);
-  const datum=Math.max(...bot.map(p=>p[1]));
-  const ds=arr=>{const N=Math.min(60,arr.length),out=[];for(let i=0;i<N;i++){const k=Math.round(i*(arr.length-1)/(N-1)),[x,y]=arr[k];out.push([clamp((x-minX)/span,0,1),(datum-y)/cropPxPerMm]);}return out;};
-  traced.top=ds(top);traced.bottom=ds(bot);
-  S.len=Math.max(20,Math.round(span/cropPxPerMm));syncLen();
-  V.side.img=canvas;
-  document.getElementById("silMode").innerHTML='Source: <span class="tag" style="color:var(--accent);border-color:var(--accent-soft)">from sheet</span> — sliders paused.';
-  document.getElementById("clearTrace").style.display="block";return true;
+/* ---- hand-off: cut-outs flow into Reference & Trace as editable, pre-traced views ---- */
+function smoothSeries(pts,passes){
+  let a=pts.map(p=>[p[0],p[1]]);
+  for(let k=0;k<(passes||1);k++)a=a.map((p,i)=>{const p0=a[Math.max(0,i-1)],p2=a[Math.min(a.length-1,i+1)];return [p[0],(p0[1]+p[1]+p2[1])/3];});
+  return a;
 }
-function applyTopFromBox(bx,sPxPerMm){
-  const {canvas,cf}=cropCanvas(bx),lum=lumOfCanvas(canvas);
-  const {top,bot}=extractEdges(lum,canvas.width,canvas.height,{x0:0,y0:0,x1:canvas.width,y1:canvas.height});
-  if(top.length<2)return false;
-  const cropPxPerMm=sPxPerMm*cf,minX=top[0][0],maxX=top[top.length-1][0],span=Math.max(1,maxX-minX);
-  const N=Math.min(48,top.length),out=[];
-  for(let i=0;i<N;i++){const k=Math.round(i*(top.length-1)/(N-1)),x=top[k][0];
-    out.push([clamp((x-minX)/span,0,1),Math.max(0.5,(bot[k][1]-top[k][1])/2/cropPxPerMm)]);}
-  traced.width=out;V.top.img=canvas;
-  if(!traced.top){S.len=Math.max(20,Math.round(span/cropPxPerMm));syncLen();}
-  document.getElementById("widMode").innerHTML='Source: <span class="tag" style="color:var(--accent);border-color:var(--accent-soft)">from sheet</span> — sliders paused.';
-  document.getElementById("clearWidth").style.display="block";return true;
+function cropToViewTrace(bx){
+  const {canvas,cf}=cropCanvas(bx),lum=lumOfCanvas(canvas),thr=autoThreshold(lum);
+  const {top,bot}=extractEdges(lum,canvas.width,canvas.height,{x0:0,y0:0,x1:canvas.width,y1:canvas.height},thr);
+  const ds=arr=>{if(!arr.length)return [];const N=Math.min(44,arr.length),o=[];
+    for(let i=0;i<N;i++){const k=Math.round(i*(arr.length-1)/(N-1));o.push(arr[k]);}
+    return smoothSeries(o,2).map(p=>({x:p[0],y:p[1]}));};
+  return {canvas,cf,topPts:ds(top),botPts:ds(bot)};
 }
 document.getElementById("iBuild").onclick=()=>{
   if(!IMP.img){toast("Load a sheet first.");return;}
-  const sPxPerMm=IMP.unit==="px"?1:IMP.scalePxPerMm;
-  if(!sPxPerMm){toast("Set scale first (or switch units to px).");return;}
-  let didSide=false,didTop=false,front=false;
+  const noScale = IMP.unit!=="px" && !IMP.scalePxPerMm;
+  const sPxPerMm = IMP.unit==="px" ? 1 : (IMP.scalePxPerMm||1);
+  const sent=[];
   for(const bx of IMP.boxes){
-    if(bx.role==="side")didSide=applySideFromBox(bx,sPxPerMm)||didSide;
-    else if(bx.role==="top")didTop=applyTopFromBox(bx,sPxPerMm)||didTop;
-    else if(bx.role==="front"||bx.role==="rear")front=true;
+    const role=bx.role; if(!["side","top","front","rear"].includes(role))continue;
+    const {canvas,cf,topPts,botPts}=cropToViewTrace(bx);
+    if(topPts.length<2)continue;
+    const vkey = role==="rear" ? "front" : role;        // rear feeds the section slot
+    const view=V[vkey];
+    view.img=canvas; view.scale=sPxPerMm*cf;
+    if(vkey==="front"){view.A=topPts;view.B=[];}
+    else {view.A=topPts;view.B=botPts;}
+    sent.push(role);
   }
-  if(!didSide&&!didTop){toast("Assign at least one Side or Top view (use the dropdown on a box).");return;}
-  requestRebuild();switchTab("three");
-  const built=[didSide&&"side silhouette",didTop&&"top-view width"].filter(Boolean).join(" + ");
-  toast(`Built from sheet ✓ <span class="mono">${built}</span>${front?" · front/rear noted for section (coming)":""}`);
+  if(!sent.length){toast("Assign at least one Side, Top or Front view on a box (use the dropdown), then send.");return;}
+  activeView = sent.includes("side")?"side":(sent.includes("top")?"top":"front");
+  document.querySelectorAll("#viewSeg button").forEach(x=>x.classList.toggle("on",x.dataset.v===activeView));
+  document.getElementById("imgOpField").style.display="block";
+  updateEdgeLabels();updateScaleInfo();commitTrace();
+  switchTab("trace");setTimeout(fitTrace,40);
+  toast(`Sent to Reference &amp; Trace: <span class="mono">${[...new Set(sent)].join(", ")}</span>.${noScale?" (no scale set — using pixels; set scale in Import for real size)":""} Refine each side, then open 3D Preview.`);
 };
 
 /* =========================================================================
@@ -1361,7 +1528,7 @@ if(!window.THREE){
   updateEdgeLabels();updateScaleInfo();setTraceStatus();updateImpStatus();probeBackend();
   window.addEventListener("resize",()=>{
     if(!document.getElementById("viewTrace").classList.contains("hide"))fitTrace();
-    if(!document.getElementById("viewImport").classList.contains("hide")&&IMP.img)renderCrops();
+    if(!document.getElementById("viewImport").classList.contains("hide")&&IMP.img){layoutSheet();renderCrops();}
   });
 }
 </script>
