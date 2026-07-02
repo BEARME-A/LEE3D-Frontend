@@ -1,5 +1,4 @@
 name: Deploy studio to Pages
-
 # The product is the single-file zero-build studio at ./index.html.
 # This deploys it straight to GitHub Pages — no Node, no Next build, nothing to break.
 #
