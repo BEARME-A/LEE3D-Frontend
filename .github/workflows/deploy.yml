@@ -37,6 +37,20 @@ jobs:
           mkdir -p _site
           cp index.html _site/index.html
 
+      - name: Hard-wire Supabase config from repo secrets
+        env:
+          SB_URL: ${{ secrets.SUPABASE_URL }}
+          SB_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          python3 - "$SB_URL" "$SB_KEY" <<'PY'
+          import sys
+          url,key=sys.argv[1],sys.argv[2]
+          p="_site/index.html"; s=open(p).read()
+          s=s.replace("__SUPABASE_URL__",url).replace("__SUPABASE_ANON_KEY__",key)
+          open(p,"w").write(s)
+          print("Supabase config injected:", "yes" if url else "empty (falls back to local entry)")
+          PY
+
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
