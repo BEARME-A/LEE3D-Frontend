@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>LEE3D — Car Body Studio</title>
+<title>LEE3D — Orthographic 3D Studio</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Saira+Semi+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -209,6 +209,26 @@
   .cropbox .h.sw{left:-6px;bottom:-6px;cursor:nesw-resize}
   .cropbox .h.se{right:-6px;bottom:-6px;cursor:nwse-resize}
   #viewSeg button.traced::after{content:"●";color:var(--good);margin-left:4px;font-size:9px;vertical-align:middle}
+  #viewWorkshop{position:relative}
+  #wsgl{width:100%;height:100%;display:block}
+  .ws-panel{position:absolute;top:10px;left:10px;width:250px;max-height:calc(100% - 20px);overflow:auto;z-index:5;
+    background:rgba(11,15,20,.93);border:1px solid var(--line-2);border-radius:10px;padding:11px;backdrop-filter:blur(7px)}
+  .ws-h{font-weight:700;font-size:13px;margin-bottom:9px}
+  .ws-sec{border-top:1px solid var(--line-2);padding-top:9px;margin-top:9px}
+  .ws-sec:first-of-type{border-top:none;padding-top:0;margin-top:0}
+  .ws-lbl{font-size:10.5px;color:var(--ink-dim);text-transform:uppercase;letter-spacing:.1em;margin-bottom:5px}
+  .ws-lbl2{font-size:10px;color:var(--ink-dim);margin:6px 0 3px}
+  .ws-list{margin-top:5px;display:flex;flex-direction:column;gap:3px}
+  .ws-list:empty::after{content:"— none yet —";color:var(--ink-dim);font-size:11px;opacity:.6}
+  .ws-row{display:flex;align-items:center;gap:6px;background:#0c1119;border:1px solid var(--line-2);border-radius:6px;padding:4px 7px;font-size:12px}
+  .ws-row.sel{border-color:var(--accent)}
+  .ws-row .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
+  .ws-row .tg{font-size:9px;color:var(--ink-dim);border:1px solid var(--line-2);border-radius:4px;padding:0 4px}
+  .ws-row button{background:none;border:none;color:var(--ink-dim);cursor:pointer;padding:2px 4px;border-radius:4px;font-size:12px}
+  .ws-row button:hover{color:var(--ink);background:rgba(255,255,255,.06)}
+  .ws-grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px}
+  .ws-grid3 label{display:flex;flex-direction:column;font-size:10px;color:var(--ink-dim);gap:2px}
+  .ws-grid3 input{width:100%;background:#0c1119;border:1px solid var(--line-2);border-radius:5px;color:var(--ink);padding:3px 4px;font-size:11px;font-family:ui-monospace,monospace}
 </style>
 </head>
 <body>
@@ -218,10 +238,12 @@
     <div class="logo"></div>
     <div>
       <h1 class="disp">LEE3D</h1>
-      <div class="sub">Car Body Studio</div>
+      <div class="sub">Orthographic 2D → 3D</div>
     </div>
   </div>
-  <input id="projName" class="proj-name mono" value="untitled-body" spellcheck="false" />
+  <input id="projName" class="proj-name mono" value="untitled-object" spellcheck="false" />
+  <input id="projCat" class="proj-name mono" list="catList" value="Car frame" placeholder="category…" spellcheck="false" title="Category — pick an existing one or type a new one" style="width:150px" />
+  <datalist id="catList"></datalist>
   <div class="spacer"></div>
   <div class="readout">
     <div class="stat"><b id="rLen" class="mono">—</b><span>Length</span></div>
@@ -236,9 +258,9 @@
   <aside class="rail" id="rail">
 
     <details class="sec" open>
-      <summary><span class="idx">01</span><span class="ttl">Body preset</span><span class="chev">▶</span></summary>
+      <summary><span class="idx">01</span><span class="ttl">Start template</span><span class="chev">▶</span></summary>
       <div class="sec-body">
-        <div class="hint">Start from a shape, then shape it. Everything below updates the 3D body live.</div>
+        <div class="hint">Start from a template, then shape it. The 2D→3D engine works for <b>any object</b> you trace — these are car-frame starting shapes, and more object templates are coming. Everything below updates the 3D model live.</div>
         <div class="seg" id="presetSeg">
           <button data-p="hotrod" class="on">Hot rod</button>
           <button data-p="coupe">Coupe</button>
@@ -255,7 +277,7 @@
     <details class="sec">
       <summary><span class="idx">02</span><span class="ttl">Reference drawing</span><span class="chev">▶</span></summary>
       <div class="sec-body">
-        <div class="hint">Trace a <b>side view</b> for the silhouette and (optionally) a <b>top view</b> for the real width. Switch views in the <b>Reference &amp; Trace</b> tab. All optional — the sliders work without any drawing.</div>
+        <div class="hint">Trace a <b>side view</b> for the profile, a <b>top view</b> for real width, and <b>front / rear views</b> for the end cross-sections. Switch views in the <b>Reference &amp; Trace</b> tab. All optional — the sliders work without any drawing.</div>
         <button class="btn" id="pickImg">⤓ Load image into active view</button>
         <input type="file" id="imgFile" accept="image/*" hidden>
         <div class="field" id="imgOpField" style="display:none">
@@ -281,7 +303,7 @@
     </details>
 
     <details class="sec">
-      <summary><span class="idx">04</span><span class="ttl">Width &amp; stance</span><span class="chev">▶</span></summary>
+      <summary><span class="idx">04</span><span class="ttl">Width</span><span class="chev">▶</span></summary>
       <div class="sec-body">
         <div class="hint" id="widMode">Source: <span class="tag">parametric</span> — trace a <b>top view</b> to derive width.</div>
         <div class="field"><label>Nose width <span class="val"><span id="vNW">14</span></span></label><input type="range" id="sNW" min="4" max="80" value="14"></div>
@@ -296,18 +318,25 @@
     </details>
 
     <details class="sec">
-      <summary><span class="idx">05</span><span class="ttl">Wheels &amp; arches</span><span class="chev">▶</span></summary>
+      <summary><span class="idx">05</span><span class="ttl">Wheel cutouts <span style="opacity:.55;font-weight:400">· car frame</span></span><span class="chev">▶</span></summary>
       <div class="sec-body">
-        <div class="hint">Set these to the chassis your friend already has. Arches are cut to clear the wheels.</div>
+        <div class="hint">Car-frame feature: arches are cut into the shell to clear the wheels. Set these to the chassis you're designing around. (Wheels and chassis will become their own traceable objects you assemble — for now this just shapes the frame.)</div>
         <div class="field"><label>Wheelbase <span class="val"><span id="vWB">0.62</span></span></label><input type="range" id="sWB" min="0.30" max="0.85" value="0.62" step="0.01"></div>
-        <div class="field"><label>Track width <span class="val"><span id="vTrack">62</span></span></label><input type="range" id="sTrack" min="20" max="140" value="62"></div>
-        <div class="field"><label>Wheel radius <span class="val"><span id="vWR">16</span></span></label><input type="range" id="sWR" min="5" max="46" value="16"></div>
-        <div class="field"><label>Wheel width <span class="val"><span id="vWW">26</span></span></label><input type="range" id="sWW" min="6" max="60" value="26"></div>
-        <div class="field"><label>Ride height (axle z) <span class="val"><span id="vRH">13</span></span></label><input type="range" id="sRH" min="2" max="60" value="13"></div>
-        <div class="field"><label>Arch clearance <span class="val"><span id="vArch">1.0</span></span></label><input type="range" id="sArch" min="0.0" max="2.0" value="1.0" step="0.05"></div>
-        <label style="display:flex;gap:8px;align-items:center;font-size:12px;color:var(--ink-dim);margin-top:6px;cursor:pointer">
+        <div class="field"><label>Wheel diameter — height/Z <span class="val"><span id="vWDia">46</span> mm</span></label><input type="range" id="sWDia" min="8" max="140" value="46"></div>
+        <div class="field"><label>Wheel length — front·back/X <span class="val"><span id="vWLen">46</span> mm</span></label><input type="range" id="sWLen" min="8" max="140" value="46"></div>
+        <div class="field"><label>Wheel thickness — width/Y <span class="val"><span id="vWWid">26</span> mm</span></label><input type="range" id="sWWid" min="4" max="90" value="26"></div>
+        <div class="hint" style="margin:2px 0 8px">Diameter = length gives a round wheel; make them differ for a stretched/oval wheel.</div>
+        <div class="field"><label>Track width — L·R spacing <span class="val"><span id="vTrack">66</span> mm</span></label><input type="range" id="sTrack" min="20" max="200" value="66"></div>
+        <div class="field"><label>Ride height (wheel center z) <span class="val"><span id="vRH">20</span> mm</span></label><input type="range" id="sRH" min="0" max="90" value="20"></div>
+        <label style="display:flex;gap:8px;align-items:center;font-size:12px;margin:8px 0 4px;cursor:pointer"><input type="checkbox" id="showAxle" checked> Show axle</label>
+        <div class="field"><label>Axle diameter <span class="val"><span id="vAxleDia">8</span> mm</span></label><input type="range" id="sAxleDia" min="2" max="40" value="8"></div>
+        <div style="border-top:1px solid var(--line-2);margin:10px 0 8px;padding-top:8px"></div>
+        <div class="field"><label>Wheel effect on frame <span class="val"><span id="vArch">0.9</span></span></label><input type="range" id="sArch" min="0.0" max="2.0" value="0.9" step="0.05"></div>
+        <div class="hint" style="margin:0 0 6px">0 = wheels don't shape the frame at all. Higher = deeper arches cut to clear the wheels.</div>
+        <label style="display:flex;gap:8px;align-items:center;font-size:12px;color:var(--ink-dim);margin-top:4px;cursor:pointer">
           <input type="checkbox" id="showWheels" checked> Show ghost wheels
         </label>
+        <button class="btn" id="dlWheel" style="width:100%;margin-top:8px">⬇ Wheel STL (one wheel · print ×4)</button>
       </div>
     </details>
 
@@ -319,17 +348,34 @@
           <button data-m="loft" class="on">Smooth loft</button>
           <button data-m="projection">Orthographic</button>
         </div>
-        <div class="hint" id="modeHint">Smooth loft: stretches the front section along the body — softer, approximate. Orthographic: intersects the side + front + top silhouettes so every line projects to its true place (needs a front view).</div>
+        <div class="hint" id="modeHint">Smooth loft: stretches the front section along the length — softer, approximate. Orthographic: intersects the side + front + top silhouettes so every line projects to its true place (needs a front view).</div>
         <div class="field"><label>Wall thickness <span class="val"><span id="vWall">1.8</span> mm</span></label><input type="range" id="sWall" min="0.6" max="5.0" value="1.8" step="0.1"></div>
         <div class="field"><label>Loft stations <span class="val"><span id="vSt">72</span></span></label><input type="range" id="sSt" min="16" max="160" value="72" step="1"></div>
         <div class="field"><label>Arc segments <span class="val"><span id="vSeg">56</span></span></label><input type="range" id="sSeg" min="12" max="120" value="56" step="1"></div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:12px;margin-top:6px;cursor:pointer"><input type="checkbox" id="sepBottom" checked> Bottom as a separate plate <span style="opacity:.55">· keeps the shell hollow</span></label>
+      </div>
+    </details>
+
+    <details class="sec">
+      <summary><span class="idx">★</span><span class="ttl">Section cuts &amp; 3D edit</span><span class="chev">▶</span></summary>
+      <div class="sec-body">
+        <div class="hint">A cross-section is pinned at each cut; the model morphs between them. Front &amp; rear views become cuts automatically. <b>Drag the dots to reshape</b> the selected cut — this edits the 3D model live.</div>
+        <select id="secSelect" class="proj-name" style="width:100%;margin-bottom:6px"></select>
+        <canvas id="secCanvas" style="width:100%;height:150px;background:#0c1119;border:1px solid var(--line-2);border-radius:8px;touch-action:none;display:block"></canvas>
+        <div class="field" style="margin-top:8px"><label>Cut position <span class="val"><span id="vSecPos">50</span>%</span></label><input type="range" id="secPos" min="0" max="100" value="50" step="1"></div>
+        <div class="btn-row">
+          <button class="btn" id="secAdd">＋ Add cut here</button>
+          <button class="btn ghost" id="secDel">⌫ Delete cut</button>
+        </div>
+        <div class="hint" id="secInfo">No section cuts yet — trace a front view, import a sheet, or add one.</div>
       </div>
     </details>
 
     <details class="sec" open>
       <summary><span class="idx">07</span><span class="ttl">Export &amp; library</span><span class="chev">▶</span></summary>
       <div class="sec-body">
-        <button class="btn primary" id="dlStl">⬇ Download STL (for slicer)</button>
+        <button class="btn primary" id="dlStl">⬇ Shell STL (hollow)</button>
+        <button class="btn" id="dlBottom" style="margin-top:6px">⬇ Bottom plate STL</button>
         <div class="btn-row">
           <button class="btn" id="dlJson">⬇ Profile JSON</button>
           <button class="btn" id="upJson">⬆ Import JSON</button>
@@ -347,6 +393,24 @@
         <div class="hint">With <code>LEE3D-Backend-A</code> running, these call it directly: <b>Save</b> commits this profile into <b>LEE3D-Lib</b>; <b>Build on server</b> runs the CadQuery pipeline (true wheel openings + shelling) and downloads a STEP you can keep editing in any CAD tool. No backend? Both fall back to a local download. <span class="tag">serve the studio from localhost:3000 or add your origin to the backend CORS list</span></div>
       </div>
     </details>
+
+    <details class="sec">
+      <summary><span class="idx">☁</span><span class="ttl">Cloud database <span style="opacity:.55;font-weight:400">· Supabase</span></span><span class="chev">▶</span></summary>
+      <div class="sec-body">
+        <div class="hint">Save projects to a Supabase (Postgres) database so they persist and sync across devices — no backend server to run. Paste your project URL + anon public key. <a href="#" id="sbHelp" style="color:var(--accent);text-decoration:none">▸ show setup SQL</a></div>
+        <input id="sbUrl" class="proj-name mono" placeholder="https://xxxx.supabase.co" spellcheck="false" style="width:100%;margin-bottom:5px;font-size:11px">
+        <input id="sbKey" class="proj-name mono" placeholder="anon public key" spellcheck="false" style="width:100%;font-size:11px">
+        <div class="btn-row" style="margin-top:6px">
+          <button class="btn" id="sbConnect">Connect</button>
+          <span class="hint" id="sbState" style="margin:0 0 0 2px">not set</span>
+        </div>
+        <pre id="sbSql" style="display:none;white-space:pre-wrap;font-size:10px;line-height:1.5;background:#0c1119;border:1px solid var(--line-2);border-radius:6px;padding:8px;margin:8px 0 0;color:var(--ink-dim);overflow:auto"></pre>
+        <div style="border-top:1px solid var(--line-2);margin:10px 0 8px;padding-top:8px"></div>
+        <button class="btn primary" id="sbSave" style="width:100%">☁ Save project to cloud</button>
+        <button class="btn" id="sbRefresh" style="width:100%;margin-top:5px">⟳ Browse cloud projects</button>
+        <div id="sbList" class="ws-list" style="margin-top:6px"></div>
+      </div>
+    </details>
   </aside>
 
   <!-- ================= STAGE ================= -->
@@ -355,6 +419,7 @@
       <div class="tab on" data-tab="import">Import Sheet</div>
       <div class="tab" data-tab="trace">Reference &amp; Trace</div>
       <div class="tab" data-tab="three">3D Preview</div>
+      <div class="tab" data-tab="workshop">Workshop</div>
     </div>
 
     <!-- Blueprint import -->
@@ -390,6 +455,8 @@
     <div class="view hide" id="viewThree">
       <canvas id="gl"></canvas>
       <div class="vp-tools">
+        <button class="btn" id="tZoomIn" style="font-weight:700">＋</button>
+        <button class="btn" id="tZoomOut" style="font-weight:700">－</button>
         <button class="btn" id="tWire">Wireframe</button>
         <button class="btn" id="tRef">Reference</button>
         <button class="btn" id="tReset">Recenter</button>
@@ -404,10 +471,11 @@
     <div class="view hide" id="viewTrace">
       <div class="trace-wrap">
         <div class="trace-bar">
-          <div class="seg" id="viewSeg" style="margin:0;width:210px;flex:0 0 auto">
+          <div class="seg" id="viewSeg" style="margin:0;width:280px;flex:0 0 auto">
             <button data-v="side" class="on">Side</button>
             <button data-v="top">Top</button>
             <button data-v="front">Front</button>
+            <button data-v="rear">Rear</button>
           </div>
           <button class="btn" id="bCal">⊹ Set scale</button>
           <button class="btn" id="bTop">⌢ <span id="bTopLbl">top edge</span></button>
@@ -420,9 +488,81 @@
         </div>
         <div id="canvasHost">
           <canvas id="trace"></canvas>
-          <div class="drop-note" id="dropNote"><div class="box"><b id="dropTitle">Drop a side-view drawing</b><span id="dropSub">Side view = the silhouette. Switch to Top view to trace real width. Set scale, then trace two edges.</span></div></div>
+          <div class="drop-note" id="dropNote"><div class="box"><b id="dropTitle">Drop a side-view drawing</b><span id="dropSub">Side view = the profile. Switch views to trace top (width) and front/rear (end cross-sections). Set scale, then trace.</span></div></div>
         </div>
         <div class="hint" style="padding:6px 12px 0">Click empty space to add a point · drag a point to move it · right-click a point to delete · refine each side, then open 3D Preview.</div>
+      </div>
+    </div>
+
+    <!-- Workshop / assembly -->
+    <div class="view hide" id="viewWorkshop">
+      <canvas id="wsgl"></canvas>
+      <div class="ws-panel" id="wsPanel">
+        <div class="ws-h">Workshop <span style="opacity:.5;font-weight:400">· assemble parts into one object</span></div>
+
+        <div class="ws-sec">
+          <div class="ws-lbl">Library</div>
+          <div class="btn-row">
+            <button class="btn" id="wsAddCur">＋ Add current model</button>
+            <button class="btn" id="wsImport">📂 Import</button>
+          </div>
+          <button class="btn ghost" id="wsSaveCur" style="margin-top:5px;width:100%">⤓ Save current model to library</button>
+          <input type="file" id="wsFile" accept="application/json,.json" hidden multiple>
+          <div id="wsLib" class="ws-list"></div>
+        </div>
+
+        <div class="ws-sec">
+          <div class="ws-lbl">Parts in scene <span id="wsCount" style="opacity:.5"></span></div>
+          <div id="wsParts" class="ws-list"></div>
+        </div>
+
+        <div class="ws-sec" id="wsXform" style="display:none">
+          <div class="ws-lbl">Selected · <span id="wsSelName" class="mono"></span></div>
+          <div class="ws-lbl2">position (mm)</div>
+          <div class="ws-grid3">
+            <label>X<input type="number" id="wsPX" step="1"></label>
+            <label>Y up<input type="number" id="wsPY" step="1"></label>
+            <label>Z<input type="number" id="wsPZ" step="1"></label>
+          </div>
+          <div class="ws-lbl2">rotation (°)</div>
+          <div class="ws-grid3">
+            <label>X<input type="number" id="wsRX" step="5"></label>
+            <label>Y<input type="number" id="wsRY" step="5"></label>
+            <label>Z<input type="number" id="wsRZ" step="5"></label>
+          </div>
+          <div class="ws-grid3" style="margin-top:5px">
+            <label>scale<input type="number" id="wsSC" step="0.05" value="1"></label>
+            <button class="btn" id="wsFloor" style="align-self:end">⤓ floor</button>
+            <button class="btn" id="wsDup" style="align-self:end">⎘ dup</button>
+          </div>
+          <button class="btn ghost" id="wsDel" style="width:100%;margin-top:6px">⌫ Delete part</button>
+        </div>
+
+        <div class="ws-sec">
+          <div class="ws-lbl">Grid</div>
+          <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer"><input type="checkbox" id="wsGridOn" checked> Show grid <span style="opacity:.5">· measured cubes</span></label>
+          <div class="field" style="margin-top:6px"><label>Cube size <span class="val"><span id="wsStepV">10</span> mm</span></label>
+            <select id="wsStep" class="proj-name" style="width:100%">
+              <option value="5">5 mm cubes</option><option value="10" selected>10 mm cubes</option><option value="25">25 mm cubes</option><option value="50">50 mm cubes</option><option value="100">100 mm cubes</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="ws-sec">
+          <div class="ws-lbl">Save assembly as an object</div>
+          <input id="wsName" class="proj-name mono" value="assembly-1" spellcheck="false" style="width:100%">
+          <button class="btn primary" id="wsSave" style="width:100%;margin-top:6px">💾 Save assembly to library</button>
+          <button class="btn" id="wsSTL" style="width:100%;margin-top:5px">⬇ Export combined STL</button>
+        </div>
+      </div>
+      <div class="vp-tools">
+        <button class="btn" id="wsZoomIn" style="font-weight:700">＋</button>
+        <button class="btn" id="wsZoomOut" style="font-weight:700">－</button>
+        <button class="btn" id="wsRecenter">Recenter</button>
+      </div>
+      <div class="vp-overlay">
+        <div><span class="k">drag</span> orbit · <span class="k">scroll</span> zoom · <span class="k">right-drag</span> pan · <span class="k">drag a part</span> move</div>
+        <div id="wsInfo">—</div>
       </div>
     </div>
   </section>
@@ -445,7 +585,7 @@
 <script>
 "use strict";
 /* =========================================================================
-   LEE3D Car Body Studio — single file, no build step.
+   LEE3D Orthographic Studio — single file, no build step.
    Pipeline:  2D drawing / parameters  ->  cross-section loft  ->  open-bottom
    thin shell with wheel arches  ->  live 3D + binary STL.
    The geometry core below is byte-for-byte the algorithm validated in Node as
@@ -468,6 +608,32 @@ function sampleProfile(pts,xf){
 }
 
 /* ---------- THE GEOMETRY CORE (validated) ---------- */
+// resample a section profile to fixed control points (anchored to the sill at both ends)
+function resampleSection(prof,K){
+  K=K||12; const out=[];
+  for(let k=0;k<=K;k++){const t=k/K; out.push([t, clamp(sampleProfile(prof,t),0,1.4)]);}
+  out[0][1]=0; out[out.length-1][1]=0;
+  return out;
+}
+// cross-section at length-fraction xf, morphed between sorted section cuts
+function morphSections(ss,xf){
+  if(ss.length===1)return ss[0].prof;
+  if(xf<=ss[0].at)return ss[0].prof;
+  if(xf>=ss[ss.length-1].at)return ss[ss.length-1].prof;
+  for(let i=0;i<ss.length-1;i++){const a=ss[i],b=ss[i+1];
+    if(xf>=a.at&&xf<=b.at){const t=(b.at-a.at)?(xf-a.at)/(b.at-a.at):0,K=24,out=[];
+      for(let k=0;k<=K;k++){const tt=k/K;const za=sampleProfile(a.prof,tt),zb=sampleProfile(b.prof,tt);out.push([tt,za+(zb-za)*t]);}
+      return out;}}
+  return ss[ss.length-1].prof;
+}
+function sortSections(){ if(traced.sections) traced.sections.sort((a,b)=>a.at-b.at); }
+// insert/replace the section coming from a given source ('front'|'rear'|'manual')
+function setSourceSection(src,at,prof){
+  if(!traced.sections)traced.sections=[];
+  traced.sections=traced.sections.filter(s=>s.src!==src);
+  traced.sections.push({at,prof:resampleSection(prof),src});
+  sortSections();
+}
 function makeBody(p){
   const N=Math.max(8,p.stations|0), M=Math.max(6,p.arcSegments|0);
   const L=p.length, pow=p.roofFlatness??1, t=Math.max(0.2,p.wallThickness??1.8);
@@ -475,10 +641,9 @@ function makeBody(p){
   const rows=M+1; const gi=(i,j)=>i*rows+j;
   const outer=new Array((N+1)*rows);
 
-  const section=(p.section&&p.section.length>1)?p.section:null;
-  // Orthographic projection mode: the upper surface is the intersection of the side
-  // (height-vs-length) and front (cross-section, absolute mm) silhouettes, with the
-  // top view limiting width. This projects each view's lines to where they belong.
+  const sections=(p.sections&&p.sections.length)?p.sections:null;        // morph these along length
+  const singleSec=(!sections && p.section&&p.section.length>1)?p.section:null;
+  // Orthographic projection mode (unchanged): intersect side + front + top silhouettes.
   const proj=(p.mode==="projection" && p.frontHull && p.frontHull.length>1);
   const FH=proj?p.frontHull:null, fW=FH?Math.max(...FH.map(q=>Math.abs(q[0]))):0;
   const fUp=FH?(yy)=>{
@@ -490,24 +655,25 @@ function makeBody(p){
     const xf=i/N, x=(xf-0.5)*L;
     const zTop=sampleProfile(p.topProfile,xf), zBot=sampleProfile(p.bottomProfile,xf);
     const halfW=Math.max(0.05,sampleProfile(p.widthProfile,xf));
-    const Y=proj?Math.max(0.05,Math.min(halfW,fW)):halfW;   // width = intersection of top & front
+    const secHere = sections ? morphSections(sections,xf) : singleSec;   // cross-section at this station
+    const Y=proj?Math.max(0.05,Math.min(halfW,fW)):halfW;
     for(let j=0;j<=M;j++){
       const u=j/M;
       let yNorm, z;
       if(proj){
         yNorm=2*u-1; const yy=yNorm*Y;
-        let zUp=Math.min(zTop, fUp(yy));                     // ceiling = min(side, front) -> the projection
-        const e=(Math.abs(yNorm)-0.92)/0.08; if(e>0)zUp=zBot+(zUp-zBot)*(1-clamp(e,0,1)); // sides drop to sill
+        let zUp=Math.min(zTop, fUp(yy));
+        const e=(Math.abs(yNorm)-0.92)/0.08; if(e>0)zUp=zBot+(zUp-zBot)*(1-clamp(e,0,1));
         z=Math.max(zBot,zUp);
-      } else if(section){ yNorm=2*u-1; z=zBot+(zTop-zBot)*clamp(sampleProfile(section,u),0,1.4); }
+      } else if(secHere){ yNorm=2*u-1; z=zBot+(zTop-zBot)*clamp(sampleProfile(secHere,u),0,1.4); }
       else { const th=Math.PI*u; yNorm=-Math.cos(th); z=zBot+(zTop-zBot)*Math.pow(Math.max(0,Math.sin(th)),pow); }
       const y=yNorm*Y;
       let lift=0;
       for(const w of wheels){
-        const half=(w.r??8)*1.15, d=Math.abs(x-(w.x??0));
-        if(d<half){
+        const half=(w.len??w.dia??32)/2*1.15, d=Math.abs(x-(w.x??0));
+        if(d<half && archLift>0){
           const bump=smoothstep(1-d/half), side=Math.pow(Math.abs(yNorm),1.5);
-          const amt=(w.r??8)*1.4*bump*side*archLift;
+          const amt=(w.dia??32)/2*1.4*bump*side*archLift;
           if(amt>lift)lift=amt;
         }
       }
@@ -555,6 +721,36 @@ function makeBody(p){
   return {positions,indices,volume:vol};
 }
 
+/* Separate BOTTOM PLATE — its own watertight part, so the shell stays hollow.
+   Top follows the sill line (mates the shell); underside is a flat plane (prints
+   flat). Defaults to flat because the sill is flat unless a bottom is drawn.
+   This is the seam where a drawn/traced bottom object will plug in later. */
+function makeBottom(p){
+  const N=Math.max(8,Math.round(p.stations||72)), M=Math.max(6,Math.round((p.arcSegments||56)/2));
+  const L=p.length, plateT=Math.max(0.8,(p.wallThickness||1.8));
+  const rows=M+1, gi=(i,j)=>i*rows+j, topV=[]; let zFloor=Infinity;
+  for(let i=0;i<=N;i++){const xf=i/N,x=(xf-0.5)*L,hw=Math.max(0.05,sampleProfile(p.widthProfile,xf)),zb=sampleProfile(p.bottomProfile,xf);
+    if(zb<zFloor)zFloor=zb;
+    for(let j=0;j<=M;j++)topV[gi(i,j)]=[x,(2*j/M-1)*hw,zb];}
+  zFloor-=plateT;
+  const Vv=[...topV], io=topV.length;
+  for(let i=0;i<=N;i++){const xf=i/N,x=(xf-0.5)*L,hw=Math.max(0.05,sampleProfile(p.widthProfile,xf));
+    for(let j=0;j<=M;j++)Vv.push([x,(2*j/M-1)*hw,zFloor]);}
+  const idx=[];
+  for(let i=0;i<N;i++)for(let j=0;j<M;j++){const a=gi(i,j),b=gi(i+1,j),c=gi(i+1,j+1),d=gi(i,j+1);idx.push(a,c,b, a,d,c);}        // top face
+  for(let i=0;i<N;i++)for(let j=0;j<M;j++){const a=io+gi(i,j),b=io+gi(i+1,j),c=io+gi(i+1,j+1),d=io+gi(i,j+1);idx.push(a,b,c, a,c,d);} // flat underside
+  const wall=(a,b)=>{idx.push(a,b,io+b, a,io+b,io+a);};
+  for(let i=0;i<N;i++)wall(gi(i,0),gi(i+1,0));
+  for(let i=0;i<N;i++)wall(gi(i+1,M),gi(i,M));
+  for(let j=0;j<M;j++)wall(gi(0,j+1),gi(0,j));
+  for(let j=0;j<M;j++)wall(gi(N,j),gi(N,j+1));
+  const positions=new Float32Array(Vv.length*3); Vv.forEach((v,k)=>{positions[k*3]=v[0];positions[k*3+1]=v[1];positions[k*3+2]=v[2];});
+  let vol=0; for(let k=0;k<idx.length;k+=3){const A=idx[k]*3,B=idx[k+1]*3,C=idx[k+2]*3;
+    vol+=(positions[A]*(positions[B+1]*positions[C+2]-positions[B+2]*positions[C+1])-positions[A+1]*(positions[B]*positions[C+2]-positions[B+2]*positions[C])+positions[A+2]*(positions[B]*positions[C+1]-positions[B+1]*positions[C]))/6;}
+  if(vol<0){for(let k=0;k<idx.length;k+=3){const t=idx[k+1];idx[k+1]=idx[k+2];idx[k+2]=t;}vol=-vol;}
+  return {positions,indices:idx,volume:vol};
+}
+
 /* manifold sign-off (the live "approval stamp") */
 function checkManifold(indices){
   const m=new Map(),key=(a,b)=>a<b?a+"_"+b:b+"_"+a;
@@ -586,14 +782,16 @@ function toSTL(positions,indices){
 /* =========================================================================
    PROFILE MODEL  (the editable state -> shared JSON schema)
    ========================================================================= */
+const DEFAULT_LEN=200;   // standard body length (mm) used when no real-world scale is set
+const FRONT_AT=0.2, REAR_AT=0.8;   // where front/rear cross-sections sit along the length
 const PRESETS={
-  hotrod:{len:180,nose:28,cowl:40,roof:60,roofPos:.55,tail:30,sill:8, nw:14,mw:38,wp:.45,tw:22,round:1.4, wb:.62,track:62,wr:16,ww:26,rh:13,arch:1.0},
-  coupe :{len:200,nose:24,cowl:38,roof:54,roofPos:.6 ,tail:34,sill:7, nw:18,mw:44,wp:.5 ,tw:30,round:1.6, wb:.66,track:70,wr:17,ww:28,rh:12,arch:1.0},
-  sedan :{len:230,nose:30,cowl:44,roof:62,roofPos:.52,tail:46,sill:9, nw:22,mw:46,wp:.5 ,tw:40,round:1.8, wb:.64,track:72,wr:16,ww:26,rh:13,arch:.9},
-  suv   :{len:210,nose:38,cowl:56,roof:84,roofPos:.5 ,tail:74,sill:14,nw:26,mw:52,wp:.5 ,tw:48,round:2.2, wb:.62,track:80,wr:22,ww:34,rh:18,arch:1.1},
+  hotrod:{len:180,nose:28,cowl:40,roof:60,roofPos:.55,tail:30,sill:8, nw:14,mw:38,wp:.45,tw:22,round:1.4, wb:.60,track:66,wDia:46,wLen:46,wWid:26,rh:20,axle:true,axleDia:8, arch:.9},
+  coupe :{len:200,nose:24,cowl:38,roof:54,roofPos:.6 ,tail:34,sill:7, nw:18,mw:44,wp:.5 ,tw:30,round:1.6, wb:.64,track:72,wDia:44,wLen:44,wWid:28,rh:18,axle:true,axleDia:8, arch:.9},
+  sedan :{len:230,nose:30,cowl:44,roof:62,roofPos:.52,tail:46,sill:9, nw:22,mw:46,wp:.5 ,tw:40,round:1.8, wb:.62,track:74,wDia:42,wLen:42,wWid:26,rh:17,axle:true,axleDia:8, arch:.85},
+  suv   :{len:210,nose:38,cowl:56,roof:84,roofPos:.5 ,tail:74,sill:14,nw:26,mw:52,wp:.5 ,tw:48,round:2.2, wb:.60,track:82,wDia:56,wLen:56,wWid:34,rh:24,axle:true,axleDia:10,arch:1.0},
 };
-const S={...PRESETS.hotrod, wall:1.8, st:72, seg:56, opacity:.55, mode:"loft"};
-let traced={top:null,bottom:null,width:null,section:null,frontHull:null}; // mm-space / normalized profiles when traced
+const S={...PRESETS.hotrod, wall:1.8, st:72, seg:56, opacity:.55, mode:"loft", sepBottom:true};
+let traced={top:null,bottom:null,width:null,section:null,sections:null,frontHull:null,rearHull:null}; // mm-space / normalized profiles when traced
 
 function buildTop(){
   if(traced.top)return traced.top;
@@ -615,18 +813,32 @@ function buildSection(){
 }
 function buildWheels(){
   const L=S.len, wbX=S.wb*L/2;
-  return [{x:-wbX,z:S.rh,r:S.wr,width:S.ww},{x:wbX,z:S.rh,r:S.wr,width:S.ww}];
+  return [{x:-wbX,z:S.rh,dia:S.wDia,len:S.wLen,wid:S.wWid},{x:wbX,z:S.rh,dia:S.wDia,len:S.wLen,wid:S.wWid}];
+}
+// A single printable wheel: elliptical cylinder (X radius = length/2, Z radius = diameter/2,
+// axis along Y = thickness). Closed tube + two caps -> watertight. Print four.
+function makeWheel(){
+  const seg=Math.max(24,Math.round(S.seg)), rx=S.wLen/2, rz=S.wDia/2, hw=S.wWid/2;
+  const V=[], idx=[];
+  const ring=(y)=>{const base=V.length;for(let i=0;i<seg;i++){const a=i/seg*2*Math.PI;V.push([Math.cos(a)*rx,y,Math.sin(a)*rz]);}return base;};
+  const b0=ring(-hw), b1=ring(hw);
+  for(let i=0;i<seg;i++){const j=(i+1)%seg;idx.push(b0+i,b0+j,b1+j, b0+i,b1+j,b1+i);}   // tube wall
+  const c0=V.length;V.push([0,-hw,0]); const c1=V.length;V.push([0,hw,0]);
+  for(let i=0;i<seg;i++){const j=(i+1)%seg;idx.push(c0,b0+j,b0+i); idx.push(c1,b1+i,b1+j);} // two caps
+  const positions=new Float32Array(V.length*3);V.forEach((v,k)=>{positions[k*3]=v[0];positions[k*3+1]=v[1];positions[k*3+2]=v[2];});
+  return {positions,indices:idx};
 }
 function currentProfile(){
   return {
-    schema:"lee3d.profile/v1", units:"mm", name:projName.value||"untitled-body",
+    schema:"lee3d.profile/v1", units:"mm", name:projName.value||"untitled-object", category:(projCat.value||"uncategorized").trim(),
     length:S.len, stations:S.st, arcSegments:S.seg, roofFlatness:S.round,
     wallThickness:S.wall, archLift:S.arch,
     topProfile:buildTop(), bottomProfile:buildBottom(), widthProfile:buildWidth(),
     section:buildSection(),
-    mode:S.mode, frontHull:(S.mode==="projection"?traced.frontHull:null),
+    sections:(traced.sections&&traced.sections.length?traced.sections:null),
+    mode:S.mode, frontHull:(S.mode==="projection"?traced.frontHull:null), sepBottom:S.sepBottom,
     wheels:buildWheels(),
-    wheelLayout:{wheelbaseFrac:S.wb, track:S.track, radius:S.wr, width:S.ww, rideHeight:S.rh},
+    wheelLayout:{wheelbaseFrac:S.wb, track:S.track, diameter:S.wDia, length:S.wLen, width:S.wWid, rideHeight:S.rh, axle:S.axle, axleDia:S.axleDia},
   };
 }
 
@@ -634,7 +846,7 @@ function currentProfile(){
    THREE.JS VIEWPORT  (custom orbit controller, no external deps)
    ========================================================================= */
 const glCanvas=document.getElementById("gl");
-let renderer,scene,camera,bodyMesh,wireMesh,wheelGroup,grid,refGroup;
+let renderer,scene,camera,bodyMesh,wireMesh,bottomMesh,wheelGroup,grid,refGroup;
 let target=new THREE.Vector3(0,0,0);
 let cam={az:-0.7,pol:1.15,rad:300};
 let wireOn=false, refOn=false;
@@ -675,7 +887,9 @@ function makeRefPlanes(bb){
   if(V.top.img){const mesh=new THREE.Mesh(new THREE.PlaneGeometry(Lx,Ly),mat(V.top.img));
     mesh.rotation.x=-Math.PI/2;mesh.position.set(cX,bb.min.z-m,-cW);refGroup.add(mesh);}  // plan as a floor
   if(V.front.img){const mesh=new THREE.Mesh(new THREE.PlaneGeometry(Ly,Lz),mat(V.front.img));
-    mesh.rotation.y=Math.PI/2;mesh.position.set(bb.min.x-m,cH,-cW);refGroup.add(mesh);}    // cross-section at the nose
+    mesh.rotation.y=Math.PI/2;mesh.position.set(bb.min.x-m,cH,-cW);refGroup.add(mesh);}    // front cross-section
+  if(V.rear.img){const mesh=new THREE.Mesh(new THREE.PlaneGeometry(Ly,Lz),mat(V.rear.img));
+    mesh.rotation.y=Math.PI/2;mesh.position.set(bb.max.x+m,cH,-cW);refGroup.add(mesh);}    // rear cross-section
 }
 
 function rebuild(){
@@ -695,15 +909,34 @@ function rebuild(){
   const wmat=new THREE.MeshBasicMaterial({color:0xff7a2f,wireframe:true,transparent:true,opacity:0.28});
   wireMesh=new THREE.Mesh(geo,wmat);wireMesh.visible=wireOn;scene.add(wireMesh);
 
+  // separate BOTTOM PLATE part (keeps the shell hollow; assembles into a closed object)
+  disposeMesh(bottomMesh); bottomMesh=null;
+  if(S.sepBottom){
+    const bp=makeBottom(prof);
+    const bgeo=new THREE.BufferGeometry();
+    bgeo.setAttribute("position",new THREE.Float32BufferAttribute(bp.positions,3));
+    bgeo.setIndex(bp.indices);bgeo.computeVertexNormals();
+    const bmat=new THREE.MeshStandardMaterial({color:0x46b7d9,metalness:0.1,roughness:0.6,side:THREE.DoubleSide});
+    bottomMesh=new THREE.Mesh(bgeo,bmat);bottomMesh.rotation.set(-Math.PI/2,0,0);scene.add(bottomMesh);
+  }
+
   // ghost wheels — cylinder's native axis is +Y, which is our axle (width) direction
   wheelGroup.clear();
   if(showWheels.checked){
     const wbX=S.wb*S.len/2, tr=S.track/2;
-    const wmt=new THREE.MeshStandardMaterial({color:0x10161f,metalness:0.3,roughness:0.5,transparent:true,opacity:0.55});
+    // unit cylinder (axis +Y): radius 1 in X/Z, height 1 in Y. Scale each axis independently.
+    const wg=new THREE.CylinderGeometry(1,1,1,32);
+    const wmt=new THREE.MeshStandardMaterial({color:0x10161f,metalness:0.35,roughness:0.5,transparent:true,opacity:0.62});
     for(const sx of[-wbX,wbX])for(const sy of[-tr,tr]){
-      const cyl=new THREE.Mesh(new THREE.CylinderGeometry(S.wr,S.wr,S.ww,28),wmt);
+      const cyl=new THREE.Mesh(wg,wmt);
+      cyl.scale.set(S.wLen/2, S.wWid, S.wDia/2);   // X=length, Y=thickness(width), Z=diameter(height)
       cyl.position.set(sx,sy,S.rh);
       wheelGroup.add(cyl);
+    }
+    if(S.axle){
+      const amt=new THREE.MeshStandardMaterial({color:0x33404f,metalness:0.6,roughness:0.4,transparent:true,opacity:0.7});
+      const ag=new THREE.CylinderGeometry(S.axleDia/2,S.axleDia/2,S.track,18);  // spans the full track (axis +Y)
+      for(const sx of[-wbX,wbX]){const ax=new THREE.Mesh(ag,amt);ax.position.set(sx,0,S.rh);wheelGroup.add(ax);}
     }
   }
 
@@ -740,7 +973,7 @@ function resize(){
   renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix();
 }
 function updateCam(){
-  cam.pol=clamp(cam.pol,0.15,Math.PI-0.15);cam.rad=clamp(cam.rad,40,1600);
+  cam.pol=clamp(cam.pol,0.15,Math.PI-0.15);cam.rad=clamp(cam.rad,Math.max(5,S.len*0.12),S.len*14);
   const x=target.x+cam.rad*Math.sin(cam.pol)*Math.cos(cam.az);
   const y=target.y+cam.rad*Math.cos(cam.pol);
   const z=target.z+cam.rad*Math.sin(cam.pol)*Math.sin(cam.az);
@@ -780,7 +1013,7 @@ const tctx=traceCanvas.getContext("2d");
 let fit={s:1,ox:0,oy:0};
 // Per-view tracing state. side: A=roof/top edge, B=sill/lower edge.
 //                          top:  A=left edge,     B=right edge.
-const V={ side:{img:null,scale:null,A:[],B:[]}, top:{img:null,scale:null,A:[],B:[]}, front:{img:null,scale:null,A:[],B:[]} };
+const V={ side:{img:null,scale:null,A:[],B:[]}, top:{img:null,scale:null,A:[],B:[]}, front:{img:null,scale:null,A:[],B:[]}, rear:{img:null,scale:null,A:[],B:[]} };
 let activeView="side";
 let traceMode=null;              // 'cal' | 'A' | 'B'
 let calPts=[];                   // canvas px
@@ -929,26 +1162,37 @@ function commitTrace(){
   if(fv.A.length>=2){
     const ys=fv.A.map(p=>p.y), xs=fv.A.map(p=>p.x);
     const sec=sectionFromTopEdge(fv.A.map(p=>[p.x,p.y]),Math.max(...ys),Math.min(...ys));
-    if(sec){traced.section=sec;markSection(true);}
+    if(sec){traced.section=sec;setSourceSection("front",FRONT_AT,sec);markSection(true);refreshSecUI();}
     if(fv.scale){
       const yc=(Math.min(...xs)+Math.max(...xs))/2, datum=Math.max(...ys);
       traced.frontHull=[...fv.A].sort((a,b)=>a.x-b.x).map(p=>[(p.x-yc)/fv.scale,(datum-p.y)/fv.scale]);
     } else traced.frontHull=null;
   }
+  // REAR view -> back cross-section cut (+ absolute silhouette for future projection)
+  const rv=V.rear;
+  if(rv.A.length>=2){
+    const ys=rv.A.map(p=>p.y), xs=rv.A.map(p=>p.x);
+    const sec=sectionFromTopEdge(rv.A.map(p=>[p.x,p.y]),Math.max(...ys),Math.min(...ys));
+    if(sec){setSourceSection("rear",REAR_AT,sec);refreshSecUI();}
+    if(rv.scale){
+      const yc=(Math.min(...xs)+Math.max(...xs))/2, datum=Math.max(...ys);
+      traced.rearHull=[...rv.A].sort((a,b)=>a.x-b.x).map(p=>[(p.x-yc)/rv.scale,(datum-p.y)/rv.scale]);
+    } else traced.rearHull=null;
+  }
   setTraceStatus();requestRebuild();updateViewDots();
 }
 function updateViewDots(){
-  const has={side:!!(traced.top||traced.bottom),top:!!traced.width,front:!!traced.section};
+  const has={side:!!(traced.top||traced.bottom),top:!!traced.width,front:!!traced.section,rear:!!(traced.sections&&traced.sections.some(s=>s.src==="rear"))};
   document.querySelectorAll("#viewSeg button").forEach(b=>b.classList.toggle("traced",!!has[b.dataset.v]));
 }
 function setTraceStatus(){
   const v=cv(),s=document.getElementById("traceStatus"),parts=[];
-  const needScale=activeView!=="front";
+  const needScale=activeView!=="front"&&activeView!=="rear";
   if(needScale)parts.push(v.scale?`<span class="tag" style="color:var(--good);border-color:rgba(91,214,160,.3)">${v.scale.toFixed(2)} px/mm</span>`:'<span class="tag">scale not set</span>');
   else parts.push('<span class="tag">no scale needed</span>');
-  const la={side:"top",top:"left",front:"outline"}[activeView], lb={side:"lower",top:"right",front:"base"}[activeView];
+  const la={side:"top",top:"left",front:"outline",rear:"outline"}[activeView], lb={side:"lower",top:"right",front:"base",rear:"base"}[activeView];
   if(v.A.length)parts.push(`${la}: ${v.A.length}`);
-  if(v.B.length&&activeView!=="front")parts.push(`${lb}: ${v.B.length}`);
+  if(v.B.length&&activeView!=="front"&&activeView!=="rear")parts.push(`${lb}: ${v.B.length}`);
   if(traceMode)parts.push(`<b style="color:var(--accent)">● ${traceMode==="cal"?"click 2 points":"clicking…"}</b>`);
   s.innerHTML=parts.join(" &nbsp; ");
 }
@@ -959,7 +1203,7 @@ function loadImageFile(file){
   const url=URL.createObjectURL(file);const img=new Image();
   img.onload=()=>{cv().img=img;document.getElementById("imgOpField").style.display="block";
     switchTab("trace");fitTrace();
-    toast(`${activeView==="side"?"Side":"Top"} image loaded. <span class='mono'>Set scale</span>, then trace two edges.`);};
+    toast(`${activeView[0].toUpperCase()+activeView.slice(1)} view loaded.${(activeView==="front"||activeView==="rear")?" Trace the outline — no scale needed.":" <span class='mono'>Set scale</span>, then trace two edges."}`);};
   img.src=url;
 }
 document.getElementById("pickImg").onclick=()=>imgFile.click();
@@ -971,15 +1215,16 @@ host.addEventListener("drop",e=>{if(e.dataTransfer.files[0])loadImageFile(e.data
 
 /* view switch (side / top / front) */
 function updateEdgeLabels(){
-  const A={side:"top edge",top:"left edge",front:"section outline"}[activeView];
-  const B={side:"lower edge",top:"right edge",front:"baseline (opt)"}[activeView];
+  const A={side:"top edge",top:"left edge",front:"section outline",rear:"section outline"}[activeView];
+  const B={side:"lower edge",top:"right edge",front:"baseline (opt)",rear:"baseline (opt)"}[activeView];
   document.getElementById("bTopLbl").textContent=A;
   document.getElementById("bBotLbl").textContent=B;
-  document.getElementById("dropTitle").textContent={side:"Drop a side-view drawing",top:"Drop a top-view drawing",front:"Drop a front-view drawing"}[activeView];
+  document.getElementById("dropTitle").textContent={side:"Drop a side-view drawing",top:"Drop a top-view drawing",front:"Drop a front-view drawing",rear:"Drop a rear-view drawing"}[activeView];
   document.getElementById("dropSub").textContent={
-    side:"Side view sets the silhouette. Set scale, then trace the top and lower edges.",
+    side:"Side view sets the profile. Set scale, then trace the top and lower edges.",
     top:"Top view sets the real width. Set scale, then trace the left and right edges.",
-    front:"Front view sets the cross-section. Trace the outline from one side, over the roof, to the other — no scale needed."
+    front:"Front view sets the front cross-section. Trace from one side, over the top, to the other — no scale needed.",
+    rear:"Rear view sets the back cross-section. Trace from one side, over the top, to the other — no scale needed."
   }[activeView];
 }
 function updateScaleInfo(){
@@ -1011,11 +1256,12 @@ document.getElementById("bUndo").onclick=()=>{const v=cv();
 document.getElementById("bClear").onclick=()=>{const v=cv();v.A=[];v.B=[];calPts=[];
   if(activeView==="side"){traced.top=null;traced.bottom=null;markSil(false);}
   else if(activeView==="top"){traced.width=null;markWidth(false);}
-  else{traced.section=null;traced.frontHull=null;markSection(false);}
+  else if(activeView==="front"){traced.section=null;traced.frontHull=null;if(traced.sections){traced.sections=traced.sections.filter(s=>s.src!=="front");if(!traced.sections.length)traced.sections=null;}markSection(false);refreshSecUI();}
+  else if(activeView==="rear"){traced.rearHull=null;if(traced.sections){traced.sections=traced.sections.filter(s=>s.src!=="rear");if(!traced.sections.length)traced.sections=null;}refreshSecUI();}
   drawTrace();setTraceStatus();requestRebuild();};
 document.getElementById("clearTrace").onclick=()=>{V.side.A=[];V.side.B=[];traced.top=null;traced.bottom=null;markSil(false);if(activeView==="side")drawTrace();requestRebuild();};
 document.getElementById("clearWidth").onclick=()=>{V.top.A=[];V.top.B=[];traced.width=null;markWidth(false);if(activeView==="top")drawTrace();requestRebuild();};
-document.getElementById("clearSection").onclick=()=>{V.front.A=[];V.front.B=[];traced.section=null;traced.frontHull=null;markSection(false);if(activeView==="front")drawTrace();requestRebuild();};
+document.getElementById("clearSection").onclick=()=>{V.front.A=[];V.front.B=[];traced.section=null;traced.frontHull=null;if(traced.sections){traced.sections=traced.sections.filter(s=>s.src!=="front");if(!traced.sections.length)traced.sections=null;}markSection(false);refreshSecUI();if(activeView==="front")drawTrace();requestRebuild();};
 function backToParametric(){markSil(false);markWidth(false);markSection(false);}
 document.getElementById("b3D").onclick=()=>switchTab("three");
 document.querySelectorAll("#modeSeg button").forEach(b=>b.onclick=()=>{
@@ -1063,7 +1309,18 @@ mInput.addEventListener("keydown",e=>{if(e.key==="Enter")document.getElementById
    UI WIRING
    ========================================================================= */
 const projName=document.getElementById("projName");
-projName.addEventListener("input",()=>{}); // name only used on export
+const projCat=document.getElementById("projCat");
+const DEFAULT_CATS=["Car frame","Body","Wheels","Chassis","Axles","Assemblies","Misc"];
+function knownCategories(){
+  const set=new Set(DEFAULT_CATS);
+  try{(LIB.items||[]).forEach(it=>{const c=(it.category||(it.data&&it.data.category)||"").trim();if(c)set.add(c);});}catch(_){}
+  (window.__cloudCats||[]).forEach(c=>{if(c)set.add(c);});
+  return [...set].sort((a,b)=>a.localeCompare(b));
+}
+function refreshCategories(){
+  const dl=document.getElementById("catList");if(!dl)return;
+  dl.innerHTML=knownCategories().map(c=>`<option value="${c.replace(/"/g,"&quot;")}"></option>`).join("");
+}
 
 function bindSlider(id,key,label,decimals,after){
   const el=document.getElementById(id),out=document.getElementById(label);
@@ -1080,11 +1337,21 @@ bindSlider("sTail","tail","vTail");bindSlider("sSill","sill","vSill");
 bindSlider("sNW","nw","vNW");bindSlider("sMW","mw","vMW");bindSlider("sWP","wp","vWP",2);
 bindSlider("sTW","tw","vTW");bindSlider("sRound","round","vRound",2);
 bindSlider("sWB","wb","vWB",2);bindSlider("sTrack","track","vTrack");
-bindSlider("sWR","wr","vWR");bindSlider("sWW","ww","vWW");bindSlider("sRH","rh","vRH");
+bindSlider("sWDia","wDia","vWDia");bindSlider("sWLen","wLen","vWLen");bindSlider("sWWid","wWid","vWWid");bindSlider("sRH","rh","vRH");bindSlider("sAxleDia","axleDia","vAxleDia");
 bindSlider("sArch","arch","vArch",2);
 bindSlider("sWall","wall","vWall",1);bindSlider("sSt","st","vSt");bindSlider("sSeg","seg","vSeg");
 document.getElementById("sOp").addEventListener("input",e=>{S.opacity=e.target.value/100;vOp.textContent=e.target.value;drawTrace();});
 document.getElementById("showWheels").addEventListener("change",requestRebuild);
+document.getElementById("dlWheel").onclick=()=>{
+  const {positions,indices}=makeWheel();
+  const man=checkManifold(indices);
+  download(toSTL(positions,indices),(projName.value||"object")+"-wheel.stl");
+  toast(man.watertight
+    ?`Wheel STL · <span class="mono">${(indices.length/3).toLocaleString()} tris · watertight</span> — print ×4`
+    :`Wheel · <span class="mono" style="color:var(--warn)">${man.boundary} open edges</span>`);
+};
+document.getElementById("sepBottom").addEventListener("change",e=>{S.sepBottom=e.target.checked;requestRebuild();});
+document.getElementById("showAxle").addEventListener("change",e=>{S.axle=e.target.checked;requestRebuild();});
 
 /* presets */
 document.querySelectorAll("#presetSeg button").forEach(b=>{
@@ -1092,8 +1359,9 @@ document.querySelectorAll("#presetSeg button").forEach(b=>{
     document.querySelectorAll("#presetSeg button").forEach(x=>x.classList.remove("on"));
     b.classList.add("on");
     const P=PRESETS[b.dataset.p];Object.assign(S,P);
-    traced={top:null,bottom:null,width:null,section:null,frontHull:null};
-    V.side.A=[];V.side.B=[];V.top.A=[];V.top.B=[];V.front.A=[];V.front.B=[];
+    traced={top:null,bottom:null,width:null,section:null,sections:null,frontHull:null,rearHull:null};
+    V.side.A=[];V.side.B=[];V.top.A=[];V.top.B=[];V.front.A=[];V.front.B=[];V.rear.A=[];V.rear.B=[];
+    refreshSecUI();
     backToParametric();
     syncSlidersFromState();requestRebuild();drawTrace();
     toast("Loaded preset: <span class='mono'>"+b.textContent+"</span>");
@@ -1101,7 +1369,7 @@ document.querySelectorAll("#presetSeg button").forEach(b=>{
 });
 function syncSlidersFromState(){
   const map={sLen:"len",sNose:"nose",sCowl:"cowl",sRoof:"roof",sRoofPos:"roofPos",sTail:"tail",sSill:"sill",
-    sNW:"nw",sMW:"mw",sWP:"wp",sTW:"tw",sRound:"round",sWB:"wb",sTrack:"track",sWR:"wr",sWW:"ww",sRH:"rh",
+    sNW:"nw",sMW:"mw",sWP:"wp",sTW:"tw",sRound:"round",sWB:"wb",sTrack:"track",sWDia:"wDia",sWLen:"wLen",sWWid:"wWid",sRH:"rh",sAxleDia:"axleDia",
     sArch:"arch",sWall:"wall",sSt:"st",sSeg:"seg"};
   for(const[id,key]of Object.entries(map)){
     const el=document.getElementById(id);if(!el)continue;el.value=S[key];
@@ -1112,6 +1380,7 @@ function syncSlidersFromState(){
   vLen.textContent=S.len;vRoofPos.textContent=Number(S.roofPos).toFixed(2);vWP.textContent=Number(S.wp).toFixed(2);
   vWB.textContent=Number(S.wb).toFixed(2);vRound.textContent=Number(S.round).toFixed(2);
   vArch.textContent=Number(S.arch).toFixed(2);vWall.textContent=Number(S.wall).toFixed(1);
+  const ax=document.getElementById("showAxle");if(ax)ax.checked=!!S.axle;
 }
 
 /* tabs */
@@ -1120,6 +1389,8 @@ function switchTab(t){
   document.getElementById("viewThree").classList.toggle("hide",t!=="three");
   document.getElementById("viewTrace").classList.toggle("hide",t!=="trace");
   document.getElementById("viewImport").classList.toggle("hide",t!=="import");
+  document.getElementById("viewWorkshop").classList.toggle("hide",t!=="workshop");
+  WS.on=(t==="workshop"); if(WS.on){wsInit();requestAnimationFrame(wsResize);}
   if(t==="three")resize();
   else if(t==="trace")fitTrace();
   else if(t==="import"){if(IMP.img)setTimeout(()=>{layoutSheet();renderCrops();},30);}
@@ -1130,9 +1401,11 @@ document.querySelectorAll(".tab").forEach(x=>x.onclick=()=>switchTab(x.dataset.t
 document.getElementById("tWire").onclick=function(){wireOn=!wireOn;this.classList.toggle("active",wireOn);
   if(wireMesh)wireMesh.visible=wireOn;if(bodyMesh)bodyMesh.material.opacity=wireOn?0.45:1,bodyMesh.material.transparent=wireOn;};
 document.getElementById("tReset").onclick=frameModel;
+document.getElementById("tZoomIn").onclick=()=>{cam.rad*=0.8;updateCam();};
+document.getElementById("tZoomOut").onclick=()=>{cam.rad*=1.25;updateCam();};
 document.getElementById("tRef").onclick=function(){
   refOn=!refOn;this.classList.toggle("active",refOn);
-  if(refOn&&!(V.side.img||V.top.img||V.front.img)){toast("No traced views yet — import a sheet or load drawings, then the side/top/front planes appear here.");}
+  if(refOn&&!(V.side.img||V.top.img||V.front.img||V.rear.img)){toast("No traced views yet — import a sheet or load drawings, then the side/top/front/rear planes appear here.");}
   if(bodyMesh)makeRefPlanes(bodyMesh.geometry.boundingBox);
 };
 
@@ -1142,31 +1415,45 @@ function download(blob,name){const a=document.createElement("a");a.href=URL.crea
 document.getElementById("dlStl").onclick=()=>{
   const prof=currentProfile();const {positions,indices}=makeBody(prof);
   const man=checkManifold(indices);
-  download(toSTL(positions,indices),(projName.value||"body")+".stl");
+  download(toSTL(positions,indices),(projName.value||"object")+".stl");
   toast(man.watertight
     ?`STL exported · <span class="mono">${(indices.length/3).toLocaleString()} tris · watertight</span>`
     :`STL exported · <span class="mono" style="color:var(--warn)">${man.boundary} open edges — check in slicer</span>`);
 };
+document.getElementById("dlBottom").onclick=()=>{
+  const prof=currentProfile();const {positions,indices}=makeBottom(prof);
+  const man=checkManifold(indices);
+  download(toSTL(positions,indices),(projName.value||"object")+"-bottom.stl");
+  toast(man.watertight
+    ?`Bottom plate · <span class="mono">${(indices.length/3).toLocaleString()} tris · watertight</span>`
+    :`Bottom plate · <span class="mono" style="color:var(--warn)">${man.boundary} open edges</span>`);
+};
 document.getElementById("dlJson").onclick=()=>{
-  download(new Blob([JSON.stringify(currentProfile(),null,2)],{type:"application/json"}),(projName.value||"body")+".profile.json");
+  download(new Blob([JSON.stringify(currentProfile(),null,2)],{type:"application/json"}),(projName.value||"object")+".profile.json");
   toast("Profile JSON exported — feed this to the backend.");
 };
 document.getElementById("upJson").onclick=()=>jsonFile.click();
 jsonFile.onchange=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();
-  r.onload=()=>{try{applyProfile(JSON.parse(r.result));toast("Profile imported.");}catch(err){toast("Couldn't read that JSON.");}};r.readAsText(f);};
+  r.onload=()=>{try{const p=JSON.parse(r.result);applyProfile(p);switchTab("three");toast(`Resumed “${p.name||f.name}” — pick up right where you left off.`);}catch(err){toast("Couldn't read that JSON.");}};r.readAsText(f);e.target.value="";};
 function applyProfile(p){
   if(p.length)S.len=p.length;if(p.stations)S.st=p.stations;if(p.arcSegments)S.seg=p.arcSegments;
   if(p.roofFlatness)S.round=p.roofFlatness;if(p.wallThickness)S.wall=p.wallThickness;if(p.archLift!=null)S.arch=p.archLift;
   if(p.wheelLayout){const w=p.wheelLayout;if(w.wheelbaseFrac)S.wb=w.wheelbaseFrac;if(w.track)S.track=w.track;
-    if(w.radius)S.wr=w.radius;if(w.width)S.ww=w.width;if(w.rideHeight)S.rh=w.rideHeight;}
+    if(w.diameter)S.wDia=w.diameter;else if(w.radius)S.wDia=w.radius*2;
+    if(w.length)S.wLen=w.length;else if(w.radius)S.wLen=w.radius*2;
+    if(w.width)S.wWid=w.width;if(w.rideHeight!=null)S.rh=w.rideHeight;
+    if(w.axle!=null)S.axle=w.axle;if(w.axleDia)S.axleDia=w.axleDia;}
   traced.top=p.topProfile&&p.topProfile.length?p.topProfile:null;
   traced.bottom=p.bottomProfile&&p.bottomProfile.length?p.bottomProfile:null;
   traced.width=p.widthProfile&&p.widthProfile.length?p.widthProfile:null;
   traced.section=p.section&&p.section.length>1?p.section:null;
   traced.frontHull=p.frontHull&&p.frontHull.length>1?p.frontHull:null;
+  traced.rearHull=null;
+  traced.sections=(p.sections&&p.sections.length)?p.sections.map(x=>({at:x.at,prof:x.prof,src:x.src||'manual'})):null;
   if(p.mode==="loft"||p.mode==="projection"){S.mode=p.mode;
     document.querySelectorAll("#modeSeg button").forEach(x=>x.classList.toggle("on",x.dataset.m===S.mode));}
-  if(p.name){projName.value=p.name;}
+  if(p.sepBottom!=null){S.sepBottom=!!p.sepBottom;const cb=document.getElementById("sepBottom");if(cb)cb.checked=S.sepBottom;}
+  if(p.name){projName.value=p.name;} if(p.category){projCat.value=p.category;}
   if(traced.top||traced.bottom){
     document.getElementById("silMode").innerHTML='Source: <span class="tag" style="color:var(--accent);border-color:var(--accent-soft)">imported profile</span>';
     document.getElementById("clearTrace").style.display="block";
@@ -1179,7 +1466,7 @@ function applyProfile(p){
     document.getElementById("secMode").innerHTML='Source: <span class="tag" style="color:var(--accent);border-color:var(--accent-soft)">imported profile</span>';
     document.getElementById("clearSection").style.display="block";
   } else markSection(false);
-  syncSlidersFromState();requestRebuild();
+  refreshSecUI();syncSlidersFromState();requestRebuild();
 }
 /* ---- backend wiring (LEE3D-Backend-A) ---- */
 function slug(s){return (s||"misc").trim().replace(/\s+/g,"-").replace(/[^A-Za-z0-9._-]/g,"")||"misc";}
@@ -1494,27 +1781,361 @@ function cropToViewTrace(bx){
 document.getElementById("iBuild").onclick=()=>{
   if(!IMP.img){toast("Load a sheet first.");return;}
   const noScale = IMP.unit!=="px" && !IMP.scalePxPerMm;
-  const sPxPerMm = IMP.unit==="px" ? 1 : (IMP.scalePxPerMm||1);
+  let sPxPerMm;
+  if(IMP.unit==="px") sPxPerMm=1;
+  else if(IMP.scalePxPerMm) sPxPerMm=IMP.scalePxPerMm;
+  else { // no real scale -> make the body a standard DEFAULT_LEN mm long (not pixel-sized)
+    const ref=IMP.boxes.find(b=>b.role==="side")||IMP.boxes.slice().sort((a,b)=>(b.x1-b.x0)-(a.x1-a.x0))[0];
+    sPxPerMm=(ref?(ref.x1-ref.x0):DEFAULT_LEN)/DEFAULT_LEN;
+  }
   const sent=[];
   for(const bx of IMP.boxes){
-    const role=bx.role; if(!["side","top","front","rear"].includes(role))continue;
-    const {canvas,cf,topPts,botPts}=cropToViewTrace(bx);
-    if(topPts.length<2)continue;
-    const vkey = role==="rear" ? "front" : role;        // rear feeds the section slot
-    const view=V[vkey];
-    view.img=canvas; view.scale=sPxPerMm*cf;
-    if(vkey==="front"){view.A=topPts;view.B=[];}
-    else {view.A=topPts;view.B=botPts;}
-    sent.push(role);
+    const role=bx.role;
+    if(["side","top","front","rear"].includes(role)){
+      const {canvas,cf,topPts,botPts}=cropToViewTrace(bx);
+      if(topPts.length<2)continue;
+      const view=V[role];
+      view.img=canvas; view.scale=sPxPerMm*cf;
+      if(role==="front"||role==="rear"){view.A=topPts;view.B=[];} else {view.A=topPts;view.B=botPts;}
+      sent.push(role);
+    }
   }
-  if(!sent.length){toast("Assign at least one Side, Top or Front view on a box (use the dropdown), then send.");return;}
-  activeView = sent.includes("side")?"side":(sent.includes("top")?"top":"front");
-  document.querySelectorAll("#viewSeg button").forEach(x=>x.classList.toggle("on",x.dataset.v===activeView));
-  document.getElementById("imgOpField").style.display="block";
-  updateEdgeLabels();updateScaleInfo();commitTrace();
-  switchTab("trace");setTimeout(fitTrace,40);
-  toast(`Sent to Reference &amp; Trace: <span class="mono">${[...new Set(sent)].join(", ")}</span>.${noScale?" (no scale set — using pixels; set scale in Import for real size)":""} Refine each side, then open 3D Preview.`);
+  if(!sent.length){toast("Assign at least one Side, Top, Front or Rear view on a box (use the dropdown), then send.");return;}
+  const tv=sent.includes("side")?"side":sent.includes("top")?"top":sent.includes("front")?"front":sent.includes("rear")?"rear":null;
+  if(tv){activeView=tv;document.querySelectorAll("#viewSeg button").forEach(x=>x.classList.toggle("on",x.dataset.v===activeView));
+    document.getElementById("imgOpField").style.display="block";updateEdgeLabels();}
+  updateScaleInfo();commitTrace();refreshSecUI();
+  switchTab(tv?"trace":"three");if(tv)setTimeout(fitTrace,40);
+  toast(`Sent to Reference &amp; Trace: <span class="mono">${[...new Set(sent)].join(", ")}</span>.${noScale?` (no scale — standard ${DEFAULT_LEN} mm length; set a scale in Import for real size)`:""} Front/rear became section cuts. Refine, then open 3D.`);
 };
+
+/* =========================================================================
+   SECTION CUT EDITOR (edit the 3D model by reshaping cross-sections)
+   ========================================================================= */
+let secSel=0, secPtDrag=null;
+function refreshSecUI(){
+  const sel=document.getElementById("secSelect"), info=document.getElementById("secInfo");
+  if(!sel)return; const ss=traced.sections||[];
+  if(secSel>=ss.length)secSel=Math.max(0,ss.length-1);
+  sel.innerHTML=ss.map((s,i)=>`<option value="${i}" ${i===secSel?"selected":""}>cut ${i+1} @ ${Math.round(s.at*100)}%${s.src?` (${s.src})`:""}</option>`).join("");
+  if(ss.length){const cur=ss[secSel];document.getElementById("secPos").value=Math.round(cur.at*100);document.getElementById("vSecPos").textContent=Math.round(cur.at*100);
+    info.textContent=`${ss.length} cut${ss.length>1?"s":""} — the model morphs between them.`;}
+  else info.textContent="No section cuts yet — trace a front view, import a sheet, or add one.";
+  drawSec();
+}
+function drawSec(){
+  const c=document.getElementById("secCanvas");if(!c)return;const ctx=c.getContext("2d");
+  const w=c.clientWidth||300,h=c.clientHeight||150;c.width=w*devicePixelRatio;c.height=h*devicePixelRatio;ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+  ctx.clearRect(0,0,w,h);
+  const ss=traced.sections||[];
+  if(!ss.length){ctx.fillStyle="#71839A";ctx.font="12px ui-sans-serif";ctx.fillText("Add a cut or trace a front view to edit a cross-section",10,h/2);return;}
+  const prof=ss[secSel].prof,pad=16,zMax=1.15;
+  const X=t=>pad+t*(w-2*pad), Y=z=>h-pad-(z/zMax)*(h-2*pad);
+  ctx.strokeStyle="#22303f";ctx.beginPath();ctx.moveTo(X(0),Y(0));ctx.lineTo(X(1),Y(0));ctx.stroke();
+  ctx.fillStyle="#5d6b7d";ctx.font="10px ui-sans-serif";ctx.fillText("left sill",X(0),h-4);ctx.fillText("roof",X(0.5)-9,12);ctx.fillText("right sill",X(1)-30,h-4);
+  ctx.strokeStyle="#46B7D9";ctx.lineWidth=2;ctx.beginPath();prof.forEach((p,i)=>{const x=X(p[0]),y=Y(p[1]);i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.stroke();
+  ctx.fillStyle="#FF7A2F";prof.forEach((p,i)=>{const x=X(p[0]),y=Y(p[1]),r=(i===0||i===prof.length-1)?3:5;ctx.beginPath();ctx.arc(x,y,r,0,7);ctx.fill();});
+}
+(function(){const c=document.getElementById("secCanvas");if(!c)return;const pad=16,zMax=1.15;
+  c.addEventListener("pointerdown",ev=>{const ss=traced.sections;if(!ss||!ss.length)return;const prof=ss[secSel].prof;
+    const r=c.getBoundingClientRect(),x=ev.clientX-r.left,w=c.clientWidth,X=t=>pad+t*(w-2*pad);
+    let best=-1,bd=1e9;prof.forEach((p,i)=>{const d=Math.abs(X(p[0])-x);if(d<bd){bd=d;best=i;}});
+    if(best>0&&best<prof.length-1&&bd<22){secPtDrag=best;try{c.setPointerCapture(ev.pointerId);}catch(_){}}});
+  c.addEventListener("pointermove",ev=>{if(secPtDrag==null)return;const ss=traced.sections;const prof=ss[secSel].prof;
+    const r=c.getBoundingClientRect(),y=ev.clientY-r.top,h=c.clientHeight;
+    prof[secPtDrag][1]=clamp((h-pad-y)/(h-2*pad)*zMax,0,zMax);drawSec();requestRebuild();});
+  c.addEventListener("pointerup",()=>{secPtDrag=null;});
+})();
+document.getElementById("secSelect").onchange=e=>{secSel=+e.target.value;refreshSecUI();};
+document.getElementById("secPos").addEventListener("input",e=>{
+  document.getElementById("vSecPos").textContent=e.target.value;
+  const ss=traced.sections;if(!ss||!ss.length)return;const obj=ss[secSel];
+  obj.at=clamp(+e.target.value/100,0,1);sortSections();secSel=traced.sections.indexOf(obj);
+  const sel=document.getElementById("secSelect");[...sel.options].forEach((o,i)=>{o.textContent=`cut ${i+1} @ ${Math.round(traced.sections[i].at*100)}%${traced.sections[i].src?` (${traced.sections[i].src})`:""}`;});sel.value=secSel;
+  requestRebuild();
+});
+document.getElementById("secAdd").onclick=()=>{
+  if(!traced.sections)traced.sections=[];
+  const at=clamp(+document.getElementById("secPos").value/100,0,1);
+  const base=traced.sections.length?morphSections(traced.sections.slice().sort((a,b)=>a.at-b.at),at):[[0,0],[0.25,0.7],[0.5,1.0],[0.75,0.7],[1,0]];
+  traced.sections.push({at,prof:resampleSection(base),src:"manual"});sortSections();
+  secSel=traced.sections.findIndex(s=>s===traced.sections.find(x=>x.at===at&&x.src==="manual"));
+  refreshSecUI();requestRebuild();toast("Added a section cut — drag the dots to shape it.");
+};
+document.getElementById("secDel").onclick=()=>{
+  const ss=traced.sections;if(!ss||!ss.length)return;ss.splice(secSel,1);
+  if(!ss.length)traced.sections=null;secSel=0;refreshSecUI();requestRebuild();
+};
+
+/* =========================================================================
+   WORKSHOP — multi-object assembly playground (its own 3D scene)
+   ========================================================================= */
+const LIB={
+  items:[],
+  load(){try{this.items=JSON.parse(localStorage.getItem("lee3d.lib")||"[]");}catch(_){this.items=[];}},
+  persist(){try{localStorage.setItem("lee3d.lib",JSON.stringify(this.items));}catch(_){/* memory-only fallback */}},
+  add(name,kind,data,category){this.items.unshift({name,kind,category:category||(data&&data.category)||"uncategorized",data,ts:Date.now()});this.persist();},
+  removeAt(i){this.items.splice(i,1);this.persist();}
+};
+const WS={on:false,ready:false,renderer:null,scene:null,cameraObj:null,cam:{az:-0.9,pol:1.05,rad:600},target:null,
+  inst:[],sel:null,nextId:1,ext:400,gridOn:true,gridStep:10,gridGroup:null,ray:null,mode:0,last:null,moveOff:null,first:true};
+
+function wsInit(){
+  if(WS.ready)return;
+  const cnv=document.getElementById("wsgl");
+  WS.renderer=new THREE.WebGLRenderer({canvas:cnv,antialias:true,alpha:true});
+  WS.renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+  WS.scene=new THREE.Scene();
+  WS.target=new THREE.Vector3(0,30,0);
+  WS.cameraObj=new THREE.PerspectiveCamera(50,1,1,200000);
+  WS.scene.add(new THREE.HemisphereLight(0xbcd2ea,0x0a0e13,0.95));
+  const d1=new THREE.DirectionalLight(0xffffff,0.8);d1.position.set(1,2,1.2);WS.scene.add(d1);
+  const d2=new THREE.DirectionalLight(0x6fa8d8,0.35);d2.position.set(-1.4,0.6,-1);WS.scene.add(d2);
+  WS.ray=new THREE.Raycaster();
+  wsBuildGrid(); wsBindPointer(cnv); wsRecenter();
+  LIB.load(); wsRenderLib(); wsRenderParts();
+  WS.ready=true;
+  (function loop(){requestAnimationFrame(loop);if(WS.on&&WS.ready)WS.renderer.render(WS.scene,WS.cameraObj);})();
+}
+function wsResize(){const cnv=document.getElementById("wsgl");const w=cnv.clientWidth||800,h=cnv.clientHeight||600;
+  WS.renderer.setSize(w,h,false);WS.cameraObj.aspect=w/h;WS.cameraObj.updateProjectionMatrix();}
+function wsUpdateCam(){const c=WS.cam;c.pol=clamp(c.pol,0.12,Math.PI-0.12);c.rad=clamp(c.rad,Math.max(8,WS.ext*0.04),WS.ext*10);
+  const t=WS.target;WS.cameraObj.position.set(t.x+c.rad*Math.sin(c.pol)*Math.cos(c.az),t.y+c.rad*Math.cos(c.pol),t.z+c.rad*Math.sin(c.pol)*Math.sin(c.az));
+  WS.cameraObj.lookAt(t);}
+function wsRecenter(){WS.target.set(0,WS.ext*0.08,0);WS.cam.rad=WS.ext*1.4;WS.cam.az=-0.9;WS.cam.pol=1.05;wsUpdateCam();}
+function wsBuildGrid(){
+  if(WS.gridGroup){WS.scene.remove(WS.gridGroup);WS.gridGroup.traverse(o=>{o.geometry&&o.geometry.dispose();o.material&&o.material.dispose&&o.material.dispose();});}
+  WS.gridGroup=new THREE.Group();
+  if(WS.gridOn){
+    const ext=WS.ext,half=ext/2,div=Math.max(2,Math.round(ext/WS.gridStep));
+    const floor=new THREE.GridHelper(ext,div,0x35506b,0x1a2632);WS.gridGroup.add(floor);
+    const back=new THREE.GridHelper(ext,div,0x243646,0x16212c);back.rotation.x=Math.PI/2;back.position.set(0,half,-half);WS.gridGroup.add(back);
+    const side=new THREE.GridHelper(ext,div,0x243646,0x16212c);side.rotation.z=Math.PI/2;side.position.set(-half,half,0);WS.gridGroup.add(side);
+    WS.gridGroup.add(new THREE.AxesHelper(half*0.55));
+  }
+  WS.scene.add(WS.gridGroup);
+  const info=document.getElementById("wsInfo");if(info)info.textContent=`grid ${WS.gridStep} mm cubes · ${WS.inst.length} part(s)`;
+}
+function wsRecomputeExtent(){
+  let mx=120;
+  for(const it of WS.inst){const b=new THREE.Box3().setFromObject(it.pivot);
+    mx=Math.max(mx,Math.abs(b.min.x),Math.abs(b.max.x),Math.abs(b.min.z),Math.abs(b.max.z),Math.abs(b.max.y));}
+  WS.ext=clamp(Math.ceil((mx*2.2)/WS.gridStep)*WS.gridStep,200,6000);
+  wsBuildGrid();
+}
+function wsMeshFor(profile){
+  const pivot=new THREE.Group(), oriented=new THREE.Group(); oriented.rotation.x=-Math.PI/2; pivot.add(oriented);
+  const meshes=[];
+  const body=makeBody(profile);
+  const g=new THREE.BufferGeometry();g.setAttribute("position",new THREE.Float32BufferAttribute(body.positions,3));g.setIndex(body.indices);g.computeVertexNormals();
+  const shell=new THREE.Mesh(g,new THREE.MeshStandardMaterial({color:0x9fb0c4,metalness:.1,roughness:.62,side:THREE.DoubleSide}));
+  oriented.add(shell);meshes.push(shell);
+  if(profile.sepBottom!==false){const bp=makeBottom(profile);const bg=new THREE.BufferGeometry();
+    bg.setAttribute("position",new THREE.Float32BufferAttribute(bp.positions,3));bg.setIndex(bp.indices);bg.computeVertexNormals();
+    const bmesh=new THREE.Mesh(bg,new THREE.MeshStandardMaterial({color:0x46b7d9,metalness:.1,roughness:.6,side:THREE.DoubleSide}));
+    oriented.add(bmesh);meshes.push(bmesh);}
+  return {pivot,shell,meshes};
+}
+function wsAdd(profile,name,xform){
+  const {pivot,shell,meshes}=wsMeshFor(profile);
+  const it={id:WS.nextId++,name:name||("part-"+WS.nextId),profile,shell,meshes,pivot,
+    pos:xform?{...xform.pos}:{x:0,y:0,z:0},rot:xform?{...xform.rot}:{x:0,y:0,z:0},scale:xform&&xform.scale?xform.scale:1};
+  meshes.forEach(me=>me.userData.instId=it.id);
+  WS.scene.add(pivot); WS.inst.push(it); wsApply(it);
+  if(!xform)wsFloor(it,true);
+  wsRecomputeExtent(); if(WS.inst.length===1)wsRecenter();
+  wsSelect(it.id); wsRenderParts();
+  return it;
+}
+function wsApply(it){it.pivot.position.set(it.pos.x,it.pos.y,it.pos.z);
+  it.pivot.rotation.set(it.rot.x*Math.PI/180,it.rot.y*Math.PI/180,it.rot.z*Math.PI/180);
+  it.pivot.scale.setScalar(it.scale||1);}
+function wsFloor(it,silent){it.pivot.updateWorldMatrix(true,true);const b=new THREE.Box3().setFromObject(it.pivot);
+  if(isFinite(b.min.y)){it.pos.y-=b.min.y;wsApply(it);} if(!silent){wsRecomputeExtent();wsSyncInputs();}}
+function wsSelect(id){WS.sel=id;
+  for(const it of WS.inst)it.shell.material.emissive.setHex(it.id===id?0x1f3326:0x000000);
+  const it=WS.inst.find(x=>x.id===id);
+  document.getElementById("wsXform").style.display=it?"block":"none";
+  if(it){document.getElementById("wsSelName").textContent=it.name;wsSyncInputs();}
+  wsRenderParts();
+}
+function wsSyncInputs(){const it=WS.inst.find(x=>x.id===WS.sel);if(!it)return;
+  const v=(id,val)=>document.getElementById(id).value=Math.round(val*10)/10;
+  v("wsPX",it.pos.x);v("wsPY",it.pos.y);v("wsPZ",it.pos.z);v("wsRX",it.rot.x);v("wsRY",it.rot.y);v("wsRZ",it.rot.z);
+  document.getElementById("wsSC").value=it.scale||1;
+  const info=document.getElementById("wsInfo");if(info)info.textContent=`grid ${WS.gridStep} mm cubes · ${WS.inst.length} part(s)`;
+}
+function wsDelete(id){const i=WS.inst.findIndex(x=>x.id===id);if(i<0)return;const it=WS.inst[i];
+  WS.scene.remove(it.pivot);it.meshes.forEach(me=>{me.geometry.dispose();me.material.dispose();});
+  WS.inst.splice(i,1);if(WS.sel===id){WS.sel=null;document.getElementById("wsXform").style.display="none";}
+  wsRecomputeExtent();wsRenderParts();}
+function wsDuplicate(id){const it=WS.inst.find(x=>x.id===id);if(!it)return;
+  wsAdd(JSON.parse(JSON.stringify(it.profile)),it.name+" copy",{pos:{x:it.pos.x+WS.gridStep*3,y:it.pos.y,z:it.pos.z},rot:{...it.rot},scale:it.scale});}
+function wsRenderParts(){const host=document.getElementById("wsParts");if(!host)return;
+  document.getElementById("wsCount").textContent=WS.inst.length?`(${WS.inst.length})`:"";host.innerHTML="";
+  WS.inst.forEach(it=>{const row=document.createElement("div");row.className="ws-row"+(it.id===WS.sel?" sel":"");
+    row.innerHTML='<span class="nm"></span><button title="delete">⌫</button>';
+    row.querySelector(".nm").textContent=it.name;
+    row.querySelector(".nm").onclick=()=>wsSelect(it.id);
+    row.querySelector("button").onclick=()=>wsDelete(it.id);host.appendChild(row);});}
+function wsRenderLib(){if(typeof refreshCategories==="function")refreshCategories();const host=document.getElementById("wsLib");if(!host)return;host.innerHTML="";
+  LIB.items.forEach((it,i)=>{const row=document.createElement("div");row.className="ws-row";
+    row.innerHTML='<span class="nm"></span><span class="tg"></span><button title="remove from library">✕</button>';
+    row.querySelector(".nm").textContent=it.name;row.querySelector(".tg").textContent=it.kind==="assembly"?"asm":"obj";
+    row.querySelector(".nm").onclick=()=>{if(it.kind==="assembly")wsLoadAssembly(it.data);else wsAdd(it.data,it.name);};
+    row.querySelector("button").onclick=()=>{LIB.removeAt(i);wsRenderLib();};host.appendChild(row);});}
+function wsLoadAssembly(asm){if(!asm||!asm.parts){toast("Not a valid assembly file.");return;}
+  asm.parts.forEach(p=>wsAdd(p.profile,p.name,{pos:p.pos,rot:p.rot,scale:p.scale}));
+  if(asm.name)document.getElementById("wsName").value=asm.name;
+  toast(`Loaded assembly “${asm.name||"?"}” · ${asm.parts.length} parts`);}
+function wsExportSTL(){const tris=[],v=new THREE.Vector3();
+  for(const it of WS.inst){it.pivot.updateWorldMatrix(true,true);
+    it.meshes.forEach(me=>{const pos=me.geometry.attributes.position,idx=me.geometry.index,mw=me.matrixWorld;
+      const get=k=>{v.set(pos.getX(k),pos.getY(k),pos.getZ(k)).applyMatrix4(mw);return[v.x,v.y,v.z];};
+      if(idx){for(let k=0;k<idx.count;k++)tris.push(get(idx.getX(k)));}else{for(let k=0;k<pos.count;k++)tris.push(get(k));}});}
+  if(!tris.length){toast("Nothing to export — add parts first.");return;}
+  const positions=new Float32Array(tris.length*3);tris.forEach((t,k)=>{positions[k*3]=t[0];positions[k*3+1]=t[1];positions[k*3+2]=t[2];});
+  download(toSTL(positions,tris.map((_,k)=>k)),((document.getElementById("wsName").value||"assembly").trim())+".stl");
+  toast(`Combined STL · <span class="mono">${(tris.length/3).toLocaleString()} tris · ${WS.inst.length} part(s)</span>`);}
+function wsSaveAssembly(){if(!WS.inst.length){toast("Add parts first.");return;}
+  const name=(document.getElementById("wsName").value||"assembly").trim();
+  const asm={schema:"lee3d.assembly/v1",units:"mm",name,category:(projCat.value||"Assemblies").trim(),parts:WS.inst.map(it=>({name:it.name,profile:it.profile,pos:it.pos,rot:it.rot,scale:it.scale}))};
+  download(new Blob([JSON.stringify(asm,null,2)],{type:"application/json"}),name+".assembly.json");
+  LIB.add(name,"assembly",asm,asm.category);wsRenderLib();
+  if(typeof CLOUD!=="undefined"&&CLOUD.ok())CLOUD.upsert(name,"assembly",asm,asm.category).then(()=>toast(`“${name}” also saved to cloud ☁`)).catch(e=>toast("Cloud push failed: "+e.message));
+  toast(`Saved assembly “${name}” (${asm.parts.length} parts) to the library.`);}
+
+function wsNDC(e){const r=document.getElementById("wsgl").getBoundingClientRect();return{x:((e.clientX-r.left)/r.width)*2-1,y:-((e.clientY-r.top)/r.height)*2+1};}
+function wsPick(e){const n=wsNDC(e);WS.ray.setFromCamera(n,WS.cameraObj);const meshes=[];WS.inst.forEach(it=>it.meshes.forEach(m=>meshes.push(m)));
+  const hits=WS.ray.intersectObjects(meshes,false);if(!hits.length)return null;
+  const id=hits[0].object.userData.instId;const it=WS.inst.find(x=>x.id===id);return it?{it,point:hits[0].point}:null;}
+function wsGround(e){const n=wsNDC(e);WS.ray.setFromCamera(n,WS.cameraObj);const p=new THREE.Vector3();
+  return WS.ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0,1,0),0),p)?p:null;}
+function wsBindPointer(cnv){
+  cnv.addEventListener("contextmenu",e=>e.preventDefault());
+  cnv.addEventListener("pointerdown",e=>{cnv.setPointerCapture(e.pointerId);WS.last={x:e.clientX,y:e.clientY};
+    if(e.button===2||e.shiftKey){WS.mode=2;return;}
+    const hit=wsPick(e);
+    if(hit){wsSelect(hit.it.id);WS.mode=3;const gp=wsGround(e);WS.moveOff=gp?{x:gp.x-hit.it.pos.x,z:gp.z-hit.it.pos.z}:{x:0,z:0};}
+    else WS.mode=1;});
+  cnv.addEventListener("pointermove",e=>{if(!WS.mode)return;const dx=e.clientX-WS.last.x,dy=e.clientY-WS.last.y;WS.last={x:e.clientX,y:e.clientY};
+    if(WS.mode===1){WS.cam.az-=dx*0.008;WS.cam.pol-=dy*0.008;wsUpdateCam();}
+    else if(WS.mode===2){const s=WS.cam.rad*0.0016,fwd=new THREE.Vector3();WS.cameraObj.getWorldDirection(fwd);
+      const right=new THREE.Vector3().crossVectors(fwd,new THREE.Vector3(0,1,0)).normalize();
+      const upv=new THREE.Vector3().crossVectors(right,fwd).normalize();
+      WS.target.addScaledVector(right,-dx*s);WS.target.addScaledVector(upv,dy*s);wsUpdateCam();}
+    else if(WS.mode===3){const it=WS.inst.find(x=>x.id===WS.sel),gp=wsGround(e);if(it&&gp){it.pos.x=gp.x-WS.moveOff.x;it.pos.z=gp.z-WS.moveOff.z;wsApply(it);wsSyncInputs();}}});
+  const end=()=>{WS.mode=0;};
+  cnv.addEventListener("pointerup",end);cnv.addEventListener("pointerleave",end);
+  cnv.addEventListener("wheel",e=>{e.preventDefault();WS.cam.rad*=(1+Math.sign(e.deltaY)*0.09);wsUpdateCam();},{passive:false});
+}
+
+/* workshop UI wiring */
+document.getElementById("wsAddCur").onclick=()=>{const p=currentProfile();wsAdd(JSON.parse(JSON.stringify(p)),p.name||("part-"+WS.nextId));};
+document.getElementById("wsSaveCur").onclick=()=>{const p=currentProfile();LIB.add(p.name||"object","object",JSON.parse(JSON.stringify(p)),p.category);wsRenderLib();if(typeof CLOUD!=="undefined"&&CLOUD.ok())CLOUD.upsert(p.name||"object","object",p,p.category).catch(()=>{});toast(`Saved “${p.name||"object"}” to the library${(typeof CLOUD!=="undefined"&&CLOUD.ok())?" + cloud ☁":""}.`);};
+document.getElementById("wsImport").onclick=()=>document.getElementById("wsFile").click();
+document.getElementById("wsFile").onchange=e=>{[...e.target.files].forEach(file=>{const r=new FileReader();
+  r.onload=()=>{try{const d=JSON.parse(r.result);
+    if(d.schema&&d.schema.indexOf("assembly")>=0){LIB.add(d.name||"assembly","assembly",d,d.category);wsLoadAssembly(d);}
+    else{const nm=d.name||file.name.replace(/\.json$/,"");LIB.add(nm,"object",d,d.category);wsAdd(d,nm);}wsRenderLib();}
+    catch(_){toast("Couldn't read "+file.name);}};r.readAsText(file);});e.target.value="";};
+document.getElementById("wsGridOn").addEventListener("change",e=>{WS.gridOn=e.target.checked;wsBuildGrid();});
+document.getElementById("wsStep").addEventListener("change",e=>{WS.gridStep=+e.target.value;document.getElementById("wsStepV").textContent=e.target.value;wsRecomputeExtent();});
+["wsPX","wsPY","wsPZ","wsRX","wsRY","wsRZ","wsSC"].forEach(id=>document.getElementById(id).addEventListener("input",()=>{
+  const it=WS.inst.find(x=>x.id===WS.sel);if(!it)return;const g=k=>+document.getElementById(k).value||0;
+  it.pos.x=g("wsPX");it.pos.y=g("wsPY");it.pos.z=g("wsPZ");it.rot.x=g("wsRX");it.rot.y=g("wsRY");it.rot.z=g("wsRZ");it.scale=g("wsSC")||1;wsApply(it);}));
+document.getElementById("wsFloor").onclick=()=>{const it=WS.inst.find(x=>x.id===WS.sel);if(it)wsFloor(it);};
+document.getElementById("wsDup").onclick=()=>{if(WS.sel)wsDuplicate(WS.sel);};
+document.getElementById("wsDel").onclick=()=>{if(WS.sel)wsDelete(WS.sel);};
+document.getElementById("wsSave").onclick=wsSaveAssembly;
+document.getElementById("wsSTL").onclick=wsExportSTL;
+document.getElementById("wsRecenter").onclick=wsRecenter;
+document.getElementById("wsZoomIn").onclick=()=>{WS.cam.rad*=0.8;wsUpdateCam();};
+document.getElementById("wsZoomOut").onclick=()=>{WS.cam.rad*=1.25;wsUpdateCam();};
+
+/* =========================================================================
+   CLOUD DATABASE — Supabase (Postgres via PostgREST, no SDK / zero-build)
+   ========================================================================= */
+const SB_SQL=`-- Run once in Supabase → SQL editor:
+create table if not exists lee3d_projects (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  category text not null default 'uncategorized',
+  kind text not null default 'object',
+  data jsonb not null,
+  updated_at timestamptz default now(),
+  unique (name, category)
+);
+alter table lee3d_projects enable row level security;
+-- personal/prototype: let the anon key read + write.
+-- for multi-user, replace with auth-based row policies.
+create policy "lee3d public rw" on lee3d_projects
+  for all using (true) with check (true);`;
+
+const CLOUD={
+  cfg:{url:"",key:""},
+  load(){try{const c=JSON.parse(localStorage.getItem("lee3d.supabase")||"{}");this.cfg.url=c.url||"";this.cfg.key=c.key||"";}catch(_){}},
+  save(){try{localStorage.setItem("lee3d.supabase",JSON.stringify(this.cfg));}catch(_){}},
+  ok(){return !!(this.cfg.url&&this.cfg.key);},
+  base(){return this.cfg.url.replace(/\/+$/,"")+"/rest/v1/lee3d_projects";},
+  headers(extra){return Object.assign({apikey:this.cfg.key,Authorization:"Bearer "+this.cfg.key,"Content-Type":"application/json"},extra||{});},
+  async upsert(name,kind,data,category){
+    const r=await fetch(this.base()+"?on_conflict=name,category",{method:"POST",
+      headers:this.headers({Prefer:"resolution=merge-duplicates,return=representation"}),
+      body:JSON.stringify([{name,kind,category:(category||"uncategorized"),data,updated_at:new Date().toISOString()}])});
+    if(!r.ok)throw new Error("HTTP "+r.status+" "+(await r.text()).slice(0,140));
+    return (await r.json())[0];
+  },
+  async list(){const r=await fetch(this.base()+"?select=id,name,kind,category,updated_at&order=updated_at.desc",{headers:this.headers()});
+    if(!r.ok)throw new Error("HTTP "+r.status);return await r.json();},
+  async get(id){const r=await fetch(this.base()+"?id=eq."+id+"&select=*",{headers:this.headers()});
+    if(!r.ok)throw new Error("HTTP "+r.status);return (await r.json())[0];},
+  async del(id){const r=await fetch(this.base()+"?id=eq."+id,{method:"DELETE",headers:this.headers()});
+    if(!r.ok)throw new Error("HTTP "+r.status);}
+};
+
+function sbStatus(txt,color){const el=document.getElementById("sbState");if(el){el.textContent=txt;el.style.color=color||"var(--ink-faint)";}}
+function sbLoadRow(row){const d=row.data;
+  if(d&&d.schema&&String(d.schema).indexOf("assembly")>=0){switchTab("workshop");wsInit();requestAnimationFrame(wsResize);wsLoadAssembly(d);toast(`Loaded assembly “${row.name}” from cloud.`);}
+  else{applyProfile(d);switchTab("three");toast(`Loaded “${row.name}” from cloud — resume editing.`);}}
+async function sbRefreshList(){const host=document.getElementById("sbList");if(!host)return;
+  if(!CLOUD.ok()){host.innerHTML='<div class="hint" style="opacity:.6">Connect to Supabase to see saved projects.</div>';return;}
+  try{const rows=await CLOUD.list();
+    window.__cloudCats=[...new Set(rows.map(r=>r.category).filter(Boolean))];refreshCategories();
+    host.innerHTML="";
+    if(!rows.length){host.innerHTML='<div class="hint" style="opacity:.6">No cloud projects yet.</div>';return;}
+    const groups={};rows.forEach(r=>{const c=r.category||"uncategorized";(groups[c]=groups[c]||[]).push(r);});
+    Object.keys(groups).sort((a,b)=>a.localeCompare(b)).forEach(cat=>{
+      const h=document.createElement("div");h.className="ws-lbl";h.style.marginTop="8px";h.textContent=cat+" ("+groups[cat].length+")";host.appendChild(h);
+      groups[cat].forEach(row=>{const el=document.createElement("div");el.className="ws-row";
+        el.innerHTML='<span class="nm"></span><span class="tg"></span><button title="delete">✕</button>';
+        el.querySelector(".nm").textContent=row.name;el.querySelector(".tg").textContent=row.kind==="assembly"?"asm":"obj";
+        el.querySelector(".nm").title="load";
+        el.querySelector(".nm").onclick=async ()=>{try{sbLoadRow(await CLOUD.get(row.id));}catch(e){toast("Load failed: "+e.message);}};
+        el.querySelector("button").onclick=async ()=>{if(!confirm('Delete "'+row.name+'" from the cloud?'))return;try{await CLOUD.del(row.id);sbRefreshList();}catch(e){toast("Delete failed: "+e.message);}};
+        host.appendChild(el);});
+    });
+  }catch(e){toast("Couldn't list cloud: "+e.message);sbStatus("error","var(--warn)");}}
+
+document.getElementById("sbHelp").onclick=e=>{e.preventDefault();const pre=document.getElementById("sbSql");
+  pre.textContent=SB_SQL;pre.style.display=pre.style.display==="none"?"block":"none";};
+document.getElementById("sbConnect").onclick=async ()=>{
+  CLOUD.cfg.url=document.getElementById("sbUrl").value.trim();CLOUD.cfg.key=document.getElementById("sbKey").value.trim();CLOUD.save();
+  if(!CLOUD.ok()){sbStatus("not set");return;}
+  sbStatus("connecting…","var(--ink-dim)");
+  try{await CLOUD.list();sbStatus("connected ✓","var(--good)");toast("Cloud connected.");sbRefreshList();}
+  catch(e){sbStatus("error","var(--warn)");toast("Couldn't reach Supabase: "+e.message);}};
+document.getElementById("sbSave").onclick=async ()=>{
+  if(!CLOUD.ok()){toast("Add your Supabase URL + anon key first (then Connect).");return;}
+  const p=currentProfile(),name=(projName.value||"untitled-object").trim();
+  try{await CLOUD.upsert(name,"object",p,p.category);toast(`Saved “${name}” to the cloud ✓`);sbRefreshList();}
+  catch(e){toast("Cloud save failed: "+e.message);}};
+document.getElementById("sbRefresh").onclick=sbRefreshList;
+
+/* restore cloud config on load */
+CLOUD.load();
+(function(){const u=document.getElementById("sbUrl"),k=document.getElementById("sbKey");if(u)u.value=CLOUD.cfg.url;if(k)k.value=CLOUD.cfg.key;
+  if(CLOUD.ok()){sbStatus("connecting…","var(--ink-dim)");CLOUD.list().then(()=>{sbStatus("connected ✓","var(--good)");sbRefreshList();}).catch(()=>sbStatus("offline","var(--warn)"));}})();
 
 /* =========================================================================
    BOOT
@@ -1525,10 +2146,12 @@ if(!window.THREE){
     '3D library failed to load.<br>Check your network, then reload — the rest of the tool still works.</div>';
 }else{
   initThree();rebuild();frameModel();
-  updateEdgeLabels();updateScaleInfo();setTraceStatus();updateImpStatus();probeBackend();
+  updateEdgeLabels();updateScaleInfo();setTraceStatus();updateImpStatus();refreshSecUI();probeBackend();
+  refreshCategories();
   window.addEventListener("resize",()=>{
     if(!document.getElementById("viewTrace").classList.contains("hide"))fitTrace();
     if(!document.getElementById("viewImport").classList.contains("hide")&&IMP.img){layoutSheet();renderCrops();}
+    if(WS&&WS.ready&&!document.getElementById("viewWorkshop").classList.contains("hide"))wsResize();
   });
 }
 </script>
