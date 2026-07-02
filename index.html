@@ -8,6 +8,9 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Saira+Semi+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<!-- Supabase config: hard-wired at deploy time from GitHub repo secrets (see SUPABASE.md).
+     The deploy workflow replaces the two placeholders below. Left as-is when opened locally. -->
+<script>window.LEE3D_SUPABASE={ url:"__SUPABASE_URL__", key:"__SUPABASE_ANON_KEY__" };</script>
 <style>
   :root{
     --bg:#0B0F14; --panel:#111824; --panel-2:#0E141D; --rail:#0C121B;
@@ -211,8 +214,8 @@
   #viewSeg button.traced::after{content:"●";color:var(--good);margin-left:4px;font-size:9px;vertical-align:middle}
   #viewWorkshop{position:relative}
   #wsgl{width:100%;height:100%;display:block}
-  .ws-panel{position:absolute;top:10px;left:10px;width:250px;max-height:calc(100% - 20px);overflow:auto;z-index:5;
-    background:rgba(11,15,20,.93);border:1px solid var(--line-2);border-radius:10px;padding:11px;backdrop-filter:blur(7px)}
+  .ws-panel{position:absolute;top:10px;left:10px;width:250px;max-height:calc(100% - 20px);overflow:auto;z-index:5;    background:rgba(11,15,20,.93);border:1px solid var(--line-2);border-radius:10px;padding:11px;backdrop-filter:blur(7px)}
+  .sc-panel{position:absolute;top:10px;left:10px;width:210px;z-index:6;background:rgba(11,15,20,.94);border:1px solid var(--accent);border-radius:10px;padding:11px;backdrop-filter:blur(7px)}
   .ws-h{font-weight:700;font-size:13px;margin-bottom:9px}
   .ws-sec{border-top:1px solid var(--line-2);padding-top:9px;margin-top:9px}
   .ws-sec:first-of-type{border-top:none;padding-top:0;margin-top:0}
@@ -258,19 +261,36 @@
   <aside class="rail" id="rail">
 
     <details class="sec" open>
-      <summary><span class="idx">01</span><span class="ttl">Start template</span><span class="chev">▶</span></summary>
+      <summary><span class="idx">01</span><span class="ttl">Starting shape</span><span class="chev">▶</span></summary>
       <div class="sec-body">
-        <div class="hint">Start from a template, then shape it. The 2D→3D engine works for <b>any object</b> you trace — these are car-frame starting shapes, and more object templates are coming. Everything below updates the 3D model live.</div>
+        <div class="hint"><b>Reference &amp; Trace is where the model comes from.</b> These are just neutral starting proportions to work from — the moment you trace a view, your traced outline defines the model and these stop mattering. Pick whichever is closest, then trace.</div>
         <div class="seg" id="presetSeg">
-          <button data-p="hotrod" class="on">Hot rod</button>
-          <button data-p="coupe">Coupe</button>
-          <button data-p="sedan">Sedan</button>
-          <button data-p="suv">SUV</button>
+          <button data-p="hotrod" class="on">Low</button>
+          <button data-p="coupe">Mid</button>
+          <button data-p="sedan">Long</button>
+          <button data-p="suv">Tall</button>
         </div>
         <div class="field">
           <label>Overall length <span class="val"><span id="vLen">180</span> mm</span></label>
           <input type="range" id="sLen" min="60" max="320" value="180" step="1">
         </div>
+      </div>
+    </details>
+
+    <details class="sec">
+      <summary><span class="idx">◐</span><span class="ttl">Round object <span style="opacity:.55;font-weight:400">· revolve</span></span><span class="chev">▶</span></summary>
+      <div class="sec-body">
+        <div class="hint">Make a <b>round solid</b> by revolving a profile around the length axis — sphere, cylinder, dome, cone, or revolve your <b>traced side view</b>. This is the start of wheels / round parts as their own objects. <i>(Loft-shell features — sculpt, section cuts, bottom plate — don't apply in this mode yet.)</i></div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:12px;margin-bottom:8px;cursor:pointer"><input type="checkbox" id="revOn"> Revolve mode (round object)</label>
+        <div class="seg" id="revShape" style="width:100%;flex-wrap:wrap">
+          <button data-s="sphere" class="on">Sphere</button>
+          <button data-s="cylinder">Cylinder</button>
+          <button data-s="dome">Dome</button>
+          <button data-s="cone">Cone</button>
+          <button data-s="traced">Traced side</button>
+        </div>
+        <div class="field" style="margin-top:8px"><label>Radius <span class="val"><span id="vRevSize">50</span> mm</span></label><input type="range" id="revSize" min="4" max="200" value="50"></div>
+        <div class="hint">Sphere &amp; dome size from radius; cylinder / cone / traced also use <b>Overall length</b> above.</div>
       </div>
     </details>
 
@@ -314,29 +334,6 @@
         <div class="hint" id="secMode">Source: <span class="tag">parametric</span> — a <b>front view</b> sets the real cross-section.</div>
         <button class="btn ghost" id="clearSection" style="display:none">↺ Back to parametric section</button>
         <button class="btn ghost" id="clearWidth" style="display:none">↺ Back to parametric width</button>
-      </div>
-    </details>
-
-    <details class="sec">
-      <summary><span class="idx">05</span><span class="ttl">Wheel cutouts <span style="opacity:.55;font-weight:400">· car frame</span></span><span class="chev">▶</span></summary>
-      <div class="sec-body">
-        <div class="hint">Car-frame feature: arches are cut into the shell to clear the wheels. Set these to the chassis you're designing around. (Wheels and chassis will become their own traceable objects you assemble — for now this just shapes the frame.)</div>
-        <div class="field"><label>Wheelbase <span class="val"><span id="vWB">0.62</span></span></label><input type="range" id="sWB" min="0.30" max="0.85" value="0.62" step="0.01"></div>
-        <div class="field"><label>Wheel diameter — height/Z <span class="val"><span id="vWDia">46</span> mm</span></label><input type="range" id="sWDia" min="8" max="140" value="46"></div>
-        <div class="field"><label>Wheel length — front·back/X <span class="val"><span id="vWLen">46</span> mm</span></label><input type="range" id="sWLen" min="8" max="140" value="46"></div>
-        <div class="field"><label>Wheel thickness — width/Y <span class="val"><span id="vWWid">26</span> mm</span></label><input type="range" id="sWWid" min="4" max="90" value="26"></div>
-        <div class="hint" style="margin:2px 0 8px">Diameter = length gives a round wheel; make them differ for a stretched/oval wheel.</div>
-        <div class="field"><label>Track width — L·R spacing <span class="val"><span id="vTrack">66</span> mm</span></label><input type="range" id="sTrack" min="20" max="200" value="66"></div>
-        <div class="field"><label>Ride height (wheel center z) <span class="val"><span id="vRH">20</span> mm</span></label><input type="range" id="sRH" min="0" max="90" value="20"></div>
-        <label style="display:flex;gap:8px;align-items:center;font-size:12px;margin:8px 0 4px;cursor:pointer"><input type="checkbox" id="showAxle" checked> Show axle</label>
-        <div class="field"><label>Axle diameter <span class="val"><span id="vAxleDia">8</span> mm</span></label><input type="range" id="sAxleDia" min="2" max="40" value="8"></div>
-        <div style="border-top:1px solid var(--line-2);margin:10px 0 8px;padding-top:8px"></div>
-        <div class="field"><label>Wheel effect on frame <span class="val"><span id="vArch">0.9</span></span></label><input type="range" id="sArch" min="0.0" max="2.0" value="0.9" step="0.05"></div>
-        <div class="hint" style="margin:0 0 6px">0 = wheels don't shape the frame at all. Higher = deeper arches cut to clear the wheels.</div>
-        <label style="display:flex;gap:8px;align-items:center;font-size:12px;color:var(--ink-dim);margin-top:4px;cursor:pointer">
-          <input type="checkbox" id="showWheels" checked> Show ghost wheels
-        </label>
-        <button class="btn" id="dlWheel" style="width:100%;margin-top:8px">⬇ Wheel STL (one wheel · print ×4)</button>
       </div>
     </details>
 
@@ -390,14 +387,14 @@
         <div class="btn-row">
           <button class="btn" id="buildServer">⚙ Build on server (STEP)</button>
         </div>
-        <div class="hint">With <code>LEE3D-Backend-A</code> running, these call it directly: <b>Save</b> commits this profile into <b>LEE3D-Lib</b>; <b>Build on server</b> runs the CadQuery pipeline (true wheel openings + shelling) and downloads a STEP you can keep editing in any CAD tool. No backend? Both fall back to a local download. <span class="tag">serve the studio from localhost:3000 or add your origin to the backend CORS list</span></div>
+        <div class="hint">With <code>LEE3D-Backend-A</code> running, these call it directly: <b>Save</b> commits this profile into <b>LEE3D-Lib</b>; <b>Build on server</b> runs the CadQuery pipeline (shelling) and downloads a STEP you can keep editing in any CAD tool. No backend? Both fall back to a local download. <span class="tag">serve the studio from localhost:3000 or add your origin to the backend CORS list</span></div>
       </div>
     </details>
 
     <details class="sec">
       <summary><span class="idx">☁</span><span class="ttl">Cloud database <span style="opacity:.55;font-weight:400">· Supabase</span></span><span class="chev">▶</span></summary>
       <div class="sec-body">
-        <div class="hint">Save projects to a Supabase (Postgres) database so they persist and sync across devices — no backend server to run. Paste your project URL + anon public key. <a href="#" id="sbHelp" style="color:var(--accent);text-decoration:none">▸ show setup SQL</a></div>
+        <div class="hint">Save projects (full trace + model) to a Supabase (Postgres) database so they persist and sync — no backend server to run. Best <b>hard-wired via GitHub repo secrets</b> (see <code>SUPABASE.md</code>) so no keys live in the app. To try locally, paste your URL + anon key below. <a href="#" id="sbHelp" style="color:var(--accent);text-decoration:none">▸ show setup SQL</a></div>
         <input id="sbUrl" class="proj-name mono" placeholder="https://xxxx.supabase.co" spellcheck="false" style="width:100%;margin-bottom:5px;font-size:11px">
         <input id="sbKey" class="proj-name mono" placeholder="anon public key" spellcheck="false" style="width:100%;font-size:11px">
         <div class="btn-row" style="margin-top:6px">
@@ -409,6 +406,25 @@
         <button class="btn primary" id="sbSave" style="width:100%">☁ Save project to cloud</button>
         <button class="btn" id="sbRefresh" style="width:100%;margin-top:5px">⟳ Browse cloud projects</button>
         <div id="sbList" class="ws-list" style="margin-top:6px"></div>
+      </div>
+    </details>
+
+    <details class="sec">
+      <summary><span class="idx">⬇</span><span class="ttl">Library <span style="opacity:.55;font-weight:400">· GitHub repo</span></span><span class="chev">▶</span></summary>
+      <div class="sec-body">
+        <div class="hint">Loads <code>*.profile.json</code> and <code>*.assembly.json</code> files committed anywhere in a public repo (your <b>LEE3D-Lib</b>). Add a model with <b>Save profile JSON</b>, commit it to the repo, then Refresh here. <i>Note: the <code>schema/</code> folder is for validation schemas, not models.</i></div>
+        <input id="ghRepo" class="proj-name mono" value="BEARME-A/LEE3D-Lib" spellcheck="false" style="width:100%;font-size:11px" title="owner/repo (public)">
+        <div class="btn-row" style="margin-top:6px">
+          <button class="btn" id="ghRefresh">⟳ Refresh from repo</button>
+          <span class="hint" id="ghState" style="margin:0 0 0 2px">—</span>
+        </div>
+        <div id="ghList" class="ws-list" style="margin-top:6px"></div>
+        <div style="border-top:1px solid var(--line-2);margin:10px 0 8px;padding-top:8px"></div>
+        <div class="ws-lbl">Write back to repo</div>
+        <input id="ghToken" type="password" class="proj-name mono" placeholder="GitHub token (Contents: write)" autocomplete="off" spellcheck="false" style="width:100%;font-size:11px">
+        <label style="display:flex;gap:6px;align-items:center;font-size:11px;margin:5px 0;cursor:pointer"><input type="checkbox" id="ghRemember"> Remember token in this browser</label>
+        <button class="btn primary" id="ghCommit" style="width:100%">⬆ Save current model to repo</button>
+        <div class="hint" style="margin-top:6px">⚠ A write token is a real secret (unlike the Supabase key). Use a <b>fine-grained token limited to LEE3D-Lib</b> with <b>Contents: Read and write</b>. It's stored only in your browser. The backend (<code>/library/commit</code>) is the safer path if you run it.</div>
       </div>
     </details>
   </aside>
@@ -459,7 +475,20 @@
         <button class="btn" id="tZoomOut" style="font-weight:700">－</button>
         <button class="btn" id="tWire">Wireframe</button>
         <button class="btn" id="tRef">Reference</button>
+        <button class="btn" id="tSculpt">Sculpt</button>
         <button class="btn" id="tReset">Recenter</button>
+      </div>
+      <div class="sc-panel" id="scPanel" style="display:none">
+        <div class="ws-lbl">Sculpt brush — trim &amp; add</div>
+        <div class="seg" id="scMode" style="width:100%;margin-bottom:6px">
+          <button data-m="add" class="on">Add</button>
+          <button data-m="trim">Trim</button>
+          <button data-m="smooth">Smooth</button>
+        </div>
+        <div class="field"><label>Brush size <span class="val"><span id="vScR">14</span> mm</span></label><input type="range" id="scR" min="3" max="80" value="14"></div>
+        <div class="field"><label>Strength <span class="val"><span id="vScS">1.4</span></span></label><input type="range" id="scS" min="0.1" max="6" value="1.4" step="0.1"></div>
+        <button class="btn ghost" id="scClear" style="width:100%">⌫ Clear sculpt</button>
+        <div class="hint" style="margin-top:6px">Left-drag on the model to paint. Right-drag orbits, scroll zooms. Stays watertight.</div>
       </div>
       <div class="vp-overlay">
         <div><span class="k">drag</span> orbit · <span class="k">scroll</span> zoom · <span class="k">right-drag</span> pan</div>
@@ -587,7 +616,7 @@
 /* =========================================================================
    LEE3D Orthographic Studio — single file, no build step.
    Pipeline:  2D drawing / parameters  ->  cross-section loft  ->  open-bottom
-   thin shell with wheel arches  ->  live 3D + binary STL.
+   thin shell  ->  live 3D + binary STL.
    The geometry core below is byte-for-byte the algorithm validated in Node as
    a watertight, manifold, valid-STL solid.
    ========================================================================= */
@@ -635,9 +664,9 @@ function setSourceSection(src,at,prof){
   sortSections();
 }
 function makeBody(p){
+  if(p.shape==="revolve") return makeRevolve(p);        // round objects (sphere/cylinder/…)
   const N=Math.max(8,p.stations|0), M=Math.max(6,p.arcSegments|0);
   const L=p.length, pow=p.roofFlatness??1, t=Math.max(0.2,p.wallThickness??1.8);
-  const wheels=p.wheels??[], archLift=p.archLift??1;
   const rows=M+1; const gi=(i,j)=>i*rows+j;
   const outer=new Array((N+1)*rows);
 
@@ -668,16 +697,7 @@ function makeBody(p){
       } else if(secHere){ yNorm=2*u-1; z=zBot+(zTop-zBot)*clamp(sampleProfile(secHere,u),0,1.4); }
       else { const th=Math.PI*u; yNorm=-Math.cos(th); z=zBot+(zTop-zBot)*Math.pow(Math.max(0,Math.sin(th)),pow); }
       const y=yNorm*Y;
-      let lift=0;
-      for(const w of wheels){
-        const half=(w.len??w.dia??32)/2*1.15, d=Math.abs(x-(w.x??0));
-        if(d<half && archLift>0){
-          const bump=smoothstep(1-d/half), side=Math.pow(Math.abs(yNorm),1.5);
-          const amt=(w.dia??32)/2*1.4*bump*side*archLift;
-          if(amt>lift)lift=amt;
-        }
-      }
-      outer[gi(i,j)]=[x,y,z+lift];
+      outer[gi(i,j)]=[x,y,z];
     }
   }
   const tris=[];
@@ -692,6 +712,17 @@ function makeBody(p){
     for(const k of[a,b,c]){nrm[k][0]+=n[0];nrm[k][1]+=n[1];nrm[k][2]+=n[2];}}
   for(const n of nrm){const l=Math.hypot(n[0],n[1],n[2])||1;n[0]/=l;n[1]/=l;n[2]/=l;}
   const inner=outer.map((P,k)=>[P[0]-nrm[k][0]*t,P[1]-nrm[k][1]*t,P[2]-nrm[k][2]*t]);
+
+  // SCULPT: per-vertex trim(-)/add(+) along the outer normal, applied to BOTH shells
+  // together so wall thickness and topology are preserved (stays watertight).
+  const sc=p.sculpt;
+  if(sc && sc.length===outer.length){
+    for(let k=0;k<outer.length;k++){
+      const d=sc[k]; if(!d)continue; const n=nrm[k];
+      outer[k][0]+=n[0]*d; outer[k][1]+=n[1]*d; outer[k][2]+=n[2]*d;
+      inner[k][0]+=n[0]*d; inner[k][1]+=n[1]*d; inner[k][2]+=n[2]*d;
+    }
+  }
 
   const positions=[];
   for(const P of outer)positions.push(P[0],P[1],P[2]);
@@ -751,7 +782,47 @@ function makeBottom(p){
   return {positions,indices:idx,volume:vol};
 }
 
-/* manifold sign-off (the live "approval stamp") */
+/* ROUND OBJECTS — surface of revolution (sphere/cylinder/cone/dome, or revolve a
+   traced side silhouette). Revolves a radius-vs-length profile around the X axis
+   into a watertight closed solid. This is the path toward wheels/round parts. */
+function makeRevolve(p){
+  const seg=Math.max(12,Math.round(p.arcSegments||56));
+  const prof=(p.revProfile&&p.revProfile.length>1)?p.revProfile:[[0,0],[0.5,50],[1,0]];
+  const L=p.revLen||p.length||100, eps=Math.max(0.02, L*0.001);
+  const rings=prof.length, V=[], start=[], pole=[];
+  for(let i=0;i<rings;i++){
+    const t=prof[i][0], r=Math.max(0,prof[i][1]), x=(t-0.5)*L;
+    start.push(V.length);
+    if(r<eps){pole.push(true); V.push([x,0,0]);}
+    else{pole.push(false); for(let j=0;j<seg;j++){const a=j/seg*2*Math.PI; V.push([x, r*Math.cos(a), r*Math.sin(a)]);}}
+  }
+  const idx=[];
+  for(let i=0;i<rings-1;i++){
+    const p0=pole[i],p1=pole[i+1],s0=start[i],s1=start[i+1];
+    if(p0&&p1)continue;
+    if(p0){for(let j=0;j<seg;j++){const jn=(j+1)%seg; idx.push(s0, s1+j, s1+jn);}}
+    else if(p1){for(let j=0;j<seg;j++){const jn=(j+1)%seg; idx.push(s1, s0+jn, s0+j);}}
+    else{for(let j=0;j<seg;j++){const jn=(j+1)%seg; idx.push(s0+j, s0+jn, s1+jn, s0+j, s1+jn, s1+j);}}
+  }
+  const cap=(i,dir)=>{ if(pole[i])return; const s=start[i], x=(prof[i][0]-0.5)*L, c=V.length; V.push([x,0,0]);
+    for(let j=0;j<seg;j++){const jn=(j+1)%seg; if(dir>0)idx.push(c,s+j,s+jn); else idx.push(c,s+jn,s+j);} };
+  cap(0,-1); cap(rings-1,1);
+  const positions=new Float32Array(V.length*3); V.forEach((v,k)=>{positions[k*3]=v[0];positions[k*3+1]=v[1];positions[k*3+2]=v[2];});
+  let vol=0; for(let k=0;k<idx.length;k+=3){const A=idx[k]*3,B=idx[k+1]*3,C=idx[k+2]*3;
+    vol+=(positions[A]*(positions[B+1]*positions[C+2]-positions[B+2]*positions[C+1])-positions[A+1]*(positions[B]*positions[C+2]-positions[B+2]*positions[C])+positions[A+2]*(positions[B]*positions[C+1]-positions[B+1]*positions[C]))/6;}
+  if(vol<0){for(let k=0;k<idx.length;k+=3){const t=idx[k+1];idx[k+1]=idx[k+2];idx[k+2]=t;}vol=-vol;}
+  return {positions,indices:idx,volume:vol};
+}
+function revLenFor(){const sp=S.revShape; if(sp==="sphere")return 2*(S.revSize||50); if(sp==="dome")return (S.revSize||50); return S.len;}
+function buildRevProfile(){
+  const n=32, R=S.revSize||50, shape=S.revShape||"sphere", out=[];
+  if(shape==="traced"){ const top=buildTop(), bot=buildBottom();
+    for(let i=0;i<=n;i++){const t=i/n; out.push([t, Math.max(0,(sampleProfile(top,t)-sampleProfile(bot,t))/2)]);}
+    return out; }
+  const f={sphere:t=>Math.sin(Math.PI*t), dome:t=>Math.cos(Math.PI/2*t), cone:t=>1-t, cylinder:t=>1}[shape]||(t=>Math.sin(Math.PI*t));
+  for(let i=0;i<=n;i++){const t=i/n; out.push([t, R*f(t)]);}
+  return out;
+}
 function checkManifold(indices){
   const m=new Map(),key=(a,b)=>a<b?a+"_"+b:b+"_"+a;
   for(let k=0;k<indices.length;k+=3){
@@ -785,12 +856,12 @@ function toSTL(positions,indices){
 const DEFAULT_LEN=200;   // standard body length (mm) used when no real-world scale is set
 const FRONT_AT=0.2, REAR_AT=0.8;   // where front/rear cross-sections sit along the length
 const PRESETS={
-  hotrod:{len:180,nose:28,cowl:40,roof:60,roofPos:.55,tail:30,sill:8, nw:14,mw:38,wp:.45,tw:22,round:1.4, wb:.60,track:66,wDia:46,wLen:46,wWid:26,rh:20,axle:true,axleDia:8, arch:.9},
-  coupe :{len:200,nose:24,cowl:38,roof:54,roofPos:.6 ,tail:34,sill:7, nw:18,mw:44,wp:.5 ,tw:30,round:1.6, wb:.64,track:72,wDia:44,wLen:44,wWid:28,rh:18,axle:true,axleDia:8, arch:.9},
-  sedan :{len:230,nose:30,cowl:44,roof:62,roofPos:.52,tail:46,sill:9, nw:22,mw:46,wp:.5 ,tw:40,round:1.8, wb:.62,track:74,wDia:42,wLen:42,wWid:26,rh:17,axle:true,axleDia:8, arch:.85},
-  suv   :{len:210,nose:38,cowl:56,roof:84,roofPos:.5 ,tail:74,sill:14,nw:26,mw:52,wp:.5 ,tw:48,round:2.2, wb:.60,track:82,wDia:56,wLen:56,wWid:34,rh:24,axle:true,axleDia:10,arch:1.0},
+  hotrod:{len:180,nose:28,cowl:40,roof:60,roofPos:.55,tail:30,sill:8, nw:14,mw:38,wp:.45,tw:22,round:1.4},
+  coupe :{len:200,nose:24,cowl:38,roof:54,roofPos:.6 ,tail:34,sill:7, nw:18,mw:44,wp:.5 ,tw:30,round:1.6},
+  sedan :{len:230,nose:30,cowl:44,roof:62,roofPos:.52,tail:46,sill:9, nw:22,mw:46,wp:.5 ,tw:40,round:1.8},
+  suv   :{len:210,nose:38,cowl:56,roof:84,roofPos:.5 ,tail:74,sill:14,nw:26,mw:52,wp:.5 ,tw:48,round:2.2},
 };
-const S={...PRESETS.hotrod, wall:1.8, st:72, seg:56, opacity:.55, mode:"loft", sepBottom:true};
+const S={...PRESETS.hotrod, wall:1.8, st:72, seg:56, opacity:.55, mode:"loft", sepBottom:true, shape:"loft", revShape:"sphere", revSize:50};
 let traced={top:null,bottom:null,width:null,section:null,sections:null,frontHull:null,rearHull:null}; // mm-space / normalized profiles when traced
 
 function buildTop(){
@@ -811,42 +882,50 @@ function buildSection(){
   // normalized cross-section: [[xf 0..1 across width, zNorm 0..1 height]]. null = parametric arc.
   return traced.section&&traced.section.length>1?traced.section:null;
 }
-function buildWheels(){
-  const L=S.len, wbX=S.wb*L/2;
-  return [{x:-wbX,z:S.rh,dia:S.wDia,len:S.wLen,wid:S.wWid},{x:wbX,z:S.rh,dia:S.wDia,len:S.wLen,wid:S.wWid}];
-}
-// A single printable wheel: elliptical cylinder (X radius = length/2, Z radius = diameter/2,
-// axis along Y = thickness). Closed tube + two caps -> watertight. Print four.
-function makeWheel(){
-  const seg=Math.max(24,Math.round(S.seg)), rx=S.wLen/2, rz=S.wDia/2, hw=S.wWid/2;
-  const V=[], idx=[];
-  const ring=(y)=>{const base=V.length;for(let i=0;i<seg;i++){const a=i/seg*2*Math.PI;V.push([Math.cos(a)*rx,y,Math.sin(a)*rz]);}return base;};
-  const b0=ring(-hw), b1=ring(hw);
-  for(let i=0;i<seg;i++){const j=(i+1)%seg;idx.push(b0+i,b0+j,b1+j, b0+i,b1+j,b1+i);}   // tube wall
-  const c0=V.length;V.push([0,-hw,0]); const c1=V.length;V.push([0,hw,0]);
-  for(let i=0;i<seg;i++){const j=(i+1)%seg;idx.push(c0,b0+j,b0+i); idx.push(c1,b1+i,b1+j);} // two caps
-  const positions=new Float32Array(V.length*3);V.forEach((v,k)=>{positions[k*3]=v[0];positions[k*3+1]=v[1];positions[k*3+2]=v[2];});
-  return {positions,indices:idx};
+// Serialize a canvas/image view to a compact JPEG dataURL (native res so trace points stay aligned)
+function imgToDataURL(im){try{
+  if(!im)return null;
+  if(im instanceof HTMLCanvasElement)return im.toDataURL("image/jpeg",0.72);
+  const w=im.naturalWidth||im.width, h=im.naturalHeight||im.height; if(!w||!h)return null;
+  const c=document.createElement("canvas");c.width=w;c.height=h;c.getContext("2d").drawImage(im,0,0);
+  return c.toDataURL("image/jpeg",0.72);
+}catch(_){return null;}}
+// Full editable tracing state: raw points, scale, and the reference image per view
+function buildTrace(){
+  const out={};
+  for(const v of ["side","top","front","rear"]){
+    const V0=V[v]; if(!V0)continue;
+    const hasPts=(V0.A&&V0.A.length)||(V0.B&&V0.B.length);
+    if(hasPts||V0.img){
+      out[v]={A:(V0.A||[]).map(p=>({x:p.x,y:p.y})),B:(V0.B||[]).map(p=>({x:p.x,y:p.y})),
+              scale:V0.scale||null, img:V0.img?imgToDataURL(V0.img):null};
+    }
+  }
+  return Object.keys(out).length?out:null;
 }
 function currentProfile(){
   return {
     schema:"lee3d.profile/v1", units:"mm", name:projName.value||"untitled-object", category:(projCat.value||"uncategorized").trim(),
     length:S.len, stations:S.st, arcSegments:S.seg, roofFlatness:S.round,
-    wallThickness:S.wall, archLift:S.arch,
+    wallThickness:S.wall,
     topProfile:buildTop(), bottomProfile:buildBottom(), widthProfile:buildWidth(),
     section:buildSection(),
     sections:(traced.sections&&traced.sections.length?traced.sections:null),
     mode:S.mode, frontHull:(S.mode==="projection"?traced.frontHull:null), sepBottom:S.sepBottom,
-    wheels:buildWheels(),
-    wheelLayout:{wheelbaseFrac:S.wb, track:S.track, diameter:S.wDia, length:S.wLen, width:S.wWid, rideHeight:S.rh, axle:S.axle, axleDia:S.axleDia},
+    sculpt:(SC.off && SC.off.length)?Array.from(SC.off):null,
+    shape:S.shape, revShape:S.revShape, revSize:S.revSize,
+    revProfile:(S.shape==="revolve"?buildRevProfile():null), revLen:(S.shape==="revolve"?revLenFor():null),
   };
 }
+// Heavy profile for SAVE/EXPORT only: adds the full editable tracing state (points + images).
+// Kept out of currentProfile() so it isn't JPEG-encoded on every live rebuild.
+function fullProfile(){ const p=currentProfile(); p.trace=buildTrace(); return p; }
 
 /* =========================================================================
    THREE.JS VIEWPORT  (custom orbit controller, no external deps)
    ========================================================================= */
 const glCanvas=document.getElementById("gl");
-let renderer,scene,camera,bodyMesh,wireMesh,bottomMesh,wheelGroup,grid,refGroup;
+let renderer,scene,camera,bodyMesh,wireMesh,bottomMesh,grid,refGroup;
 let target=new THREE.Vector3(0,0,0);
 let cam={az:-0.7,pol:1.15,rad:300};
 let wireOn=false, refOn=false;
@@ -865,7 +944,6 @@ function initThree(){
   grid.material.opacity=0.5;grid.material.transparent=true;scene.add(grid);
   const axis=new THREE.AxesHelper(40);axis.position.y=0.2;scene.add(axis);
 
-  wheelGroup=new THREE.Group();scene.add(wheelGroup);
   refGroup=new THREE.Group();scene.add(refGroup);
   resize();updateCam();animate();
 }
@@ -911,7 +989,7 @@ function rebuild(){
 
   // separate BOTTOM PLATE part (keeps the shell hollow; assembles into a closed object)
   disposeMesh(bottomMesh); bottomMesh=null;
-  if(S.sepBottom){
+  if(S.sepBottom && S.shape!=="revolve"){
     const bp=makeBottom(prof);
     const bgeo=new THREE.BufferGeometry();
     bgeo.setAttribute("position",new THREE.Float32BufferAttribute(bp.positions,3));
@@ -920,31 +998,11 @@ function rebuild(){
     bottomMesh=new THREE.Mesh(bgeo,bmat);bottomMesh.rotation.set(-Math.PI/2,0,0);scene.add(bottomMesh);
   }
 
-  // ghost wheels — cylinder's native axis is +Y, which is our axle (width) direction
-  wheelGroup.clear();
-  if(showWheels.checked){
-    const wbX=S.wb*S.len/2, tr=S.track/2;
-    // unit cylinder (axis +Y): radius 1 in X/Z, height 1 in Y. Scale each axis independently.
-    const wg=new THREE.CylinderGeometry(1,1,1,32);
-    const wmt=new THREE.MeshStandardMaterial({color:0x10161f,metalness:0.35,roughness:0.5,transparent:true,opacity:0.62});
-    for(const sx of[-wbX,wbX])for(const sy of[-tr,tr]){
-      const cyl=new THREE.Mesh(wg,wmt);
-      cyl.scale.set(S.wLen/2, S.wWid, S.wDia/2);   // X=length, Y=thickness(width), Z=diameter(height)
-      cyl.position.set(sx,sy,S.rh);
-      wheelGroup.add(cyl);
-    }
-    if(S.axle){
-      const amt=new THREE.MeshStandardMaterial({color:0x33404f,metalness:0.6,roughness:0.4,transparent:true,opacity:0.7});
-      const ag=new THREE.CylinderGeometry(S.axleDia/2,S.axleDia/2,S.track,18);  // spans the full track (axis +Y)
-      for(const sx of[-wbX,wbX]){const ax=new THREE.Mesh(ag,amt);ax.position.set(sx,0,S.rh);wheelGroup.add(ax);}
-    }
-  }
 
   // axis convention -> view: model uses X=length, Y=width, Z=up.
   // Three's grid is XZ plane with Y up. Rotate the whole body so model-Z -> world-Y.
   bodyMesh.rotation.set(-Math.PI/2,0,0);
   wireMesh.rotation.set(-Math.PI/2,0,0);
-  wheelGroup.rotation.set(-Math.PI/2,0,0);
 
   // readouts
   const tri=indices.length/3;
@@ -980,6 +1038,15 @@ function updateCam(){
   camera.position.set(x,y,z);camera.lookAt(target);
 }
 function frameModel(){
+  if(bodyMesh){
+    const b=new THREE.Box3().setFromObject(bodyMesh);
+    if(isFinite(b.min.x)){
+      const c=b.getCenter(new THREE.Vector3()), sz=b.getSize(new THREE.Vector3());
+      target.copy(c);                                   // look at the model, not the origin
+      cam.rad=Math.max(sz.x,sz.y,sz.z)*2.1||S.len*1.7;
+      cam.az=-0.7;cam.pol=1.05;updateCam();return;
+    }
+  }
   target.set(0,0,0);cam.rad=S.len*1.7;cam.az=-0.7;cam.pol=1.12;updateCam();
 }
 let raf;
@@ -988,18 +1055,21 @@ function animate(){raf=requestAnimationFrame(animate);renderer.render(scene,came
 /* custom orbit / pan / zoom */
 (function(){
   let mode=0,px=0,py=0;
-  glCanvas.addEventListener("pointerdown",e=>{glCanvas.setPointerCapture(e.pointerId);
-    mode=(e.button===2||e.shiftKey)?2:1;px=e.clientX;py=e.clientY;});
+  glCanvas.addEventListener("pointerdown",e=>{glCanvas.setPointerCapture(e.pointerId);px=e.clientX;py=e.clientY;
+    if(SC.on && e.button===0 && !e.shiftKey){ sculptCache(); if(sculptDab(e)){mode=3;return;} }
+    mode=(e.button===2||e.shiftKey)?2:1;});
   glCanvas.addEventListener("pointermove",e=>{
     if(!mode)return;const dx=e.clientX-px,dy=e.clientY-py;px=e.clientX;py=e.clientY;
+    if(mode===3){sculptDab(e);return;}
     if(mode===1){cam.az-=dx*0.008;cam.pol-=dy*0.008;}
-    else{const s=cam.rad*0.0016;
-      const right=new THREE.Vector3().subVectors(camera.position,target).cross(camera.up).normalize();
-      const up=camera.up.clone();
+    else{const s=cam.rad*0.0016;                        // screen-relative pan (right + true up)
+      const fwd=new THREE.Vector3().subVectors(target,camera.position).normalize();
+      const right=new THREE.Vector3().crossVectors(fwd,camera.up).normalize();
+      const up=new THREE.Vector3().crossVectors(right,fwd).normalize();
       target.addScaledVector(right,-dx*s);target.addScaledVector(up,dy*s);}
     updateCam();});
-  glCanvas.addEventListener("pointerup",()=>mode=0);
-  glCanvas.addEventListener("pointerleave",()=>mode=0);
+  glCanvas.addEventListener("pointerup",()=>{if(mode===3)commitSculpt();mode=0;});
+  glCanvas.addEventListener("pointerleave",()=>{if(mode===3)commitSculpt();mode=0;});
   glCanvas.addEventListener("wheel",e=>{e.preventDefault();cam.rad*=(1+Math.sign(e.deltaY)*0.09);updateCam();},{passive:false});
   glCanvas.addEventListener("contextmenu",e=>e.preventDefault());
 })();
@@ -1272,7 +1342,7 @@ document.querySelectorAll("#modeSeg button").forEach(b=>b.onclick=()=>{
   requestRebuild();
 });
 document.getElementById("bSave").onclick=()=>{
-  const prof=currentProfile(), name=(projName.value||"body").trim().replace(/\s+/g,"-").replace(/[^A-Za-z0-9._-]/g,"")||"body";
+  const prof=fullProfile(), name=(projName.value||"body").trim().replace(/\s+/g,"-").replace(/[^A-Za-z0-9._-]/g,"")||"body";
   download(new Blob([JSON.stringify(prof,null,2)],{type:"application/json"}),name+".profile.json");
   const have=[traced.top&&"side",traced.width&&"top",traced.section&&"front"].filter(Boolean).join(" + ")||"parametric";
   toast(`Saved <span class="mono">${name}.profile.json</span> (${have}). Use the Export panel to push it into LEE3D-Lib.`);
@@ -1336,41 +1406,39 @@ bindSlider("sRoof","roof","vRoof");bindSlider("sRoofPos","roofPos","vRoofPos",2)
 bindSlider("sTail","tail","vTail");bindSlider("sSill","sill","vSill");
 bindSlider("sNW","nw","vNW");bindSlider("sMW","mw","vMW");bindSlider("sWP","wp","vWP",2);
 bindSlider("sTW","tw","vTW");bindSlider("sRound","round","vRound",2);
-bindSlider("sWB","wb","vWB",2);bindSlider("sTrack","track","vTrack");
-bindSlider("sWDia","wDia","vWDia");bindSlider("sWLen","wLen","vWLen");bindSlider("sWWid","wWid","vWWid");bindSlider("sRH","rh","vRH");bindSlider("sAxleDia","axleDia","vAxleDia");
-bindSlider("sArch","arch","vArch",2);
 bindSlider("sWall","wall","vWall",1);bindSlider("sSt","st","vSt");bindSlider("sSeg","seg","vSeg");
 document.getElementById("sOp").addEventListener("input",e=>{S.opacity=e.target.value/100;vOp.textContent=e.target.value;drawTrace();});
-document.getElementById("showWheels").addEventListener("change",requestRebuild);
-document.getElementById("dlWheel").onclick=()=>{
-  const {positions,indices}=makeWheel();
-  const man=checkManifold(indices);
-  download(toSTL(positions,indices),(projName.value||"object")+"-wheel.stl");
-  toast(man.watertight
-    ?`Wheel STL · <span class="mono">${(indices.length/3).toLocaleString()} tris · watertight</span> — print ×4`
-    :`Wheel · <span class="mono" style="color:var(--warn)">${man.boundary} open edges</span>`);
-};
 document.getElementById("sepBottom").addEventListener("change",e=>{S.sepBottom=e.target.checked;requestRebuild();});
-document.getElementById("showAxle").addEventListener("change",e=>{S.axle=e.target.checked;requestRebuild();});
+bindSlider("revSize","revSize","vRevSize");
+document.getElementById("revOn").addEventListener("change",e=>{S.shape=e.target.checked?"revolve":"loft";
+  if(S.shape==="revolve" && SC.on)setSculpt(false);
+  requestRebuild();frameModel();});
+document.querySelectorAll("#revShape button").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll("#revShape button").forEach(x=>x.classList.remove("on"));b.classList.add("on");
+  S.revShape=b.dataset.s;
+  if(S.shape!=="revolve"){S.shape="revolve";document.getElementById("revOn").checked=true;if(SC.on)setSculpt(false);}
+  requestRebuild();frameModel();});
 
 /* presets */
 document.querySelectorAll("#presetSeg button").forEach(b=>{
   b.onclick=()=>{
+    const hasTrace=!!(traced.top||traced.bottom||traced.width||traced.section||(traced.sections&&traced.sections.length));
+    if(hasTrace && !confirm("Switch starting shape? Your traced model is the locked-in model — this clears it and starts fresh.")){return;}
     document.querySelectorAll("#presetSeg button").forEach(x=>x.classList.remove("on"));
     b.classList.add("on");
     const P=PRESETS[b.dataset.p];Object.assign(S,P);
     traced={top:null,bottom:null,width:null,section:null,sections:null,frontHull:null,rearHull:null};
+    if(typeof SC!=="undefined")SC.off=null;
     V.side.A=[];V.side.B=[];V.top.A=[];V.top.B=[];V.front.A=[];V.front.B=[];V.rear.A=[];V.rear.B=[];
     refreshSecUI();
     backToParametric();
     syncSlidersFromState();requestRebuild();drawTrace();
-    toast("Loaded preset: <span class='mono'>"+b.textContent+"</span>");
+    toast("Starting shape: <span class='mono'>"+b.textContent+"</span> — now trace your views to define the model.");
   };
 });
 function syncSlidersFromState(){
   const map={sLen:"len",sNose:"nose",sCowl:"cowl",sRoof:"roof",sRoofPos:"roofPos",sTail:"tail",sSill:"sill",
-    sNW:"nw",sMW:"mw",sWP:"wp",sTW:"tw",sRound:"round",sWB:"wb",sTrack:"track",sWDia:"wDia",sWLen:"wLen",sWWid:"wWid",sRH:"rh",sAxleDia:"axleDia",
-    sArch:"arch",sWall:"wall",sSt:"st",sSeg:"seg"};
+    sNW:"nw",sMW:"mw",sWP:"wp",sTW:"tw",sRound:"round",sWall:"wall",sSt:"st",sSeg:"seg"};
   for(const[id,key]of Object.entries(map)){
     const el=document.getElementById(id);if(!el)continue;el.value=S[key];
     const out=document.getElementById("v"+id.slice(1));
@@ -1378,9 +1446,8 @@ function syncSlidersFromState(){
       out.textContent=dec!=null?Number(S[key]).toFixed(dec):S[key];}
   }
   vLen.textContent=S.len;vRoofPos.textContent=Number(S.roofPos).toFixed(2);vWP.textContent=Number(S.wp).toFixed(2);
-  vWB.textContent=Number(S.wb).toFixed(2);vRound.textContent=Number(S.round).toFixed(2);
-  vArch.textContent=Number(S.arch).toFixed(2);vWall.textContent=Number(S.wall).toFixed(1);
-  const ax=document.getElementById("showAxle");if(ax)ax.checked=!!S.axle;
+  vRound.textContent=Number(S.round).toFixed(2);
+  vWall.textContent=Number(S.wall).toFixed(1);
 }
 
 /* tabs */
@@ -1429,7 +1496,7 @@ document.getElementById("dlBottom").onclick=()=>{
     :`Bottom plate · <span class="mono" style="color:var(--warn)">${man.boundary} open edges</span>`);
 };
 document.getElementById("dlJson").onclick=()=>{
-  download(new Blob([JSON.stringify(currentProfile(),null,2)],{type:"application/json"}),(projName.value||"object")+".profile.json");
+  download(new Blob([JSON.stringify(fullProfile(),null,2)],{type:"application/json"}),(projName.value||"object")+".profile.json");
   toast("Profile JSON exported — feed this to the backend.");
 };
 document.getElementById("upJson").onclick=()=>jsonFile.click();
@@ -1437,12 +1504,7 @@ jsonFile.onchange=e=>{const f=e.target.files[0];if(!f)return;const r=new FileRea
   r.onload=()=>{try{const p=JSON.parse(r.result);applyProfile(p);switchTab("three");toast(`Resumed “${p.name||f.name}” — pick up right where you left off.`);}catch(err){toast("Couldn't read that JSON.");}};r.readAsText(f);e.target.value="";};
 function applyProfile(p){
   if(p.length)S.len=p.length;if(p.stations)S.st=p.stations;if(p.arcSegments)S.seg=p.arcSegments;
-  if(p.roofFlatness)S.round=p.roofFlatness;if(p.wallThickness)S.wall=p.wallThickness;if(p.archLift!=null)S.arch=p.archLift;
-  if(p.wheelLayout){const w=p.wheelLayout;if(w.wheelbaseFrac)S.wb=w.wheelbaseFrac;if(w.track)S.track=w.track;
-    if(w.diameter)S.wDia=w.diameter;else if(w.radius)S.wDia=w.radius*2;
-    if(w.length)S.wLen=w.length;else if(w.radius)S.wLen=w.radius*2;
-    if(w.width)S.wWid=w.width;if(w.rideHeight!=null)S.rh=w.rideHeight;
-    if(w.axle!=null)S.axle=w.axle;if(w.axleDia)S.axleDia=w.axleDia;}
+  if(p.roofFlatness)S.round=p.roofFlatness;if(p.wallThickness)S.wall=p.wallThickness;
   traced.top=p.topProfile&&p.topProfile.length?p.topProfile:null;
   traced.bottom=p.bottomProfile&&p.bottomProfile.length?p.bottomProfile:null;
   traced.width=p.widthProfile&&p.widthProfile.length?p.widthProfile:null;
@@ -1453,6 +1515,22 @@ function applyProfile(p){
   if(p.mode==="loft"||p.mode==="projection"){S.mode=p.mode;
     document.querySelectorAll("#modeSeg button").forEach(x=>x.classList.toggle("on",x.dataset.m===S.mode));}
   if(p.sepBottom!=null){S.sepBottom=!!p.sepBottom;const cb=document.getElementById("sepBottom");if(cb)cb.checked=S.sepBottom;}
+  if(typeof SC!=="undefined")SC.off=(p.sculpt&&p.sculpt.length)?Float32Array.from(p.sculpt):null;
+  if(p.shape==="loft"||p.shape==="revolve")S.shape=p.shape; if(p.revShape)S.revShape=p.revShape; if(p.revSize)S.revSize=p.revSize;
+  {const rc=document.getElementById("revOn"); if(rc)rc.checked=(S.shape==="revolve");
+   document.querySelectorAll("#revShape button").forEach(x=>x.classList.toggle("on",x.dataset.s===S.revShape));
+   const rs=document.getElementById("revSize"); if(rs){rs.value=S.revSize;const v=document.getElementById("vRevSize");if(v)v.textContent=S.revSize;}}
+  // restore full editable tracing state: points, scale, and reference images
+  for(const v of ["side","top","front","rear"]){ if(!V[v])continue; V[v].A=[];V[v].B=[];V[v].img=null; }
+  if(p.trace){
+    for(const v of ["side","top","front","rear"]){
+      const T=p.trace[v]; if(!T||!V[v])continue;
+      V[v].A=(T.A||[]).map(pt=>({x:pt.x,y:pt.y}));
+      V[v].B=(T.B||[]).map(pt=>({x:pt.x,y:pt.y}));
+      V[v].scale=T.scale||null;
+      if(T.img){const im=new Image();im.onload=(()=>{const vv=v;return()=>{V[vv].img=im;if(activeView===vv)drawTrace();requestRebuild();};})();im.src=T.img;}
+    }
+  }
   if(p.name){projName.value=p.name;} if(p.category){projCat.value=p.category;}
   if(traced.top||traced.bottom){
     document.getElementById("silMode").innerHTML='Source: <span class="tag" style="color:var(--accent);border-color:var(--accent-soft)">imported profile</span>';
@@ -1466,7 +1544,11 @@ function applyProfile(p){
     document.getElementById("secMode").innerHTML='Source: <span class="tag" style="color:var(--accent);border-color:var(--accent-soft)">imported profile</span>';
     document.getElementById("clearSection").style.display="block";
   } else markSection(false);
-  refreshSecUI();syncSlidersFromState();requestRebuild();
+  refreshSecUI();syncSlidersFromState();
+  if(typeof updateViewDots==="function")updateViewDots();
+  if(typeof setTraceStatus==="function")setTraceStatus();
+  if(typeof drawTrace==="function")drawTrace();
+  requestRebuild();
 }
 /* ---- backend wiring (LEE3D-Backend-A) ---- */
 function slug(s){return (s||"misc").trim().replace(/\s+/g,"-").replace(/[^A-Za-z0-9._-]/g,"")||"misc";}
@@ -1485,7 +1567,7 @@ async function probeBackend(){
 document.getElementById("backendUrl").addEventListener("change",probeBackend);
 
 document.getElementById("saveLib").onclick=async ()=>{
-  const prof=currentProfile();const name=slug(projName.value||"body");
+  const prof=fullProfile();const name=slug(projName.value||"body");
   const path=`json/${name}/${name}.profile.json`;
   const base=beBase();
   if(base){
@@ -1509,9 +1591,9 @@ document.getElementById("saveLib").onclick=async ()=>{
 document.getElementById("buildServer").onclick=async ()=>{
   const prof=currentProfile();const name=slug(projName.value||"body");const base=beBase();
   if(!base){toast("Set the Backend URL first (default http://localhost:8000).");return;}
-  toast("Building on server… <span class='mono'>CadQuery loft + wheel cuts</span>");
+  toast("Building on server… <span class='mono'>CadQuery loft + shell</span>");
   try{
-    const r=await fetch(base+"/generate?fmt=step&cut_wheels=true",{method:"POST",
+    const r=await fetch(base+"/generate?fmt=step&cut_wheels=false",{method:"POST",
       headers:{"Content-Type":"application/json"},body:JSON.stringify(prof)});
     if(r.status===503){toast("Server up, but CAD env not installed. <span class='mono'>conda env create -f environment.yml</span>");return;}
     if(!r.ok)throw new Error("HTTP "+r.status+" "+(await r.text()).slice(0,120));
@@ -1874,7 +1956,11 @@ const LIB={
   items:[],
   load(){try{this.items=JSON.parse(localStorage.getItem("lee3d.lib")||"[]");}catch(_){this.items=[];}},
   persist(){try{localStorage.setItem("lee3d.lib",JSON.stringify(this.items));}catch(_){/* memory-only fallback */}},
-  add(name,kind,data,category){this.items.unshift({name,kind,category:category||(data&&data.category)||"uncategorized",data,ts:Date.now()});this.persist();},
+  add(name,kind,data,category){const cat=category||(data&&data.category)||"uncategorized";
+    const rec={name,kind,category:cat,data,ts:Date.now()};
+    const i=this.items.findIndex(it=>it.name===name && it.category===cat);
+    if(i>=0)this.items[i]=rec; else this.items.unshift(rec);   // update in place, never duplicate
+    this.persist();},
   removeAt(i){this.items.splice(i,1);this.persist();}
 };
 const WS={on:false,ready:false,renderer:null,scene:null,cameraObj:null,cam:{az:-0.9,pol:1.05,rad:600},target:null,
@@ -2031,8 +2117,8 @@ function wsBindPointer(cnv){
 }
 
 /* workshop UI wiring */
-document.getElementById("wsAddCur").onclick=()=>{const p=currentProfile();wsAdd(JSON.parse(JSON.stringify(p)),p.name||("part-"+WS.nextId));};
-document.getElementById("wsSaveCur").onclick=()=>{const p=currentProfile();LIB.add(p.name||"object","object",JSON.parse(JSON.stringify(p)),p.category);wsRenderLib();if(typeof CLOUD!=="undefined"&&CLOUD.ok())CLOUD.upsert(p.name||"object","object",p,p.category).catch(()=>{});toast(`Saved “${p.name||"object"}” to the library${(typeof CLOUD!=="undefined"&&CLOUD.ok())?" + cloud ☁":""}.`);};
+document.getElementById("wsAddCur").onclick=()=>{const p=fullProfile();wsAdd(JSON.parse(JSON.stringify(p)),p.name||("part-"+WS.nextId));};
+document.getElementById("wsSaveCur").onclick=()=>{const p=fullProfile();LIB.add(p.name||"object","object",JSON.parse(JSON.stringify(p)),p.category);wsRenderLib();if(typeof CLOUD!=="undefined"&&CLOUD.ok())CLOUD.upsert(p.name||"object","object",p,p.category).catch(()=>{});toast(`Saved “${p.name||"object"}” to the library${(typeof CLOUD!=="undefined"&&CLOUD.ok())?" + cloud ☁":""}.`);};
 document.getElementById("wsImport").onclick=()=>document.getElementById("wsFile").click();
 document.getElementById("wsFile").onchange=e=>{[...e.target.files].forEach(file=>{const r=new FileReader();
   r.onload=()=>{try{const d=JSON.parse(r.result);
@@ -2074,8 +2160,15 @@ create policy "lee3d public rw" on lee3d_projects
 
 const CLOUD={
   cfg:{url:"",key:""},
-  load(){try{const c=JSON.parse(localStorage.getItem("lee3d.supabase")||"{}");this.cfg.url=c.url||"";this.cfg.key=c.key||"";}catch(_){}},
-  save(){try{localStorage.setItem("lee3d.supabase",JSON.stringify(this.cfg));}catch(_){}},
+  hardwired:false,
+  load(){
+    const hw=window.LEE3D_SUPABASE;
+    if(hw && hw.url && hw.url.indexOf("__SUPABASE")<0 && hw.key && hw.key.indexOf("__SUPABASE")<0){
+      this.cfg.url=hw.url; this.cfg.key=hw.key; this.hardwired=true; return;   // injected at deploy — not stored on device
+    }
+    try{const c=JSON.parse(localStorage.getItem("lee3d.supabase")||"{}");this.cfg.url=c.url||"";this.cfg.key=c.key||"";}catch(_){}
+  },
+  save(){ if(this.hardwired)return; try{localStorage.setItem("lee3d.supabase",JSON.stringify(this.cfg));}catch(_){}},
   ok(){return !!(this.cfg.url&&this.cfg.key);},
   base(){return this.cfg.url.replace(/\/+$/,"")+"/rest/v1/lee3d_projects";},
   headers(extra){return Object.assign({apikey:this.cfg.key,Authorization:"Bearer "+this.cfg.key,"Content-Type":"application/json"},extra||{});},
@@ -2127,15 +2220,183 @@ document.getElementById("sbConnect").onclick=async ()=>{
   catch(e){sbStatus("error","var(--warn)");toast("Couldn't reach Supabase: "+e.message);}};
 document.getElementById("sbSave").onclick=async ()=>{
   if(!CLOUD.ok()){toast("Add your Supabase URL + anon key first (then Connect).");return;}
-  const p=currentProfile(),name=(projName.value||"untitled-object").trim();
+  const p=fullProfile(),name=(projName.value||"untitled-object").trim();
   try{await CLOUD.upsert(name,"object",p,p.category);toast(`Saved “${name}” to the cloud ✓`);sbRefreshList();}
   catch(e){toast("Cloud save failed: "+e.message);}};
 document.getElementById("sbRefresh").onclick=sbRefreshList;
 
 /* restore cloud config on load */
 CLOUD.load();
-(function(){const u=document.getElementById("sbUrl"),k=document.getElementById("sbKey");if(u)u.value=CLOUD.cfg.url;if(k)k.value=CLOUD.cfg.key;
-  if(CLOUD.ok()){sbStatus("connecting…","var(--ink-dim)");CLOUD.list().then(()=>{sbStatus("connected ✓","var(--good)");sbRefreshList();}).catch(()=>sbStatus("offline","var(--warn)"));}})();
+(function(){const u=document.getElementById("sbUrl"),k=document.getElementById("sbKey"),c=document.getElementById("sbConnect");
+  if(CLOUD.hardwired){
+    [u,k,c].forEach(el=>{if(el)el.style.display="none";});
+    sbStatus("hard-wired via deploy config ✓","var(--good)");
+  } else { if(u)u.value=CLOUD.cfg.url; if(k)k.value=CLOUD.cfg.key; }
+  if(CLOUD.ok()){sbStatus(CLOUD.hardwired?"connecting… (deploy config)":"connecting…","var(--ink-dim)");
+    CLOUD.list().then(()=>{sbStatus(CLOUD.hardwired?"connected ✓ (deploy config)":"connected ✓","var(--good)");sbRefreshList();}).catch(()=>sbStatus("offline","var(--warn)"));}
+})();
+
+/* =========================================================================
+   SCULPT — trim / add / smooth brush on the 3D shell.
+   Displaces outer+inner vertices together along the outer normal, so wall
+   thickness and topology are preserved (the shell stays watertight).
+   ========================================================================= */
+const SC={on:false, mode:"add", radius:14, strength:1.4, off:null, io:0,
+  baseOuter:null, baseInner:null, baseNrm:null};
+const scRay=new THREE.Raycaster();
+
+function computeOuterNormals(outer,N,M){
+  const rows=M+1, gi=(i,j)=>i*rows+j, nrm=outer.map(()=>[0,0,0]);
+  const sub=(P,Q)=>[P[0]-Q[0],P[1]-Q[1],P[2]-Q[2]], crs=(U,V)=>[U[1]*V[2]-U[2]*V[1],U[2]*V[0]-U[0]*V[2],U[0]*V[1]-U[1]*V[0]];
+  for(let i=0;i<N;i++)for(let j=0;j<M;j++){const a=gi(i,j),b=gi(i+1,j),c=gi(i+1,j+1),d=gi(i,j+1);
+    for(const [x,y,z] of [[a,b,c],[a,c,d]]){const n=crs(sub(outer[y],outer[x]),sub(outer[z],outer[x]));
+      for(const k of [x,y,z]){nrm[k][0]+=n[0];nrm[k][1]+=n[1];nrm[k][2]+=n[2];}}}
+  for(const n of nrm){const l=Math.hypot(n[0],n[1],n[2])||1;n[0]/=l;n[1]/=l;n[2]/=l;}
+  return nrm;
+}
+function sculptCache(){
+  const N=Math.max(8,S.st|0), M=Math.max(6,S.seg|0), io=(N+1)*(M+1);
+  const prof=currentProfile(); prof.sculpt=null;               // base = the un-sculpted shape
+  const g=makeBody(prof);
+  SC.io=io; SC.baseOuter=[]; SC.baseInner=[];
+  for(let k=0;k<io;k++)SC.baseOuter.push([g.positions[k*3],g.positions[k*3+1],g.positions[k*3+2]]);
+  for(let k=0;k<io;k++)SC.baseInner.push([g.positions[(io+k)*3],g.positions[(io+k)*3+1],g.positions[(io+k)*3+2]]);
+  SC.baseNrm=computeOuterNormals(SC.baseOuter,N,M);
+  if(!SC.off || SC.off.length!==io) SC.off=new Float32Array(io);
+}
+function applySculptLive(){
+  if(!bodyMesh||!SC.baseOuter)return;
+  const pos=bodyMesh.geometry.attributes.position, io=SC.io;
+  if(pos.count<2*io)return;
+  for(let k=0;k<io;k++){const b=SC.baseOuter[k],bi=SC.baseInner[k],n=SC.baseNrm[k],o=SC.off[k];
+    pos.setXYZ(k, b[0]+n[0]*o, b[1]+n[1]*o, b[2]+n[2]*o);
+    pos.setXYZ(io+k, bi[0]+n[0]*o, bi[1]+n[1]*o, bi[2]+n[2]*o);}
+  pos.needsUpdate=true; bodyMesh.geometry.computeVertexNormals(); bodyMesh.geometry.computeBoundingBox();
+}
+function sculptDab(e){
+  if(!bodyMesh||!SC.baseOuter)return false;
+  const rect=glCanvas.getBoundingClientRect();
+  const nd={x:((e.clientX-rect.left)/rect.width)*2-1, y:-((e.clientY-rect.top)/rect.height)*2+1};
+  scRay.setFromCamera(nd,camera);
+  const hit=scRay.intersectObject(bodyMesh,false)[0]; if(!hit)return false;
+  const inv=new THREE.Matrix4().copy(bodyMesh.matrixWorld).invert();
+  const lp=hit.point.clone().applyMatrix4(inv);
+  const r=SC.radius, r2=r*r, io=SC.io, N=Math.max(8,S.st|0), M=Math.max(6,S.seg|0), rows=M+1;
+  if(SC.mode==="smooth"){
+    const gi=(i,j)=>i*rows+j;
+    for(let k=0;k<io;k++){const P=SC.baseOuter[k];const dx=P[0]-lp.x,dy=P[1]-lp.y,dz=P[2]-lp.z,d2=dx*dx+dy*dy+dz*dz;
+      if(d2<r2){const i=Math.floor(k/rows),j=k%rows;let s=0,c=0;
+        for(const [di,dj] of [[1,0],[-1,0],[0,1],[0,-1]]){const ni=i+di,nj=j+dj;if(ni>=0&&ni<=N&&nj>=0&&nj<=M){s+=SC.off[gi(ni,nj)];c++;}}
+        const avg=c?s/c:SC.off[k], fall=1-Math.sqrt(d2)/r;
+        SC.off[k]+=(avg-SC.off[k])*Math.min(1,SC.strength*0.4)*fall;}}
+  } else {
+    const str=SC.strength*(SC.mode==="trim"?-1:1);
+    for(let k=0;k<io;k++){const P=SC.baseOuter[k];const dx=P[0]-lp.x,dy=P[1]-lp.y,dz=P[2]-lp.z,d2=dx*dx+dy*dy+dz*dz;
+      if(d2<r2){const fall=1-Math.sqrt(d2)/r;SC.off[k]+=str*fall*fall;}}
+  }
+  applySculptLive(); return true;
+}
+function commitSculpt(){ requestRebuild(); }        // clean re-bake + refresh readouts
+function clearSculpt(){ SC.off=null; requestRebuild(); toast("Sculpt cleared — back to the traced shape."); }
+
+function setSculpt(on){
+  if(on && S.shape==="revolve"){toast("Sculpt works on lofted shells, not revolve objects yet.");document.getElementById("tSculpt").classList.remove("on");return;}
+  SC.on=on;
+  document.getElementById("scPanel").style.display=on?"block":"none";
+  document.getElementById("tSculpt").classList.toggle("on",on);
+  const st=document.getElementById("sSt"), sg=document.getElementById("sSeg");
+  if(st)st.disabled=on; if(sg)sg.disabled=on;           // lock mesh resolution while sculpting
+  const ov=document.getElementById("dims");
+  if(on){sculptCache();toast("Sculpt on — left-drag to paint, right-drag to orbit.");}
+}
+
+/* sculpt UI wiring */
+document.getElementById("tSculpt").onclick=()=>setSculpt(!SC.on);
+document.querySelectorAll("#scMode button").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll("#scMode button").forEach(x=>x.classList.remove("on"));b.classList.add("on");SC.mode=b.dataset.m;});
+document.getElementById("scR").addEventListener("input",e=>{SC.radius=+e.target.value;document.getElementById("vScR").textContent=e.target.value;});
+document.getElementById("scS").addEventListener("input",e=>{SC.strength=+e.target.value;document.getElementById("vScS").textContent=(+e.target.value).toFixed(1);});
+document.getElementById("scClear").onclick=clearSculpt;
+
+/* =========================================================================
+   GITHUB LIBRARY — read *.profile.json / *.assembly.json from a public repo
+   (your LEE3D-Lib). Uses the GitHub API + raw.githubusercontent (no auth).
+   ========================================================================= */
+const GHLIB={ repo:"BEARME-A/LEE3D-Lib", branch:"main", loaded:false,
+  load(){try{const c=JSON.parse(localStorage.getItem("lee3d.ghlib")||"{}");if(c.repo)this.repo=c.repo;}catch(_){}},
+  persist(){try{localStorage.setItem("lee3d.ghlib",JSON.stringify({repo:this.repo}));}catch(_){}},
+  async tree(branch){const [o,r]=this.repo.split("/");
+    const res=await fetch(`https://api.github.com/repos/${o}/${r}/git/trees/${branch}?recursive=1`,{headers:{Accept:"application/vnd.github+json"}});
+    if(!res.ok)throw new Error("HTTP "+res.status); return res.json();},
+  async list(){
+    let branch="main",data;
+    try{data=await this.tree("main");}
+    catch(e){ if((""+e.message).match(/40[49]/)){branch="master";data=await this.tree("master");} else throw e; }
+    this.branch=branch;
+    const files=(data.tree||[]).filter(t=>t.type==="blob"&&/\.(profile|assembly)\.json$/i.test(t.path));
+    return files.map(t=>({path:t.path, name:t.path.split("/").pop().replace(/\.(profile|assembly)\.json$/i,""),
+                          kind:/\.assembly\.json$/i.test(t.path)?"assembly":"object"}));
+  },
+  async fetchDoc(path){const [o,r]=this.repo.split("/");
+    const res=await fetch(`https://raw.githubusercontent.com/${o}/${r}/${this.branch}/${path}`);
+    if(!res.ok)throw new Error("HTTP "+res.status); return res.json();}
+};
+function ghState(t,c){const el=document.getElementById("ghState");if(el){el.textContent=t;el.style.color=c||"var(--ink-faint)";}}
+async function ghRefresh(silent){
+  GHLIB.repo=(document.getElementById("ghRepo").value||"BEARME-A/LEE3D-Lib").trim(); GHLIB.persist();
+  if(!/^[^/\s]+\/[^/\s]+$/.test(GHLIB.repo)){ghState("use owner/repo","var(--warn)");return;}
+  ghState("loading…","var(--ink-dim)");
+  try{
+    const items=await GHLIB.list(); GHLIB.loaded=true;
+    const host=document.getElementById("ghList"); host.innerHTML="";
+    if(!items.length){host.innerHTML='<div class="hint" style="opacity:.6">No <code>*.profile.json</code> / <code>*.assembly.json</code> found in this repo. Export a model and commit it, then Refresh.</div>';ghState(`0 models · ${GHLIB.branch}`,"var(--ink-dim)");return;}
+    items.forEach(it=>{const el=document.createElement("div");el.className="ws-row";
+      el.innerHTML='<span class="nm"></span><span class="tg"></span>';
+      el.querySelector(".nm").textContent=it.name; el.querySelector(".nm").title=it.path;
+      el.querySelector(".tg").textContent=it.kind==="assembly"?"asm":"obj";
+      el.querySelector(".nm").onclick=async ()=>{try{const d=await GHLIB.fetchDoc(it.path);
+        if(d&&d.schema&&(""+d.schema).indexOf("assembly")>=0){switchTab("workshop");wsInit();requestAnimationFrame(wsResize);wsLoadAssembly(d);toast(`Loaded assembly “${it.name}” from the repo.`);}
+        else{applyProfile(d);switchTab("three");toast(`Loaded “${it.name}” from the repo — resume editing.`);}
+      }catch(e){toast("Load failed: "+e.message);}};
+      host.appendChild(el);});
+    ghState(`${items.length} model(s) · ${GHLIB.branch}`,"var(--good)");
+  }catch(e){ghState("error: "+e.message,"var(--warn)"); if(!silent)toast("Couldn't read repo: "+e.message+" (public repos only; GitHub API allows ~60 loads/hour without a token).");}
+}
+document.getElementById("ghRefresh").onclick=()=>ghRefresh(false);
+
+/* --- write-back: commit the current model to the repo via the Contents API --- */
+function ghTok(){return (document.getElementById("ghToken").value||"").trim();}
+(function(){try{const t=localStorage.getItem("lee3d.ghtoken");if(t){document.getElementById("ghToken").value=t;document.getElementById("ghRemember").checked=true;}}catch(_){}})();
+function ghRememberSync(){const on=document.getElementById("ghRemember").checked;
+  try{ if(on)localStorage.setItem("lee3d.ghtoken",ghTok()); else localStorage.removeItem("lee3d.ghtoken"); }catch(_){}}
+document.getElementById("ghRemember").addEventListener("change",ghRememberSync);
+document.getElementById("ghToken").addEventListener("input",()=>{if(document.getElementById("ghRemember").checked)ghRememberSync();});
+async function ghCommitCurrent(){
+  const token=ghTok(); if(!token){toast("Paste a GitHub token with Contents: write first.");return;}
+  GHLIB.repo=(document.getElementById("ghRepo").value||"BEARME-A/LEE3D-Lib").trim();
+  if(!/^[^/\s]+\/[^/\s]+$/.test(GHLIB.repo)){ghState("use owner/repo","var(--warn)");return;}
+  if(!GHLIB.loaded){try{await GHLIB.list();}catch(_){}}          // resolve default branch (main/master)
+  const [o,r]=GHLIB.repo.split("/"), branch=GHLIB.branch||"main";
+  const doc=fullProfile(), name=slug(doc.name||"object"), cat=slug(doc.category||"misc");
+  const path=`json/${cat}/${name}.profile.json`;
+  const url=`https://api.github.com/repos/${o}/${r}/contents/${path}`;
+  const hdr={Authorization:"Bearer "+token, Accept:"application/vnd.github+json"};
+  ghState("saving to repo…","var(--ink-dim)");
+  try{
+    let sha; const g=await fetch(url+"?ref="+branch,{headers:hdr}); if(g.ok){sha=(await g.json()).sha;}
+    const body={message:`studio: save ${name}`, content:b64utf8(JSON.stringify(doc,null,2)), branch};
+    if(sha)body.sha=sha;
+    const res=await fetch(url,{method:"PUT",headers:{...hdr,"Content-Type":"application/json"},body:JSON.stringify(body)});
+    if(!res.ok)throw new Error("HTTP "+res.status+" "+(await res.text()).slice(0,140));
+    toast(`${sha?"Updated":"Saved"} “${name}” in ${GHLIB.repo} → ${path} ✓`);
+    ghState("saved ✓","var(--good)"); ghRefresh(true);
+  }catch(e){ghState("write error","var(--warn)");toast("Repo save failed: "+e.message);}
+}
+document.getElementById("ghCommit").onclick=ghCommitCurrent;
+GHLIB.load(); document.getElementById("ghRepo").value=GHLIB.repo;
+// lazily fetch the first time the Library section is opened (keeps GitHub API calls minimal)
+(function(){const det=document.getElementById("ghRefresh").closest("details");
+  if(det)det.addEventListener("toggle",()=>{if(det.open&&!GHLIB.loaded)ghRefresh(true);});})();
 
 /* =========================================================================
    BOOT
