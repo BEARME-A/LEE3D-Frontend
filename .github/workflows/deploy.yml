@@ -1,10 +1,14 @@
 name: Deploy studio to Pages
-# The product is the single-file zero-build studio at ./index.html.
-# This deploys it straight to GitHub Pages — no Node, no Next build, nothing to break.
+
+# The product is the single-file zero-build studio at ./index.html — this publishes it
+# to GitHub Pages (no Node, no build) and injects the Supabase config from repo secrets.
 #
-# One-time setup on GitHub:  Settings -> Pages -> Source: "GitHub Actions".
-# Then DELETE the auto-generated .github/workflows/nextjs.yml (it expects a
-# package.json at the repo root and will always fail).
+# REQUIRED one-time setting (this is what "deployment queued forever / fails" means):
+#   Settings -> Pages -> Source: "GitHub Actions"   (NOT "Deploy from a branch").
+# With "Deploy from a branch", GitHub runs its own "pages-build-deployment" and this
+# Actions deploy can never take over the Pages site, so it just queues then fails.
+# Switching the source to "GitHub Actions" makes THIS workflow the deployer and stops
+# the automatic pages-build-deployment.
 
 on:
   push:
@@ -16,9 +20,10 @@ permissions:
   pages: write
   id-token: write
 
+# One deploy at a time; never cancel an in-progress Pages deployment (that can wedge it).
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -41,14 +46,7 @@ jobs:
           SB_URL: ${{ secrets.SUPABASE_URL }}
           SB_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
-          python3 - "$SB_URL" "$SB_KEY" <<'PY'
-          import sys
-          url,key=sys.argv[1],sys.argv[2]
-          p="_site/index.html"; s=open(p).read()
-          s=s.replace("__SUPABASE_URL__",url).replace("__SUPABASE_ANON_KEY__",key)
-          open(p,"w").write(s)
-          print("Supabase config injected:", "yes" if url else "empty (falls back to local entry)")
-          PY
+          python3 -c "import os; p='_site/index.html'; s=open(p).read(); s=s.replace('__SUPABASE_URL__', os.environ.get('SB_URL','')).replace('__SUPABASE_ANON_KEY__', os.environ.get('SB_KEY','')); open(p,'w').write(s); print('Supabase config injected:', 'yes' if os.environ.get('SB_URL') else 'empty - app falls back to manual entry')"
 
       - uses: actions/upload-pages-artifact@v3
         with:
