@@ -162,7 +162,8 @@
   #canvasHost{flex:1;position:relative;overflow:hidden;background:
      repeating-linear-gradient(0deg,#0a0e13,#0a0e13 1px,transparent 1px,transparent 24px),
      repeating-linear-gradient(90deg,#0a0e13,#0a0e13 1px,transparent 1px,transparent 24px),#0c1119;}
-  #trace{position:absolute;inset:0;width:100%;height:100%;cursor:crosshair}
+  #trace{position:absolute;inset:0;width:100%;height:100%;cursor:crosshair;touch-action:none;user-select:none;-webkit-user-select:none}
+  #canvasHost{user-select:none;-webkit-user-select:none}
   .drop-note{position:absolute;inset:0;display:grid;place-items:center;pointer-events:none;text-align:center}
   .drop-note .box{border:1.5px dashed var(--line);border-radius:12px;padding:34px 44px;color:var(--ink-faint)}
   .drop-note .box b{display:block;color:var(--ink-dim);font-size:15px;margin-bottom:6px;font-family:"Saira Semi Condensed",sans-serif;letter-spacing:.04em}
@@ -507,8 +508,6 @@
             <button data-v="rear">Rear</button>
           </div>
           <button class="btn" id="bCal">⊹ Set scale</button>
-          <button class="btn" id="bTop">⌢ <span id="bTopLbl">top edge</span></button>
-          <button class="btn" id="bBot">⌣ <span id="bBotLbl">lower edge</span></button>
           <button class="btn ghost" id="bUndo">↶ undo</button>
           <button class="btn ghost" id="bClear">⌫ clear view</button>
           <button class="btn" id="bSave">💾 Save</button>
@@ -519,7 +518,7 @@
           <canvas id="trace"></canvas>
           <div class="drop-note" id="dropNote"><div class="box"><b id="dropTitle">Drop a side-view drawing</b><span id="dropSub">Side view = the profile. Switch views to trace top (width) and front/rear (end cross-sections). Set scale, then trace.</span></div></div>
         </div>
-        <div class="hint" style="padding:6px 12px 0">Click empty space to add a point · drag a point to move it · right-click a point to delete · refine each side, then open 3D Preview.</div>
+        <div class="hint" style="padding:6px 12px 0;user-select:none">Trace <b>one closed outline</b> around the whole silhouette — click points all the way around; it connects automatically (no gaps). Drag a point to move it · right-click to delete · then open 3D Preview.</div>
       </div>
     </div>
 
@@ -1085,7 +1084,7 @@ let fit={s:1,ox:0,oy:0};
 //                          top:  A=left edge,     B=right edge.
 const V={ side:{img:null,scale:null,A:[],B:[]}, top:{img:null,scale:null,A:[],B:[]}, front:{img:null,scale:null,A:[],B:[]}, rear:{img:null,scale:null,A:[],B:[]} };
 let activeView="side";
-let traceMode=null;              // 'cal' | 'A' | 'B'
+let traceMode="trace";          // 'trace' (outline) | 'cal'
 let calPts=[];                   // canvas px
 const cv=()=>V[activeView];
 
@@ -1144,13 +1143,16 @@ function drawTrace(){
   document.getElementById("dropNote").style.display=v.img?"none":"grid";
   if(v.img){tctx.globalAlpha=S.opacity;
     tctx.drawImage(v.img,fit.ox,fit.oy,v.img.width*fit.s,v.img.height*fit.s);tctx.globalAlpha=1;}
-  const dp=(pts,color)=>{
+  const dp=(pts,color,closed)=>{
     if(!pts.length)return;
     tctx.strokeStyle=color;tctx.lineWidth=2;tctx.beginPath();
-    pts.forEach((p,i)=>{const c=img2canvas(p);i?tctx.lineTo(c.x,c.y):tctx.moveTo(c.x,c.y);});tctx.stroke();
-    tctx.fillStyle=color;pts.forEach(p=>{const c=img2canvas(p);tctx.beginPath();tctx.arc(c.x,c.y,4,0,7);tctx.fill();});
+    pts.forEach((p,i)=>{const c=img2canvas(p);i?tctx.lineTo(c.x,c.y):tctx.moveTo(c.x,c.y);});
+    if(closed&&pts.length>2)tctx.closePath();                 // connect last -> first (one whole outline)
+    tctx.stroke();
+    if(closed&&pts.length>2){tctx.fillStyle=color+"18";tctx.fill();}
+    tctx.fillStyle=color;pts.forEach((p,i)=>{const c=img2canvas(p);tctx.beginPath();tctx.arc(c.x,c.y,i===0?5:4,0,7);tctx.fill();});
   };
-  dp(v.A,"#FF7A2F");dp(v.B,"#46B7D9");
+  dp(v.A,"#FF7A2F",true); if(v.B&&v.B.length)dp(v.B,"#46B7D9",true);
   if(calPts.length){tctx.strokeStyle="#E5B45B";tctx.setLineDash([6,5]);tctx.lineWidth=2;
     tctx.beginPath();calPts.forEach((p,i)=>{const c=img2canvas(p);i?tctx.lineTo(c.x,c.y):tctx.moveTo(c.x,c.y);});tctx.stroke();tctx.setLineDash([]);
     tctx.fillStyle="#E5B45B";calPts.forEach(p=>{const c=img2canvas(p);tctx.beginPath();tctx.arc(c.x,c.y,5,0,7);tctx.fill();});}
@@ -1158,18 +1160,18 @@ function drawTrace(){
 function tcXY(e){const r=traceCanvas.getBoundingClientRect();return {x:e.clientX-r.left,y:e.clientY-r.top};}
 function nearestPoint(v,cx,cy){
   let best=null;
-  for(const edge of ["A","B"]) v[edge].forEach((p,idx)=>{const c=img2canvas(p);const d=Math.hypot(c.x-cx,c.y-cy);if(d<12&&(!best||d<best.dist))best={edge,idx,dist:d};});
+  ["A"].forEach(edge=>v[edge].forEach((p,idx)=>{const c=img2canvas(p);const d=Math.hypot(c.x-cx,c.y-cy);if(d<12&&(!best||d<best.dist))best={edge,idx,dist:d};}));
   return best;
 }
 let pointDrag=null;
 traceCanvas.addEventListener("pointerdown",e=>{
-  if(!traceMode)return;
+  if(!traceMode)return; e.preventDefault();
   const {x:cx,y:cy}=tcXY(e);
   if(traceMode==="cal"){calPts.push(canvas2img(cx,cy));drawTrace();if(calPts.length===2)openModal();return;}
   const v=cv();
   const hit=nearestPoint(v,cx,cy);                       // grab an existing point to refine
   if(hit){pointDrag={edge:hit.edge,idx:hit.idx};try{traceCanvas.setPointerCapture(e.pointerId);}catch(_){}return;}
-  v[traceMode].push(canvas2img(cx,cy));                  // else add a new point
+  v.A.push(canvas2img(cx,cy));                           // add to the single outline
   drawTrace();commitTrace();
 });
 traceCanvas.addEventListener("pointermove",e=>{
@@ -1206,49 +1208,49 @@ function markSection(on){
     document.getElementById("clearSection").style.display="none";}
 }
 
+// Split ONE closed outline into its upper and lower boundary (at the x-extremes).
+// Side: upper=roofline, lower=sill. Top: the two sides. Front/rear: upper=section top.
+function splitOutline(pts){
+  if(!pts||pts.length<3)return null;
+  let li=0,ri=0;
+  for(let i=1;i<pts.length;i++){if(pts[i].x<pts[li].x)li=i; if(pts[i].x>pts[ri].x)ri=i;}
+  const arc=(a,b)=>{const o=[];let i=a;for(let n=0;n<pts.length+1;n++){o.push(pts[i]);if(i===b)break;i=(i+1)%pts.length;}return o;};
+  const a1=arc(li,ri), a2=arc(ri,li);
+  const avgY=a=>a.reduce((s,p)=>s+p.y,0)/a.length;   // smaller screen-y = higher = upper
+  const upper=avgY(a1)<=avgY(a2)?a1:a2;
+  return {upper, lower:(upper===a1?a2:a1)};
+}
 function commitTrace(){
-  // SIDE view -> top/bottom silhouettes
+  // SIDE view: one outline -> top (roofline) + bottom (sill)
   const sv=V.side;
-  if(sv.scale && (sv.A.length>=2 || sv.B.length>=2)){
-    const all=[...sv.A,...sv.B];
-    const minX=Math.min(...all.map(p=>p.x)),maxX=Math.max(...all.map(p=>p.x)),span=Math.max(1,maxX-minX);
-    const datum=Math.max(...all.map(p=>p.y));
-    if(sv.A.length>=2)traced.top=edgeToProfile(sv.A,sv.scale,datum,minX,span);
-    if(sv.B.length>=2)traced.bottom=edgeToProfile(sv.B,sv.scale,datum,minX,span);
+  if(sv.scale && sv.A.length>=2){
+    const all=sv.A, minX=Math.min(...all.map(p=>p.x)),maxX=Math.max(...all.map(p=>p.x)),span=Math.max(1,maxX-minX),datum=Math.max(...all.map(p=>p.y));
+    if(sv.A.length>=3){const {upper,lower}=splitOutline(sv.A);
+      traced.top=edgeToProfile(upper,sv.scale,datum,minX,span); traced.bottom=edgeToProfile(lower,sv.scale,datum,minX,span);}
+    else {traced.top=edgeToProfile(sv.A,sv.scale,datum,minX,span); traced.bottom=null;}
     S.len=Math.max(20,Math.round(span/sv.scale));syncLen();markSil(true);
   }
-  // TOP view -> width
+  // TOP view: one outline -> the two sides -> width
   const tv=V.top;
-  if(tv.scale && tv.A.length>=2 && tv.B.length>=2){
-    const w=deriveWidth(tv.A,tv.B,tv.scale);
+  if(tv.scale && tv.A.length>=3){
+    const {upper,lower}=splitOutline(tv.A), w=deriveWidth(upper,lower,tv.scale);
     if(w){traced.width=w;markWidth(true);
-      if(!(sv.scale && (sv.A.length>=2||sv.B.length>=2))){
-        const all=[...tv.A,...tv.B];const minX=Math.min(...all.map(p=>p.x)),maxX=Math.max(...all.map(p=>p.x));
-        S.len=Math.max(20,Math.round((maxX-minX)/tv.scale));syncLen();}
-    }
+      if(!(sv.scale && sv.A.length>=2)){const minX=Math.min(...tv.A.map(p=>p.x)),maxX=Math.max(...tv.A.map(p=>p.x));S.len=Math.max(20,Math.round((maxX-minX)/tv.scale));syncLen();}}
   }
-  // FRONT view -> cross-section (normalized for loft) + absolute silhouette (for projection)
-  const fv=V.front;
-  if(fv.A.length>=2){
-    const ys=fv.A.map(p=>p.y), xs=fv.A.map(p=>p.x);
-    const sec=sectionFromTopEdge(fv.A.map(p=>[p.x,p.y]),Math.max(...ys),Math.min(...ys));
-    if(sec){traced.section=sec;setSourceSection("front",FRONT_AT,sec);markSection(true);refreshSecUI();}
-    if(fv.scale){
-      const yc=(Math.min(...xs)+Math.max(...xs))/2, datum=Math.max(...ys);
-      traced.frontHull=[...fv.A].sort((a,b)=>a.x-b.x).map(p=>[(p.x-yc)/fv.scale,(datum-p.y)/fv.scale]);
-    } else traced.frontHull=null;
-  }
-  // REAR view -> back cross-section cut (+ absolute silhouette for future projection)
-  const rv=V.rear;
-  if(rv.A.length>=2){
-    const ys=rv.A.map(p=>p.y), xs=rv.A.map(p=>p.x);
-    const sec=sectionFromTopEdge(rv.A.map(p=>[p.x,p.y]),Math.max(...ys),Math.min(...ys));
-    if(sec){setSourceSection("rear",REAR_AT,sec);refreshSecUI();}
-    if(rv.scale){
-      const yc=(Math.min(...xs)+Math.max(...xs))/2, datum=Math.max(...ys);
-      traced.rearHull=[...rv.A].sort((a,b)=>a.x-b.x).map(p=>[(p.x-yc)/rv.scale,(datum-p.y)/rv.scale]);
-    } else traced.rearHull=null;
-  }
+  // FRONT / REAR: one outline -> cross-section (upper boundary) + absolute hull
+  const doSection=(view,at,src)=>{
+    const vv=V[view]; if(vv.A.length<2)return;
+    const outline = vv.A.length>=3 ? splitOutline(vv.A).upper : vv.A;
+    const ys=outline.map(p=>p.y), xs=outline.map(p=>p.x);
+    const sec=sectionFromTopEdge(outline.map(p=>[p.x,p.y]),Math.max(...ys),Math.min(...ys));
+    if(sec){ if(view==="front"){traced.section=sec;markSection(true);} setSourceSection(src,at,sec); refreshSecUI(); }
+    if(vv.scale){ const yc=(Math.min(...xs)+Math.max(...xs))/2, datum=Math.max(...ys);
+      const hull=[...outline].sort((a,b)=>a.x-b.x).map(p=>[(p.x-yc)/vv.scale,(datum-p.y)/vv.scale]);
+      if(view==="front")traced.frontHull=hull; else traced.rearHull=hull;
+    } else { if(view==="front")traced.frontHull=null; else traced.rearHull=null; }
+  };
+  doSection("front",FRONT_AT,"front");
+  doSection("rear",REAR_AT,"rear");
   setTraceStatus();requestRebuild();updateViewDots();
 }
 function updateViewDots(){
@@ -1263,7 +1265,7 @@ function setTraceStatus(){
   const la={side:"top",top:"left",front:"outline",rear:"outline"}[activeView], lb={side:"lower",top:"right",front:"base",rear:"base"}[activeView];
   if(v.A.length)parts.push(`${la}: ${v.A.length}`);
   if(v.B.length&&activeView!=="front"&&activeView!=="rear")parts.push(`${lb}: ${v.B.length}`);
-  if(traceMode)parts.push(`<b style="color:var(--accent)">● ${traceMode==="cal"?"click 2 points":"clicking…"}</b>`);
+  if(traceMode)parts.push(`<b style="color:var(--accent)">● ${traceMode==="cal"?"click 2 points to set scale":"click around the outline"}</b>`);
   s.innerHTML=parts.join(" &nbsp; ");
 }
 
@@ -1285,16 +1287,12 @@ host.addEventListener("drop",e=>{if(e.dataTransfer.files[0])loadImageFile(e.data
 
 /* view switch (side / top / front) */
 function updateEdgeLabels(){
-  const A={side:"top edge",top:"left edge",front:"section outline",rear:"section outline"}[activeView];
-  const B={side:"lower edge",top:"right edge",front:"baseline (opt)",rear:"baseline (opt)"}[activeView];
-  document.getElementById("bTopLbl").textContent=A;
-  document.getElementById("bBotLbl").textContent=B;
   document.getElementById("dropTitle").textContent={side:"Drop a side-view drawing",top:"Drop a top-view drawing",front:"Drop a front-view drawing",rear:"Drop a rear-view drawing"}[activeView];
   document.getElementById("dropSub").textContent={
-    side:"Side view sets the profile. Set scale, then trace the top and lower edges.",
-    top:"Top view sets the real width. Set scale, then trace the left and right edges.",
-    front:"Front view sets the front cross-section. Trace from one side, over the top, to the other — no scale needed.",
-    rear:"Rear view sets the back cross-section. Trace from one side, over the top, to the other — no scale needed."
+    side:"Side view = the profile. Set scale, then trace one closed outline all the way around the silhouette.",
+    top:"Top view = real width. Set scale, then trace one closed outline around the plan shape.",
+    front:"Front view = the front cross-section. Trace one closed outline around it — no scale needed.",
+    rear:"Rear view = the back cross-section. Trace one closed outline around it — no scale needed."
   }[activeView];
 }
 function updateScaleInfo(){
@@ -1303,25 +1301,18 @@ function updateScaleInfo(){
 }
 document.querySelectorAll("#viewSeg button").forEach(b=>b.onclick=()=>{
   document.querySelectorAll("#viewSeg button").forEach(x=>x.classList.remove("on"));b.classList.add("on");
-  activeView=b.dataset.v;traceMode=null;calPts=[];
-  ["bCal","bTop","bBot"].forEach(id=>document.getElementById(id).classList.remove("active"));
+  activeView=b.dataset.v;traceMode="trace";calPts=[];
+  document.getElementById("bCal").classList.remove("active");
   document.getElementById("imgOpField").style.display=cv().img?"block":"none";
   updateEdgeLabels();fitTrace();setTraceStatus();
 });
 
 /* trace toolbar */
-function setMode(m){traceMode=(traceMode===m)?null:m;
-  ["bCal","bTop","bBot"].forEach(id=>document.getElementById(id).classList.remove("active"));
-  if(traceMode==="cal")bCal.classList.add("active");
-  if(traceMode==="A")bTop.classList.add("active");
-  if(traceMode==="B")bBot.classList.add("active");
+function setMode(m){traceMode=(traceMode===m)?"trace":m;
+  document.getElementById("bCal").classList.toggle("active",traceMode==="cal");
   setTraceStatus();}
 document.getElementById("bCal").onclick=()=>{calPts=[];calTarget="trace";setMode("cal");};
-document.getElementById("bTop").onclick=()=>setMode("A");
-document.getElementById("bBot").onclick=()=>setMode("B");
-document.getElementById("bUndo").onclick=()=>{const v=cv();
-  if(traceMode==="A"||(!traceMode&&v.A.length))v.A.pop();
-  else if(traceMode==="B"||(!traceMode&&v.B.length))v.B.pop();
+document.getElementById("bUndo").onclick=()=>{const v=cv(); v.A.pop();
   drawTrace();commitTrace();};
 document.getElementById("bClear").onclick=()=>{const v=cv();v.A=[];v.B=[];calPts=[];
   if(activeView==="side"){traced.top=null;traced.bottom=null;markSil(false);}
@@ -1528,6 +1519,7 @@ function applyProfile(p){
       V[v].A=(T.A||[]).map(pt=>({x:pt.x,y:pt.y}));
       V[v].B=(T.B||[]).map(pt=>({x:pt.x,y:pt.y}));
       V[v].scale=T.scale||null;
+      if(V[v].B.length){V[v].A=[...V[v].A,...V[v].B.slice().reverse()];V[v].B=[];}  // migrate legacy 2-edge traces to one outline
       if(T.img){const im=new Image();im.onload=(()=>{const vv=v;return()=>{V[vv].img=im;if(activeView===vv)drawTrace();requestRebuild();};})();im.src=T.img;}
     }
   }
@@ -1878,7 +1870,7 @@ document.getElementById("iBuild").onclick=()=>{
       if(topPts.length<2)continue;
       const view=V[role];
       view.img=canvas; view.scale=sPxPerMm*cf;
-      if(role==="front"||role==="rear"){view.A=topPts;view.B=[];} else {view.A=topPts;view.B=botPts;}
+      view.A=(botPts&&botPts.length)?[...topPts,...botPts.slice().reverse()]:topPts; view.B=[];  // one closed outline
       sent.push(role);
     }
   }
