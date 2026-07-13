@@ -1208,44 +1208,58 @@ function markSection(on){
     document.getElementById("clearSection").style.display="none";}
 }
 
-// Split ONE closed outline into its upper and lower boundary (at the x-extremes).
-// Side: upper=roofline, lower=sill. Top: the two sides. Front/rear: upper=section top.
-function splitOutline(pts){
-  if(!pts||pts.length<3)return null;
-  let li=0,ri=0;
-  for(let i=1;i<pts.length;i++){if(pts[i].x<pts[li].x)li=i; if(pts[i].x>pts[ri].x)ri=i;}
-  const arc=(a,b)=>{const o=[];let i=a;for(let n=0;n<pts.length+1;n++){o.push(pts[i]);if(i===b)break;i=(i+1)%pts.length;}return o;};
-  const a1=arc(li,ri), a2=arc(ri,li);
-  const avgY=a=>a.reduce((s,p)=>s+p.y,0)/a.length;   // smaller screen-y = higher = upper
-  const upper=avgY(a1)<=avgY(a2)?a1:a2;
-  return {upper, lower:(upper===a1?a2:a1)};
+// Robust: sample vertical slices of ONE closed outline to get its top & bottom envelope
+// at each x. Can't get top/bottom backwards (topmost screen-y is always the top). Works
+// for side (roof/sill), top (the two sides -> width), and front/rear (cross-section).
+function outlineEnvelope(pts,K){
+  K=K||44;
+  const xs=pts.map(p=>p.x),minX=Math.min(...xs),maxX=Math.max(...xs),span=Math.max(1,maxX-minX);
+  const top=[],bot=[];
+  for(let i=0;i<=K;i++){
+    const x=minX+span*i/K; let ymin=Infinity,ymax=-Infinity;
+    for(let j=0;j<pts.length;j++){const a=pts[j],b=pts[(j+1)%pts.length];
+      if(a.x===b.x)continue;
+      const lo=Math.min(a.x,b.x),hi=Math.max(a.x,b.x);
+      if(x>=lo-1e-6 && x<=hi+1e-6){const t=(x-a.x)/(b.x-a.x),y=a.y+(b.y-a.y)*t; if(y<ymin)ymin=y; if(y>ymax)ymax=y;}}
+    if(ymin===Infinity){let ny=pts[0].y,nd=Infinity;for(const p of pts){const d=Math.abs(p.x-x);if(d<nd){nd=d;ny=p.y;}}ymin=ymax=ny;}
+    top.push({x,y:ymin}); bot.push({x,y:ymax});
+  }
+  return {top,bot,minX,maxX,span};
 }
 function commitTrace(){
-  // SIDE view: one outline -> top (roofline) + bottom (sill)
+  // SIDE view: one outline -> top (roofline) + bottom (sill), sharing the same nose->tail span
   const sv=V.side;
   if(sv.scale && sv.A.length>=2){
-    const all=sv.A, minX=Math.min(...all.map(p=>p.x)),maxX=Math.max(...all.map(p=>p.x)),span=Math.max(1,maxX-minX),datum=Math.max(...all.map(p=>p.y));
-    if(sv.A.length>=3){const {upper,lower}=splitOutline(sv.A);
-      traced.top=edgeToProfile(upper,sv.scale,datum,minX,span); traced.bottom=edgeToProfile(lower,sv.scale,datum,minX,span);}
-    else {traced.top=edgeToProfile(sv.A,sv.scale,datum,minX,span); traced.bottom=null;}
-    S.len=Math.max(20,Math.round(span/sv.scale));syncLen();markSil(true);
+    if(sv.A.length>=3){
+      const env=outlineEnvelope(sv.A);
+      const datum=env.bot.reduce((m,p)=>Math.max(m,p.y),-Infinity);   // lowest point = z 0
+      traced.top   =env.top.map(p=>[clamp((p.x-env.minX)/env.span,0,1),(datum-p.y)/sv.scale]);
+      traced.bottom=env.bot.map(p=>[clamp((p.x-env.minX)/env.span,0,1),(datum-p.y)/sv.scale]);
+      S.len=Math.max(20,Math.round(env.span/sv.scale));
+    } else {
+      const minX=Math.min(...sv.A.map(p=>p.x)),maxX=Math.max(...sv.A.map(p=>p.x)),span=Math.max(1,maxX-minX),datum=Math.max(...sv.A.map(p=>p.y));
+      traced.top=edgeToProfile(sv.A,sv.scale,datum,minX,span);traced.bottom=null;S.len=Math.max(20,Math.round(span/sv.scale));
+    }
+    syncLen();markSil(true);
   }
-  // TOP view: one outline -> the two sides -> width
+  // TOP view: one outline -> vertical extent at each x = full width
   const tv=V.top;
   if(tv.scale && tv.A.length>=3){
-    const {upper,lower}=splitOutline(tv.A), w=deriveWidth(upper,lower,tv.scale);
-    if(w){traced.width=w;markWidth(true);
-      if(!(sv.scale && sv.A.length>=2)){const minX=Math.min(...tv.A.map(p=>p.x)),maxX=Math.max(...tv.A.map(p=>p.x));S.len=Math.max(20,Math.round((maxX-minX)/tv.scale));syncLen();}}
+    const env=outlineEnvelope(tv.A);
+    traced.width=env.top.map((p,i)=>[clamp((p.x-env.minX)/env.span,0,1),Math.max(0.4,(env.bot[i].y-p.y)/tv.scale/2)]);
+    markWidth(true);
+    if(!(sv.scale && sv.A.length>=2))S.len=Math.max(20,Math.round(env.span/tv.scale));
+    syncLen();
   }
-  // FRONT / REAR: one outline -> cross-section (upper boundary) + absolute hull
+  // FRONT / REAR: one outline -> cross-section (its top envelope across width) + absolute hull
   const doSection=(view,at,src)=>{
-    const vv=V[view]; if(vv.A.length<2)return;
-    const outline = vv.A.length>=3 ? splitOutline(vv.A).upper : vv.A;
-    const ys=outline.map(p=>p.y), xs=outline.map(p=>p.x);
-    const sec=sectionFromTopEdge(outline.map(p=>[p.x,p.y]),Math.max(...ys),Math.min(...ys));
+    const vv=V[view]; if(vv.A.length<3)return;
+    const env=outlineEnvelope(vv.A);
+    const base=env.bot.reduce((m,p)=>Math.max(m,p.y),-Infinity), peak=env.top.reduce((m,p)=>Math.min(m,p.y),Infinity);
+    const sec=sectionFromTopEdge(env.top.map(p=>[p.x,p.y]),base,peak);
     if(sec){ if(view==="front"){traced.section=sec;markSection(true);} setSourceSection(src,at,sec); refreshSecUI(); }
-    if(vv.scale){ const yc=(Math.min(...xs)+Math.max(...xs))/2, datum=Math.max(...ys);
-      const hull=[...outline].sort((a,b)=>a.x-b.x).map(p=>[(p.x-yc)/vv.scale,(datum-p.y)/vv.scale]);
+    if(vv.scale){ const yc=(env.minX+env.maxX)/2;
+      const hull=env.top.map(p=>[(p.x-yc)/vv.scale,(base-p.y)/vv.scale]);
       if(view==="front")traced.frontHull=hull; else traced.rearHull=hull;
     } else { if(view==="front")traced.frontHull=null; else traced.rearHull=null; }
   };
@@ -1522,6 +1536,9 @@ function applyProfile(p){
       if(V[v].B.length){V[v].A=[...V[v].A,...V[v].B.slice().reverse()];V[v].B=[];}  // migrate legacy 2-edge traces to one outline
       if(T.img){const im=new Image();im.onload=(()=>{const vv=v;return()=>{V[vv].img=im;if(activeView===vv)drawTrace();requestRebuild();};})();im.src=T.img;}
     }
+    // Re-derive silhouette/width/sections from the RAW points with the current math,
+    // so profiles saved by older derivations load correctly (trace is authoritative).
+    if(["side","top","front","rear"].some(v=>V[v]&&V[v].A.length>=3))commitTrace();
   }
   if(p.name){projName.value=p.name;} if(p.category){projCat.value=p.category;}
   if(traced.top||traced.bottom){
