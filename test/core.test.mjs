@@ -299,6 +299,82 @@ if (API.autoOutline) {
   });
 }
 
+// =====================  10b. VIEW ORIENTATION  =====================
+// Blueprints often draw the top view rotated 90° (car pointing up). Everything downstream
+// assumes length runs left-to-right, so a sideways view makes the length get measured as
+// the width -> the model came out as a flat slab. This is that bug, pinned down.
+t("orient: a sideways top view is detected as portrait", () => {
+  // real proportions: a car 190 long x 80 wide, but DRAWN pointing up
+  const sideways = [{x:20,y:10},{x:100,y:10},{x:100,y:200},{x:20,y:200}];
+  const xs = sideways.map(p => p.x), ys = sideways.map(p => p.y);
+  const w = Math.max(...xs) - Math.min(...xs), h = Math.max(...ys) - Math.min(...ys);
+  ok(h > w * 1.15, "should read as portrait (drawn sideways)");
+});
+t("orient: rotating -90° maps the points correctly and makes it landscape", () => {
+  const W = 120, H = 220;                                  // the portrait drawing
+  const pts = [{x:20,y:10},{x:100,y:10},{x:100,y:200},{x:20,y:200}];
+  const rot = pts.map(p => ({ x: p.y, y: W - p.x }));       // the app's dir=-1 mapping
+  const xs = rot.map(p => p.x), ys = rot.map(p => p.y);
+  const w = Math.max(...xs) - Math.min(...xs), h = Math.max(...ys) - Math.min(...ys);
+  ok(w > h, `after rotating it must be landscape, got ${w}x${h}`);
+  near(w, 190, 1, "length should now run left-to-right:");
+  near(h, 80, 1, "width should now be the vertical extent:");
+  for (const p of rot) { ok(p.x >= 0 && p.x <= H, "x escaped the rotated canvas"); ok(p.y >= 0 && p.y <= W, "y escaped"); }
+});
+t("orient: THE BUG — a sideways top view ruins the width; rotating fixes it", () => {
+  // side view says the car is 190mm long (drawn at 2 px/mm)
+  const lenMM = 190;
+  // top view drawn sideways at 1 px/mm: 190px tall (length), 80px wide (width)
+  const sideways = [{x:10,y:10},{x:90,y:10},{x:90,y:200},{x:10,y:200}];
+  const widthFrom = pts => {
+    const e = API.outlineEnvelope(pts);
+    const pxmm = API.anchorPxPerMm(e.span, lenMM, null, 200);
+    return 2 * Math.max(...e.top.map((p, i) => (e.bot[i].y - p.y) / pxmm / 2));
+  };
+  const bad = widthFrom(sideways);
+  ok(bad > 300, `expected the broken width to be absurd, got ${bad.toFixed(0)}mm`);
+  const upright = sideways.map(p => ({ x: p.y, y: 100 - p.x }));   // rotate -90°
+  const good = widthFrom(upright);
+  near(good, 80, 5, "after rotating, the width must be the real 80mm:");
+});
+
+// =====================  10c. SIZE vs SHAPE  =====================
+// The drawing owns the shape; the sliders own the measurements. Resizing must never
+// require a re-trace, and must never alter the traced points.
+t("size: scaling hits the requested width and height exactly", () => {
+  const topP = [[0, 10], [0.5, 60], [1, 20]], botP = [[0, 0], [0.5, 0], [1, 0]];
+  const widP = [[0, 10], [0.5, 40], [1, 16]];
+  const natHgt = 60, natWid = 80;                       // what the drawing measured
+  const scale = (want, nat, prof) => prof.map(p => [p[0], p[1] * (want / nat)]);
+  const tall = scale(120, natHgt, topP);                // ask for double height
+  near(Math.max(...tall.map(p => p[1])), 120, 1e-6, "height:");
+  const wide = scale(40, natWid, widP);                 // ask for half width
+  near(2 * Math.max(...wide.map(p => p[1])), 40, 1e-6, "width:");
+  // shape is preserved: every ratio along the profile is unchanged
+  for (let i = 0; i < topP.length; i++)
+    near(tall[i][1] / tall[0][1] || 0, topP[i][1] / topP[0][1] || 0, 1e-9, "profile shape drifted at " + i);
+});
+t("size: resizing leaves the traced points untouched", () => {
+  const traced = { top: [[0, 10], [1, 60]], natHgt: 60 };
+  const before = JSON.stringify(traced.top);
+  const out = traced.top.map(p => [p[0], p[1] * (120 / traced.natHgt)]);   // sizedProfiles()
+  eq(JSON.stringify(traced.top), before, "the trace was mutated:");
+  near(out[1][1], 120, 1e-9);
+});
+t("size: a resized model is still watertight", () => {
+  const base = { length: 190, stations: 40, arcSegments: 32, roofFlatness: 1.3,
+    wallThickness: 1.8, bottomProfile: [[0,2],[1,2]], mode: "loft" };
+  const topP = [[0,10],[0.5,60],[1,20]], widP = [[0,10],[0.5,40],[1,16]];
+  for (const [hk, wk] of [[0.4, 0.4], [1, 1], [2.5, 0.6], [0.5, 3]]) {
+    const g = API.makeBody({ ...base,
+      topProfile: topP.map(p => [p[0], p[1] * hk]),
+      widthProfile: widP.map(p => [p[0], p[1] * wk]) });
+    const r = manifold(g.indices);
+    ok(r.boundary === 0 && r.nonMani === 0, `h×${hk} w×${wk}: ${r.boundary} open edges`);
+    ok(g.volume > 0, `h×${hk} w×${wk}: no volume`);
+  }
+});
+
 // =====================  11. DOM CONTRACT  =====================
 // Every element the code reaches for must actually exist in the page. A missing
 // id doesn't throw for querySelector* — it silently matches nothing, so the
