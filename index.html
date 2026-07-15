@@ -456,7 +456,7 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
 
   <!-- ================= STAGE ================= -->
   <section class="stage">
-    <div class="tabs">
+    <div class="tabs" id="mainTabs">
       <div class="tab on" data-main="build">Build</div>
       <div class="tab" data-main="workshop">Workshop</div>
     </div>
@@ -1501,7 +1501,7 @@ async function loadSVGFile(file){
     setRefImage(v,cnv); v.A=outline; v.B=[];
     if(physMM)v.scale=RW/physMM;                    // real units in the file -> exact scale
     document.getElementById("imgOpField").style.display="inline-flex";
-    switchTab("trace"); fitTrace(); drawTrace(); commitTrace(); updateScaleInfo(); updateViewDots();
+    switchTab("trace"); fitTrace(); drawTrace(); commitTrace(); updateViewDots();
     toast(`SVG → <b>${activeView}</b> view · <span class="mono">${outline.length} exact points</span>${physMM?` · scale from the file (${physMM.toFixed(0)}mm)`:" · <span class='mono'>Set scale</span> once, or leave it standard"}`);
   }catch(err){toast("SVG import failed: "+err.message);}
   finally{document.body.removeChild(holder);}
@@ -1582,10 +1582,6 @@ function updateEdgeLabels(){
     rear:"Rear view = the back cross-section. Trace one closed outline around it — no scale needed."
   }[activeView];
 }
-function updateScaleInfo(){
-  const f=v=>v?`<span class="tag" style="color:var(--good);border-color:rgba(91,214,160,.3)">${v.toFixed(2)} px/mm</span>`:'<span class="tag">not set</span>';
-  {const el=document.getElementById("scaleInfo"); if(el)el.innerHTML=`Side scale ${f(V.side.scale)} · Top scale ${f(V.top.scale)}`;}
-}
 document.querySelectorAll("#viewSeg button").forEach(b=>b.onclick=()=>{
   document.querySelectorAll("#viewSeg button").forEach(x=>x.classList.remove("on"));b.classList.add("on");
   activeView=b.dataset.v;traceMode="trace";calPts=[];
@@ -1663,8 +1659,7 @@ document.getElementById("mOk").onclick=()=>{
     return;
   }
   const dx=calPts[1].x-calPts[0].x,dy=calPts[1].y-calPts[0].y;
-  cv().scale=Math.hypot(dx,dy)/raw;calPts=[];
-  updateScaleInfo();closeModal();setMode(null);commitTrace();
+  cv().scale=Math.hypot(dx,dy)/raw;calPts=[];closeModal();setMode(null);commitTrace();
   toast(`${activeView==="side"?"Side":"Top"} scale locked. Now trace the two edges.`);};
 mInput.addEventListener("keydown",e=>{if(e.key==="Enter")document.getElementById("mOk").click();});
 
@@ -2253,8 +2248,7 @@ document.getElementById("iBuild").onclick=()=>{
   if(!sent.length){toast("Assign at least one Side, Top, Front or Rear view on a box (use the dropdown), then send.");return;}
   const tv=sent.includes("side")?"side":sent.includes("top")?"top":sent.includes("front")?"front":sent.includes("rear")?"rear":null;
   if(tv){activeView=tv;document.querySelectorAll("#viewSeg button").forEach(x=>x.classList.toggle("on",x.dataset.v===activeView));
-    document.getElementById("imgOpField").style.display="inline-flex";updateEdgeLabels();}
-  updateScaleInfo();commitTrace();refreshSecUI();
+    document.getElementById("imgOpField").style.display="inline-flex";updateEdgeLabels();}commitTrace();refreshSecUI();
   switchTab(tv?"trace":"three");if(tv)setTimeout(fitTrace,40);
   toast(`Sent to Reference &amp; Trace: <span class="mono">${[...new Set(sent)].join(", ")}</span> from ${usedPages.size} page(s).${noScale?` (a page had no scale — the traced <b>side</b> length anchors the rest)`:""} Front/rear became section cuts. Refine, then open 3D.`);
 };
@@ -2935,7 +2929,7 @@ if(!window.THREE){
     '3D library failed to load.<br>Check your network, then reload — the rest of the tool still works.</div>';
 }else{
   initThree();rebuild();frameModel();
-  updateEdgeLabels();updateScaleInfo();setTraceStatus();updateImpStatus();refreshSecUI();probeBackend();
+  updateEdgeLabels();setTraceStatus();updateImpStatus();refreshSecUI();probeBackend();
   refreshCategories();
   applyWiredConfig();
   window.addEventListener("resize",()=>{
