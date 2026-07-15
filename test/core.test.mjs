@@ -293,6 +293,73 @@ if (API.autoOutline) {
   });
 }
 
+// =====================  11. DOM CONTRACT  =====================
+// Every element the code reaches for must actually exist in the page. A missing
+// id doesn't throw for querySelector* — it silently matches nothing, so the
+// feature just quietly stops working. That is exactly how the Workshop tab
+// shipped unclickable: the handler was wired to "#mainTabs .tab" and no element
+// carried that id, so no listener was ever attached.
+const IDS = new Set([...html.matchAll(/id="([^"]+)"/g)].map(m => m[1]));
+
+t("dom: no duplicate ids", () => {
+  const all = [...html.matchAll(/id="([^"]+)"/g)].map(m => m[1]);
+  const dup = all.filter((v, i) => all.indexOf(v) !== i);
+  ok(dup.length === 0, "duplicated: " + [...new Set(dup)].join(", "));
+});
+t("dom: every getElementById target exists", () => {
+  const miss = [...new Set([...script.matchAll(/getElementById\(["'`]([^"'`]+)["'`]\)/g)]
+    .map(m => m[1]).filter(id => !IDS.has(id)))];
+  ok(miss.length === 0, "no such element: " + miss.join(", "));
+});
+t("dom: every querySelector('#id') target exists", () => {
+  const refs = [...script.matchAll(/querySelector(?:All)?\(\s*["'`]([^"'`]+)["'`]/g)].map(m => m[1]);
+  const miss = [...new Set(refs
+    .map(sel => (sel.trim().match(/^#([A-Za-z][\w-]*)/) || [])[1])
+    .filter(id => id && !IDS.has(id)))];
+  ok(miss.length === 0, "selector matches nothing: #" + miss.join(", #"));
+});
+t("dom: the tab bars are wired to elements that exist", () => {
+  for (const id of ["mainTabs", "subTabs"]) ok(IDS.has(id), "missing #" + id);
+  const mains = [...html.matchAll(/data-main="(\w+)"/g)].map(m => m[1]);
+  const subs = [...html.matchAll(/data-tab="(\w+)"/g)].map(m => m[1]);
+  ok(mains.includes("build") && mains.includes("workshop"), "main tabs: " + mains.join(","));
+  ok(["import", "trace", "three"].every(x => subs.includes(x)), "sub tabs: " + subs.join(","));
+  // and each tab must live inside the container its handler queries
+  const bar = html.match(/id="mainTabs"[\s\S]*?<\/div>\s*<div class="tabs subtabs"/);
+  ok(bar && /data-main="workshop"/.test(bar[0]), "the Workshop tab is not inside #mainTabs");
+});
+t("dom: every view the tabs switch to exists", () => {
+  for (const id of ["viewImport", "viewTrace", "viewThree", "viewWorkshop"]) ok(IDS.has(id), "missing #" + id);
+});
+
+// =====================  12. SHIP CONTRACT  =====================
+// index.html is the product. Anything that duplicates it will go stale and send
+// someone debugging a copy that isn't live.
+t("ship: index.html is the only copy of the studio", () => {
+  const root = path.join(HERE, "..");
+  const hits = [];
+  (function walk(dir, depth) {
+    if (depth > 4) return;
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (e.name === "node_modules" || e.name === ".git" || e.name === "test") continue;
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p, depth + 1);
+      else if (/\.html$/i.test(e.name) && p !== path.join(root, "index.html")) {
+        const txt = fs.readFileSync(p, "utf8");
+        if (txt.includes("LEE3D") && txt.includes("<canvas")) hits.push(path.relative(root, p));
+      }
+    }
+  })(root, 0);
+  ok(hits.length === 0, "duplicate studio copies that will drift: " + hits.join(", "));
+});
+t("ship: the deploy publishes index.html", () => {
+  const wf = path.join(HERE, "..", ".github", "workflows", "deploy.yml");
+  if (!fs.existsSync(wf)) return;                       // workflow not in this checkout
+  const y = fs.readFileSync(wf, "utf8");
+  ok(/cp index\.html _site\/index\.html/.test(y), "deploy.yml no longer stages index.html");
+  ok(/upload-pages-artifact/.test(y) && /path:\s*_site/.test(y), "deploy.yml doesn't upload _site");
+});
+
 // --- report ---
 console.log("\nLEE3D core suite — functions read live from index.html\n");
 if (MISSING.length) console.log("  (not present yet: " + MISSING.join(", ") + ")\n");
