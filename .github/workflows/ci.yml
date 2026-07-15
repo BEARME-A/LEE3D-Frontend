@@ -1,0 +1,21 @@
+name: tests
+
+# Guards the studio's core maths. The suite reads the functions straight out of
+# index.html, so it always tests what actually ships (an older test kept its own
+# copy of the algorithms, drifted, and passed while the app was broken).
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Core suite (geometry, trace maths, library)
+        run: node test/core.test.mjs
