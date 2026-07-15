@@ -1,14 +1,12 @@
 name: Deploy studio to Pages
 
-# The product is the single-file zero-build studio at ./index.html — this publishes it
-# to GitHub Pages (no Node, no build) and injects the Supabase config from repo secrets.
+# Publishes the single-file studio (./index.html) to GitHub Pages and wires in every
+# connection at build time, so the live site arrives already connected and nobody has
+# to paste a URL or a key into the app. See SETUP.md.
 #
-# REQUIRED one-time setting (this is what "deployment queued forever / fails" means):
-#   Settings -> Pages -> Source: "GitHub Actions"   (NOT "Deploy from a branch").
-# With "Deploy from a branch", GitHub runs its own "pages-build-deployment" and this
-# Actions deploy can never take over the Pages site, so it just queues then fails.
-# Switching the source to "GitHub Actions" makes THIS workflow the deployer and stops
-# the automatic pages-build-deployment.
+# REQUIRED once: Settings -> Pages -> Source: "GitHub Actions" (NOT "Deploy from a branch").
+# With "Deploy from a branch", GitHub's own pages-build-deployment owns the site and this
+# workflow just queues forever, then fails.
 
 on:
   push:
@@ -34,19 +32,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Never ship maths that doesn't pass. The suite reads index.html itself.
+      - name: Core tests
+        run: node test/core.test.mjs
+
       - uses: actions/configure-pages@v5
 
-      - name: Stage the single-file studio
+      - name: Stage the studio
         run: |
           mkdir -p _site
           cp index.html _site/index.html
 
-      - name: Hard-wire Supabase config from repo secrets
+      # Secrets (Settings -> Secrets and variables -> Actions):
+      #   SUPABASE_URL, SUPABASE_ANON_KEY   -> cloud saves
+      # Variables (same page, "Variables" tab — these aren't secret):
+      #   BACKEND_URL   e.g. https://lee3d-backend.onrender.com   (optional)
+      #   LIB_REPO      e.g. BEARME-A/LEE3D-Lib                   (optional)
+      # Anything you leave unset simply stays switched off in the app.
+      - name: Wire connections into the page
         env:
           SB_URL: ${{ secrets.SUPABASE_URL }}
           SB_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          BE_URL: ${{ vars.BACKEND_URL }}
+          LIB_REPO: ${{ vars.LIB_REPO }}
         run: |
-          python3 -c "import os; p='_site/index.html'; s=open(p).read(); s=s.replace('__SUPABASE_URL__', os.environ.get('SB_URL','')).replace('__SUPABASE_ANON_KEY__', os.environ.get('SB_KEY','')); open(p,'w').write(s); print('Supabase config injected:', 'yes' if os.environ.get('SB_URL') else 'empty - app falls back to manual entry')"
+          python3 -c "import os; p='_site/index.html'; s=open(p).read(); m={'__SUPABASE_URL__':'SB_URL','__SUPABASE_ANON_KEY__':'SB_KEY','__BACKEND_URL__':'BE_URL','__LIB_REPO__':'LIB_REPO'}; [s:=s.replace(k, os.environ.get(v,'') or k) for k,v in m.items()]; open(p,'w').write(s); print('wired:', ', '.join(k for k,v in m.items() if os.environ.get(v)) or 'nothing (all left as placeholders)')"
 
       - uses: actions/upload-pages-artifact@v3
         with:
