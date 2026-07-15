@@ -10,7 +10,20 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <!-- Supabase config: hard-wired at deploy time from GitHub repo secrets (see SUPABASE.md).
      The deploy workflow replaces the two placeholders below. Left as-is when opened locally. -->
-<script>window.LEE3D_SUPABASE={ url:"__SUPABASE_URL__", key:"__SUPABASE_ANON_KEY__" };</script>
+<script>
+/* Wired in automatically when the site is deployed (GitHub Actions fills these from the
+   repo's Secrets/Variables — see SETUP.md). Anything left as a __PLACEHOLDER__ simply
+   stays switched off, and only then does the app show a box to type it in. Nobody using
+   the deployed studio should ever have to paste a URL or a key. */
+window.LEE3D_CONFIG={
+  supabaseUrl:"__SUPABASE_URL__",
+  supabaseKey:"__SUPABASE_ANON_KEY__",
+  backendUrl :"__BACKEND_URL__",
+  libRepo    :"__LIB_REPO__"
+};
+window.LEE3D_SUPABASE={url:window.LEE3D_CONFIG.supabaseUrl,key:window.LEE3D_CONFIG.supabaseKey}; /* back-compat */
+window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf("__")!==0)?v:null;};
+</script>
 <style>
   :root{
     --bg:#0B0F14; --panel:#111824; --panel-2:#0E141D; --rail:#0C121B;
@@ -376,6 +389,9 @@
     <details class="sec" open>
       <summary><span class="idx">6</span><span class="ttl">Save &amp; export</span><span class="chev">▶</span></summary>
       <div class="sec-body">
+        <button class="btn primary" id="bSaveAll" style="width:100%;font-size:13px;padding:9px">💾 Save this model</button>
+        <div class="hint" id="saveWhere" style="margin-top:5px">Keeps it on this device and in the shared cloud, and it appears in the <b>Workshop</b>. Saving again with the same name updates it instead of making a copy.</div>
+        <div style="border-top:1px solid var(--line-2);margin:11px 0 8px;padding-top:2px"></div>
         <button class="btn primary" id="dlStl">⬇ Shell STL (hollow)</button>
         <button class="btn" id="dlBottom" style="margin-top:6px">⬇ Bottom plate STL</button>
         <div class="btn-row">
@@ -384,15 +400,15 @@
         </div>
         <input type="file" id="jsonFile" accept="application/json,.json" hidden>
         <div style="border-top:1px solid var(--line-2);margin:12px 0 4px;padding-top:12px"></div>
-        <div class="field">
+        <div class="field" id="beField">
           <label>Backend URL <span class="val mono" id="beState">offline</span></label>
-          <input id="backendUrl" class="proj-name mono" style="width:100%" value="http://localhost:8000" spellcheck="false">
+          <input id="backendUrl" class="proj-name mono" style="width:100%" value="" placeholder="https://your-backend.onrender.com" spellcheck="false">
         </div>
         <button class="btn" id="saveLib">⌬ Save profile to library</button>
         <div class="btn-row">
           <button class="btn" id="buildServer">⚙ Build on server (STEP)</button>
         </div>
-        <div class="hint">With <code>LEE3D-Backend-A</code> running, these call it directly: <b>Save</b> commits this profile into <b>LEE3D-Lib</b>; <b>Build on server</b> runs the CadQuery pipeline (shelling) and downloads a STEP you can keep editing in any CAD tool. No backend? Both fall back to a local download. <span class="tag">serve the studio from localhost:3000 or add your origin to the backend CORS list</span></div>
+        <div class="hint">Optional extras that need the backend service running. <b>Build on server</b> makes a STEP file for proper CAD tools. Without a backend these just download the file locally instead — nothing breaks.</div>
       </div>
     </details>
 
@@ -417,19 +433,23 @@
     <details class="sec">
       <summary><span class="idx">📚</span><span class="ttl">Shared library</span><span class="chev">▶</span></summary>
       <div class="sec-body">
-        <div class="hint">Loads <code>*.profile.json</code> and <code>*.assembly.json</code> files committed anywhere in a public repo (your <b>LEE3D-Lib</b>). Add a model with <b>Save profile JSON</b>, commit it to the repo, then Refresh here. <i>Note: the <code>schema/</code> folder is for validation schemas, not models.</i></div>
-        <input id="ghRepo" class="proj-name mono" value="BEARME-A/LEE3D-Lib" spellcheck="false" style="width:100%;font-size:11px" title="owner/repo (public)">
+        <div class="hint">Models shared by everyone on the project. They also show up as pictures in the <b>Workshop</b> tab — click one to use it.</div>
         <div class="btn-row" style="margin-top:6px">
-          <button class="btn" id="ghRefresh">⟳ Refresh from repo</button>
+          <button class="btn" id="ghRefresh">⟳ Refresh</button>
           <span class="hint" id="ghState" style="margin:0 0 0 2px">—</span>
         </div>
         <div id="ghList" class="ws-list" style="margin-top:6px"></div>
-        <div style="border-top:1px solid var(--line-2);margin:10px 0 8px;padding-top:8px"></div>
-        <div class="ws-lbl">Write back to repo</div>
-        <input id="ghToken" type="password" class="proj-name mono" placeholder="GitHub token (Contents: write)" autocomplete="off" spellcheck="false" style="width:100%;font-size:11px">
-        <label style="display:flex;gap:6px;align-items:center;font-size:11px;margin:5px 0;cursor:pointer"><input type="checkbox" id="ghRemember"> Remember token in this browser</label>
-        <button class="btn primary" id="ghCommit" style="width:100%">⬆ Save current model to repo</button>
-        <div class="hint" style="margin-top:6px">⚠ A write token is a real secret (unlike the Supabase key). Use a <b>fine-grained token limited to LEE3D-Lib</b> with <b>Contents: Read and write</b>. It's stored only in your browser. The backend (<code>/library/commit</code>) is the safer path if you run it.</div>
+        <details id="ghWrite" style="margin-top:10px;border-top:1px solid var(--line-2);padding-top:8px">
+          <summary style="cursor:pointer;font-size:11px;color:var(--ink-dim);list-style:none">⚙ Publishing tools <span style="opacity:.6">· for the repo owner</span></summary>
+          <div style="margin-top:7px">
+            <label id="ghRepoLbl" style="font-size:11px;color:var(--ink-dim)">Repo (owner/name)</label>
+            <input id="ghRepo" class="proj-name mono" value="BEARME-A/LEE3D-Lib" spellcheck="false" style="width:100%;font-size:11px" title="owner/repo (public)">
+            <input id="ghToken" type="password" class="proj-name mono" placeholder="GitHub token (Contents: write)" autocomplete="off" spellcheck="false" style="width:100%;font-size:11px;margin-top:5px">
+            <label style="display:flex;gap:6px;align-items:center;font-size:11px;margin:5px 0;cursor:pointer"><input type="checkbox" id="ghRemember"> Remember token in this browser</label>
+            <button class="btn primary" id="ghCommit" style="width:100%">⬆ Publish current model to the repo</button>
+            <div class="hint" style="margin-top:6px">⚠ A write token is a real secret (unlike the Supabase key), so it is never baked into the site — it lives only in this browser. Use a <b>fine-grained token limited to LEE3D-Lib</b> with <b>Contents: Read and write</b>. Everyone else should just use <b>Save</b>, which goes to the cloud.</div>
+          </div>
+        </details>
       </div>
     </details>
   </aside>
@@ -1599,6 +1619,21 @@ document.querySelectorAll("#modeSeg button").forEach(b=>b.onclick=()=>{
     toast("Orthographic needs a front view with a scale. Trace/Import a front view, then it projects all three silhouettes.");
   requestRebuild();
 });
+document.getElementById("bSaveAll").onclick=async ()=>{
+  const p=fullProfile(), name=(p.name||"").trim()||"untitled-object";
+  const cat=(p.category||"uncategorized").trim();
+  if(name==="untitled-object" && !confirm("Save it as “untitled-object”?\n\nGiving it a name up top makes it easy to find later."))return;
+  LIB.add(name,"object",JSON.parse(JSON.stringify(p)),cat);          // this device (updates in place)
+  let cloud=null;
+  if(typeof CLOUD!=="undefined"&&CLOUD.ok()){
+    try{await CLOUD.upsert(name,"object",p,cat);cloud=true;}catch(e){cloud=false;}
+  }
+  if(typeof wsRenderLib==="function")wsRenderLib();
+  const where = cloud===true ? "this device + the cloud ☁"
+              : cloud===false ? "this device (the cloud didn't answer — it's still saved here)"
+              : "this device";
+  toast(`Saved “${name}” to <b>${where}</b> · <span class="mono">${cat}</span>`);
+};
 document.getElementById("bSave").onclick=()=>{
   const prof=fullProfile(), name=(projName.value||"body").trim().replace(/\s+/g,"-").replace(/[^A-Za-z0-9._-]/g,"")||"body";
   download(new Blob([JSON.stringify(prof,null,2)],{type:"application/json"}),name+".profile.json");
@@ -1817,6 +1852,24 @@ function slug(s){return (s||"misc").trim().replace(/\s+/g,"-").replace(/[^A-Za-z
 function b64utf8(str){return btoa(unescape(encodeURIComponent(str)));}
 function beBase(){return (document.getElementById("backendUrl").value||"").trim().replace(/\/+$/,"");}
 
+// Everything that was filled in at deploy time gets used silently and its input hidden,
+// so the studio arrives already connected and there is nothing to set up.
+function applyWiredConfig(){
+  const beUrl=window.LEE3D_CFG("backendUrl");
+  if(beUrl){
+    const el=document.getElementById("backendUrl"); if(el)el.value=beUrl;
+    const f=document.getElementById("beField"); if(f)f.style.display="none";     // wired: don't ask
+  }
+  const repo=window.LEE3D_CFG("libRepo");
+  if(repo && typeof GHLIB!=="undefined"){
+    GHLIB.repo=repo;
+    const el=document.getElementById("ghRepo"); if(el){el.value=repo;el.parentElement&&(el.style.display="none");}
+    const lbl=document.getElementById("ghRepoLbl"); if(lbl)lbl.style.display="none";
+  }
+  // The repo write-back needs a real GitHub token, which must never be baked into a public
+  // page. It is an editor tool, so it stays folded away unless someone goes looking.
+  const box=document.getElementById("ghWrite"); if(box)box.open=false;
+}
 async function probeBackend(){
   const el=document.getElementById("beState");const base=beBase();
   if(!base){el.textContent="—";el.style.color="var(--ink-faint)";return;}
@@ -2637,8 +2690,8 @@ const CLOUD={
   cfg:{url:"",key:""},
   hardwired:false,
   load(){
-    const hw=window.LEE3D_SUPABASE;
-    if(hw && hw.url && hw.url.indexOf("__SUPABASE")<0 && hw.key && hw.key.indexOf("__SUPABASE")<0){
+    const hw={url:window.LEE3D_CFG("supabaseUrl"),key:window.LEE3D_CFG("supabaseKey")};
+    if(hw.url && hw.key){
       this.cfg.url=hw.url; this.cfg.key=hw.key; this.hardwired=true; return;   // injected at deploy — not stored on device
     }
     try{const c=JSON.parse(localStorage.getItem("lee3d.supabase")||"{}");this.cfg.url=c.url||"";this.cfg.key=c.key||"";}catch(_){}
@@ -2884,6 +2937,7 @@ if(!window.THREE){
   initThree();rebuild();frameModel();
   updateEdgeLabels();updateScaleInfo();setTraceStatus();updateImpStatus();refreshSecUI();probeBackend();
   refreshCategories();
+  applyWiredConfig();
   window.addEventListener("resize",()=>{
     if(!document.getElementById("viewTrace").classList.contains("hide"))fitTrace();
     if(!document.getElementById("viewImport").classList.contains("hide")&&IMP.img){layoutSheet();renderCrops();}
