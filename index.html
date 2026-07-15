@@ -89,6 +89,8 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
 
   /* ---------- main layout ---------- */
   main{display:grid;grid-template-columns:316px 1fr;height:calc(100% - 54px)}
+  main.no-rail{grid-template-columns:1fr}          /* Workshop: give the canvas the whole width */
+  main.no-rail > .rail{display:none}
   .rail{
     background:var(--rail);border-right:1px solid var(--line);
     overflow-y:auto;overflow-x:hidden;padding-bottom:60px;
@@ -315,8 +317,17 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
         </div>
         <div class="field">
           <label>How long <span class="val"><span id="vLen">180</span> mm</span></label>
-          <input type="range" id="sLen" min="60" max="320" value="180" step="1">
+          <input type="range" id="sLen" min="5" max="600" value="180" step="1">
         </div>
+        <div class="field" id="widField">
+          <label>How wide <span class="val"><span id="vWid">—</span> mm</span></label>
+          <input type="range" id="sWid" min="2" max="400" value="60" step="1">
+        </div>
+        <div class="field" id="hgtField">
+          <label>How tall <span class="val"><span id="vHgt">—</span> mm</span></label>
+          <input type="range" id="sHgt" min="2" max="400" value="60" step="1">
+        </div>
+        <div class="hint" id="sizeHint">The finished measurements. After you trace, these show what your drawing measured — move them to resize and <b>your tracing is left alone</b>.</div>
       </div>
     </details>
 
@@ -330,7 +341,7 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
         <div class="field"><label>Where the top peaks <span class="val"><span id="vRoofPos">0.55</span></span></label><input type="range" id="sRoofPos" min="0.30" max="0.78" value="0.55" step="0.01"></div>
         <div class="field"><label>Back &mdash; height <span class="val"><span id="vTail">30</span></span></label><input type="range" id="sTail" min="6" max="90" value="30"></div>
         <div class="field"><label>Bottom &mdash; height <span class="val"><span id="vSill">8</span></span></label><input type="range" id="sSill" min="2" max="40" value="8"></div>
-        <button class="btn ghost" id="clearTrace" style="display:none">↺ Use the sliders instead</button>
+        <button class="btn ghost" id="clearTrace" style="display:none">↺ Use the height sliders instead</button>
       </div>
     </details>
 
@@ -343,9 +354,7 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
         <div class="field"><label>Where it is widest <span class="val"><span id="vWP">0.45</span></span></label><input type="range" id="sWP" min="0.20" max="0.80" value="0.45" step="0.01"></div>
         <div class="field"><label>Back &mdash; width <span class="val"><span id="vTW">22</span></span></label><input type="range" id="sTW" min="4" max="90" value="22"></div>
         <div class="field"><label>Boxy or round <span class="val"><span id="vRound">1.4</span></span></label><input type="range" id="sRound" min="0.6" max="3.0" value="1.4" step="0.05"></div>
-        <div class="hint" id="secMode">From: <span class="tag">the sliders</span> — trace a <b>front view</b> for the real end-on shape.</div>
-        <button class="btn ghost" id="clearSection" style="display:none">↺ Use the sliders instead</button>
-        <button class="btn ghost" id="clearWidth" style="display:none">↺ Use the sliders instead</button>
+        <button class="btn ghost" id="clearWidth" style="display:none">↺ Use the width sliders instead</button>
       </div>
     </details>
 
@@ -375,6 +384,8 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
       <summary><span class="idx">5</span><span class="ttl">Cross-section <span style="opacity:.55;font-weight:400">· the shape end-on</span></span><span class="chev">▶</span></summary>
       <div class="sec-body">
         <div class="hint">A cross-section is pinned at each cut; the model morphs between them. Front &amp; rear views become cuts automatically. <b>Drag the dots to reshape</b> the selected cut — this edits the 3D model live.</div>
+        <div class="hint" id="secMode">From: <span class="tag">the sliders</span> — trace a <b>front view</b> for the real end-on shape.</div>
+        <button class="btn ghost" id="clearSection" style="display:none;margin-bottom:6px">↺ Use the roundness slider instead</button>
         <select id="secSelect" class="proj-name" style="width:100%;margin-bottom:6px"></select>
         <canvas id="secCanvas" style="width:100%;height:150px;background:#0c1119;border:1px solid var(--line-2);border-radius:8px;touch-action:none;display:block"></canvas>
         <div class="field" style="margin-top:8px"><label>Cut position <span class="val"><span id="vSecPos">50</span>%</span></label><input type="range" id="secPos" min="0" max="100" value="50" step="1"></div>
@@ -537,6 +548,7 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
           </div>
           <button class="btn" id="bCal">⊹ Set scale</button>
           <button class="btn primary" id="bAuto">✨ Auto-trace</button>
+          <button class="btn ghost" id="bRot" title="Rotate this view 90° — use it if the object is drawn sideways">⟳ 90°</button>
           <button class="btn ghost" id="pickImg">🖼 drawing</button>
           <input type="file" id="imgFile" accept="image/*,.svg" hidden>
           <span id="imgOpField" style="display:none;align-items:center;gap:6px;font-size:11px;color:var(--ink-dim)">
@@ -943,10 +955,10 @@ const PRESETS={
   sedan :{len:230,nose:30,cowl:44,roof:62,roofPos:.52,tail:46,sill:9, nw:22,mw:46,wp:.5 ,tw:40,round:1.8},
   suv   :{len:210,nose:38,cowl:56,roof:84,roofPos:.5 ,tail:74,sill:14,nw:26,mw:52,wp:.5 ,tw:48,round:2.2},
 };
-const S={...PRESETS.hotrod, wall:1.8, st:72, seg:56, opacity:.55, mode:"loft", sepBottom:true, shape:"loft", revShape:"sphere", revSize:50};
+const S={...PRESETS.hotrod, wall:1.8, st:72, seg:56, opacity:.55, mode:"loft", sepBottom:true, shape:"loft", revShape:"sphere", revSize:50, widMM:0, hgtMM:0};
 // NOTE: revolve primitives (sphere/cylinder/dome/cone) are retired from the UI — this tool
 // is for IMPORTED shapes. makeRevolve() stays so old saved files still load.
-let traced={top:null,bottom:null,width:null,section:null,sections:null,frontHull:null,rearHull:null,sidePoly:null,topPoly:null,frontPoly:null}; // mm-space / normalized profiles when traced
+let traced={top:null,bottom:null,width:null,section:null,sections:null,frontHull:null,rearHull:null,sidePoly:null,topPoly:null,frontPoly:null,natWid:null,natHgt:null}; // mm-space / normalized profiles when traced
 
 function buildTop(){
   if(traced.top)return traced.top;
@@ -987,18 +999,34 @@ function buildTrace(){
   }
   return Object.keys(out).length?out:null;
 }
+// The drawing decides the SHAPE; the size sliders decide the MEASUREMENTS. Scaling happens
+// here, on the way out to the model — the traced points themselves are never altered, so
+// nudging a size never costs you a re-trace.
+function sizedProfiles(){
+  let topP=buildTop(), botP=buildBottom(), widP=buildWidth();
+  if(traced.natHgt>0 && S.hgtMM>0){
+    const k=S.hgtMM/traced.natHgt;
+    if(Math.abs(k-1)>1e-6){topP=topP.map(p=>[p[0],p[1]*k]); botP=botP.map(p=>[p[0],p[1]*k]);}
+  }
+  if(traced.natWid>0 && S.widMM>0){
+    const k=S.widMM/traced.natWid;
+    if(Math.abs(k-1)>1e-6)widP=widP.map(p=>[p[0],p[1]*k]);
+  }
+  return {topP,botP,widP};
+}
 function currentProfile(){
+  const SZ=sizedProfiles();
   return {
     schema:"lee3d.profile/v1", units:"mm", name:projName.value||"untitled-object", category:(projCat.value||"uncategorized").trim(),
     length:S.len, stations:S.st, arcSegments:S.seg, roofFlatness:S.round,
     wallThickness:S.wall,
-    topProfile:buildTop(), bottomProfile:buildBottom(), widthProfile:buildWidth(),
+    topProfile:SZ.topP, bottomProfile:SZ.botP, widthProfile:SZ.widP,
     section:buildSection(),
     sections:(traced.sections&&traced.sections.length?traced.sections:null),
     mode:S.mode, frontHull:(S.mode==="projection"?traced.frontHull:null), sepBottom:S.sepBottom,
     sidePoly:traced.sidePoly, topPoly:traced.topPoly, frontPoly:traced.frontPoly,
     sculpt:(SC.off && SC.off.length)?Array.from(SC.off):null,
-    shape:S.shape, revShape:S.revShape, revSize:S.revSize,
+    shape:S.shape, revShape:S.revShape, revSize:S.revSize, widMM:S.widMM, hgtMM:S.hgtMM,
     revProfile:(S.shape==="revolve"?buildRevProfile():null), revLen:(S.shape==="revolve"?revLenFor():null),
   };
 }
@@ -1281,7 +1309,25 @@ traceCanvas.addEventListener("contextmenu",e=>{
   if(hit){cv()[hit.edge].splice(hit.idx,1);drawTrace();commitTrace();}
 });
 
-function syncLen(){sLen.value=S.len;vLen.textContent=S.len;}
+function syncLen(){sLen.value=S.len;vLen.textContent=S.len;syncSize();}
+// The width/height sliders only mean something once a drawing has measured them; until
+// then the shape sliders below own those dimensions, so we say so instead of pretending.
+function syncSize(){
+  const w=document.getElementById("sWid"), h=document.getElementById("sHgt");
+  const vw=document.getElementById("vWid"), vh=document.getElementById("vHgt");
+  const hint=document.getElementById("sizeHint");
+  if(!w||!h)return;
+  const okW=traced.natWid>0, okH=traced.natHgt>0;
+  w.disabled=!okW; h.disabled=!okH;
+  w.parentElement.style.opacity=okW?1:0.45; h.parentElement.style.opacity=okH?1:0.45;
+  if(okW){w.max=Math.max(400,Math.round(traced.natWid*3));w.value=Math.round(S.widMM||traced.natWid);vw.textContent=Math.round(S.widMM||traced.natWid);}
+  else vw.textContent="—";
+  if(okH){h.max=Math.max(400,Math.round(traced.natHgt*3));h.value=Math.round(S.hgtMM||traced.natHgt);vh.textContent=Math.round(S.hgtMM||traced.natHgt);}
+  else vh.textContent="—";
+  if(hint)hint.innerHTML = (okW||okH)
+    ? "The finished measurements — what your drawing measured. Move them to resize the model; <b>your tracing is left alone</b>."
+    : "How long always works. <b>How wide</b> needs a traced <b>top</b> view and <b>how tall</b> a traced <b>side</b> view — until then the shape sliders below set those.";
+}
 function markSil(on){
   const e=document.getElementById("silMode");
   if(on){e.innerHTML='Source: <span class="tag" style="color:var(--accent);border-color:var(--accent-soft)">traced (side)</span> — sliders paused.';
@@ -1367,6 +1413,38 @@ function autoOutline(imgData,K){
   const loop=[...top,...bot.slice().reverse()];
   return loop.filter((p,i,a)=>i===0||p.x!==a[i-1].x||p.y!==a[i-1].y);   // closed outline
 }
+/* VIEW ORIENTATION.
+   Everything downstream assumes the object's LENGTH runs left-to-right in the side and
+   top views. Blueprints very often draw the top view rotated 90° (car pointing up), and
+   then the length gets measured as the width and the model comes out as a flat slab.
+   rotateView turns the drawing AND the traced points together so they stay aligned. */
+function rotateView(view,dir){
+  const v=V[view]; if(!v)return false;
+  const src=v.imgRaw||v.img;
+  const w=src?(src.naturalWidth||src.width):0, h=src?(src.naturalHeight||src.height):0;
+  if(src&&w&&h){
+    const c=document.createElement("canvas"); c.width=h; c.height=w;
+    const x=c.getContext("2d");
+    if(dir>0){x.translate(h,0);x.rotate(Math.PI/2);} else {x.translate(0,w);x.rotate(-Math.PI/2);}
+    x.drawImage(src,0,0);
+    setRefImage(v,c);
+  }
+  // a point (px,py) in a w×h image lands here in the new h×w image
+  v.A=(v.A||[]).map(p=> dir>0 ? {x:h-p.y, y:p.x} : {x:p.y, y:w-p.x});
+  v.B=[];
+  if(v.scale)v.scale=v.scale;                    // uniform rotation -> px/mm unchanged
+  return true;
+}
+// For a car the length is always the longest dimension, so the side and top views must be
+// landscape. If one comes in portrait it was drawn rotated — straighten it.
+function autoOrientView(view){
+  if(view!=="side"&&view!=="top")return false;   // front/rear are width × height already
+  const v=V[view]; if(!v||!v.A||v.A.length<3)return false;
+  const xs=v.A.map(p=>p.x), ys=v.A.map(p=>p.y);
+  const w=Math.max(...xs)-Math.min(...xs), h=Math.max(...ys)-Math.min(...ys);
+  if(h>w*1.15){ rotateView(view,-1); return true; }   // portrait -> length was vertical
+  return false;
+}
 function commitTrace(){
   const DEF=(typeof DEFAULT_LEN!=="undefined"?DEFAULT_LEN:200);
   let lenMM=null, widMM=null, hgtMM=null;
@@ -1380,8 +1458,9 @@ function commitTrace(){
     const datum=env.bot.reduce((m,p)=>Math.max(m,p.y),-Infinity);
     traced.top   =env.top.map(p=>[clamp((p.x-env.minX)/env.span,0,1),(datum-p.y)/pxmm]);
     traced.bottom=env.bot.map(p=>[clamp((p.x-env.minX)/env.span,0,1),(datum-p.y)/pxmm]);
-    lenMM=Math.max(20,Math.round(env.span/pxmm));
-    hgtMM=Math.max(...traced.top.map(q=>q[1]),1);
+    lenMM=Math.max(5,Math.round(env.span/pxmm));
+    hgtMM=Math.max(1, Math.max(...traced.top.map(q=>q[1])) - Math.min(...traced.bottom.map(q=>q[1])));
+    traced.natHgt=hgtMM; S.hgtMM=Math.round(hgtMM);
     S.len=lenMM; syncLen(); markSil(true);
   } else if(sv.scale && sv.A.length>=2){
     const minX=Math.min(...sv.A.map(p=>p.x)),maxX=Math.max(...sv.A.map(p=>p.x)),span=Math.max(1,maxX-minX),datum=Math.max(...sv.A.map(p=>p.y));
@@ -1399,7 +1478,8 @@ function commitTrace(){
     const pxmm=anchorPxPerMm(env.span, lenMM, tv.scale, DEF);  // anchored to the side view
     traced.width=env.top.map((p,i)=>[clamp((p.x-env.minX)/env.span,0,1),Math.max(0.4,(env.bot[i].y-p.y)/pxmm/2)]);
     widMM=2*Math.max(...traced.width.map(q=>q[1]),0.4);
-    if(!lenMM){lenMM=Math.max(20,Math.round(env.span/pxmm));S.len=lenMM;}
+    traced.natWid=widMM; S.widMM=Math.round(widMM);
+    if(!lenMM){lenMM=Math.max(5,Math.round(env.span/pxmm));S.len=lenMM;}
     markWidth(true); syncLen();
   }
 
@@ -1418,6 +1498,8 @@ function commitTrace(){
       if(view==="front")traced.frontHull=hull; else traced.rearHull=hull;
     } else { if(view==="front")traced.frontHull=null; else traced.rearHull=null; }
   };
+  if(!traced.top)traced.natHgt=null;
+  if(!traced.width)traced.natWid=null;
   doSection("front",FRONT_AT,"front");
   doSection("rear",REAR_AT,"rear");
 
@@ -1556,9 +1638,16 @@ document.getElementById("bAuto").onclick=()=>{
     const pts=autoOutline(c.getContext("2d").getImageData(0,0,w,h));
     if(!pts){toast("Couldn't find a clear shape. Try the ◐ contrast flip, or trace it by hand.");return;}
     v.A=pts; v.B=[];
-    drawTrace(); commitTrace(); updateViewDots();
-    toast(`Auto-traced the <b>${activeView}</b> view — <span class="mono">${pts.length} points</span>. Drag any point to fix it.`);
+    const turned=autoOrientView(activeView);       // blueprint drew it sideways? straighten it
+    fitTrace(); drawTrace(); commitTrace(); updateViewDots();
+    toast(`Auto-traced the <b>${activeView}</b> view — <span class="mono">${pts.length} points</span>${turned?" · turned it upright (it was drawn sideways)":""}. Drag any point to fix it.`);
   }catch(e){toast("Auto-trace failed: "+e.message);}
+};
+document.getElementById("bRot").onclick=()=>{
+  const v=cv();
+  if(!v.img&&!(v.A&&v.A.length)){toast("Nothing in this view to rotate yet.");return;}
+  rotateView(activeView,1); fitTrace(); drawTrace(); commitTrace(); updateViewDots();
+  toast(`Rotated the <b>${activeView}</b> view 90°.`);
 };
 document.getElementById("pickImg").onclick=()=>imgFile.click();
 document.getElementById("refInv").onclick=()=>{
@@ -1690,6 +1779,8 @@ function bindSlider(id,key,label,decimals,after){
   });
 }
 bindSlider("sLen","len","vLen");
+bindSlider("sWid","widMM","vWid");
+bindSlider("sHgt","hgtMM","vHgt");
 bindSlider("sNose","nose","vNose");bindSlider("sCowl","cowl","vCowl");
 bindSlider("sRoof","roof","vRoof");bindSlider("sRoofPos","roofPos","vRoofPos",2);
 bindSlider("sTail","tail","vTail");bindSlider("sSill","sill","vSill");
@@ -1702,18 +1793,20 @@ document.getElementById("sepBottom").addEventListener("change",e=>{S.sepBottom=e
 /* presets */
 document.querySelectorAll("#presetSeg button").forEach(b=>{
   b.onclick=()=>{
-    const hasTrace=!!(traced.top||traced.bottom||traced.width||traced.section||(traced.sections&&traced.sections.length));
-    if(hasTrace && !confirm("Switch starting shape? Your traced model is the locked-in model — this clears it and starts fresh.")){return;}
     document.querySelectorAll("#presetSeg button").forEach(x=>x.classList.remove("on"));
     b.classList.add("on");
-    const P=PRESETS[b.dataset.p];Object.assign(S,P);
-    traced={top:null,bottom:null,width:null,section:null,sections:null,frontHull:null,rearHull:null,sidePoly:null,topPoly:null,frontPoly:null};
-    if(typeof SC!=="undefined")SC.off=null;
-    V.side.A=[];V.side.B=[];V.top.A=[];V.top.B=[];V.front.A=[];V.front.B=[];V.rear.A=[];V.rear.B=[];
-    refreshSecUI();
-    backToParametric();
-    syncSlidersFromState();requestRebuild();drawTrace();
-    toast("Starting shape: <span class='mono'>"+b.textContent+"</span> — now trace your views to define the model.");
+    const P=PRESETS[b.dataset.p], len=S.len;
+    Object.assign(S,P);
+    // Traces are never touched — they are the model. A starting shape only moves the
+    // sliders, which are ignored for any view you have actually traced.
+    const traces=[traced.top&&"side",traced.width&&"top",traced.section&&"front"].filter(Boolean);
+    if(traces.length)S.len=len;                          // keep the size your drawing set
+    syncSlidersFromState();
+    if(typeof commitTrace==="function")commitTrace();     // re-assert the traced values
+    requestRebuild();
+    toast(traces.length
+      ? `Starting shape: <span class='mono'>${b.textContent}</span> — your traced <b>${traces.join(" + ")}</b> still wins, so only the untraced parts moved.`
+      : `Starting shape: <span class='mono'>${b.textContent}</span> — now trace your views to define the model.`);
   };
 });
 function syncSlidersFromState(){
@@ -1726,7 +1819,7 @@ function syncSlidersFromState(){
       out.textContent=dec!=null?Number(S[key]).toFixed(dec):S[key];}
   }
   vLen.textContent=S.len;vRoofPos.textContent=Number(S.roofPos).toFixed(2);vWP.textContent=Number(S.wp).toFixed(2);
-  vRound.textContent=Number(S.round).toFixed(2);
+  vRound.textContent=Number(S.round).toFixed(2);syncSize();
   vWall.textContent=Number(S.wall).toFixed(1);
 }
 
@@ -1746,7 +1839,9 @@ function switchTab(t){
   if(main==="build")lastBuildTab=t;
   document.querySelectorAll("#mainTabs .tab").forEach(x=>x.classList.toggle("on",x.dataset.main===main));
   document.getElementById("subTabs").style.display=(main==="build")?"flex":"none";
-  {const r=document.getElementById("rail"); if(r)r.style.display=(main==="build")?"":"none";}
+  {const m=document.querySelector("main"); if(m)m.classList.toggle("no-rail", main!=="build");}
+  // the grid has to settle before the canvases can be measured
+  requestAnimationFrame(()=>{ if(t==="workshop"){wsResize();wsRequestRender();} else if(t==="three"){resize();requestRender();} });
 }
 let lastBuildTab="import";
 document.querySelectorAll("#subTabs .tab").forEach(x=>x.onclick=()=>switchTab(x.dataset.tab));
@@ -1808,6 +1903,7 @@ function applyProfile(p){
   if(p.sepBottom!=null){S.sepBottom=!!p.sepBottom;const cb=document.getElementById("sepBottom");if(cb)cb.checked=S.sepBottom;}
   if(typeof SC!=="undefined")SC.off=(p.sculpt&&p.sculpt.length)?Float32Array.from(p.sculpt):null;
   if(p.shape==="loft"||p.shape==="revolve")S.shape=p.shape; if(p.revShape)S.revShape=p.revShape; if(p.revSize)S.revSize=p.revSize;
+  if(p.widMM)S.widMM=p.widMM; if(p.hgtMM)S.hgtMM=p.hgtMM;
   // restore full editable tracing state: points, scale, and reference images
   for(const v of ["side","top","front","rear"]){ if(!V[v])continue; V[v].A=[];V[v].B=[];V[v].img=null;V[v].imgRaw=null;V[v].inv=null; }
   if(p.trace){
@@ -2220,7 +2316,7 @@ function cropToViewTrace(bx){
 }
 document.getElementById("iBuild").onclick=()=>{
   if(!IMP.pages.length){toast("Load a sheet first.");return;}
-  const savedPage=IMP.page, sent=[], usedPages=new Set();
+  const savedPage=IMP.page, sent=[], usedPages=new Set(), turned=[];
   let noScale=false;
   for(let pi=0; pi<IMP.pages.length; pi++){
     IMP.page=pi;                                     // cropCanvas() crops from THIS page
@@ -2241,6 +2337,8 @@ document.getElementById("iBuild").onclick=()=>{
         setRefImage(view,canvas); view.scale=sPxPerMm*cf;
         view.A=(botPts&&botPts.length)?[...topPts,...botPts.slice().reverse()]:topPts; view.B=[];
         sent.push(role); usedPages.add(pg.name);
+        if(autoOrientView(role))turned.push(role);      // blueprint drew it sideways
+
       }
     }
   }
@@ -2250,7 +2348,7 @@ document.getElementById("iBuild").onclick=()=>{
   if(tv){activeView=tv;document.querySelectorAll("#viewSeg button").forEach(x=>x.classList.toggle("on",x.dataset.v===activeView));
     document.getElementById("imgOpField").style.display="inline-flex";updateEdgeLabels();}commitTrace();refreshSecUI();
   switchTab(tv?"trace":"three");if(tv)setTimeout(fitTrace,40);
-  toast(`Sent to Reference &amp; Trace: <span class="mono">${[...new Set(sent)].join(", ")}</span> from ${usedPages.size} page(s).${noScale?` (a page had no scale — the traced <b>side</b> length anchors the rest)`:""} Front/rear became section cuts. Refine, then open 3D.`);
+  toast(`Sent to Reference &amp; Trace: <span class="mono">${[...new Set(sent)].join(", ")}</span> from ${usedPages.size} page(s).${turned.length?` · turned <b>${[...new Set(turned)].join(", ")}</b> upright (drawn sideways)`:""}${noScale?` · no scale on a page — the traced <b>side</b> length anchors the rest`:""} Front/rear became section cuts. Refine, then open 3D.`);
 };
 
 /* =========================================================================
@@ -2932,6 +3030,7 @@ if(!window.THREE){
   updateEdgeLabels();setTraceStatus();updateImpStatus();refreshSecUI();probeBackend();
   refreshCategories();
   applyWiredConfig();
+  syncSize();          // size sliders start in the right state (disabled until traced)
   window.addEventListener("resize",()=>{
     if(!document.getElementById("viewTrace").classList.contains("hide"))fitTrace();
     if(!document.getElementById("viewImport").classList.contains("hide")&&IMP.img){layoutSheet();renderCrops();}
