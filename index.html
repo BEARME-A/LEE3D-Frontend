@@ -189,6 +189,99 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
      repeating-linear-gradient(90deg,#0a0e13,#0a0e13 1px,transparent 1px,transparent 24px),#0c1119;}
   #trace{position:absolute;inset:0;width:100%;height:100%;cursor:crosshair;touch-action:none;user-select:none;-webkit-user-select:none}
   #canvasHost{user-select:none;-webkit-user-select:none}
+  /* feature gizmos: the same drag/resize idea as the crop boxes on the import sheet */
+  #featLayer{position:absolute;inset:0;pointer-events:none}
+  #featLayer .fbox{position:absolute;border:1.5px dashed currentColor;border-radius:3px;pointer-events:auto;cursor:move}
+  #featLayer .fbox.sel{border-style:solid;border-width:2px;box-shadow:0 0 0 1px rgba(0,0,0,.5),0 0 12px rgba(255,122,47,.35)}
+  #featLayer .fbox .fh{position:absolute;width:9px;height:9px;background:var(--bg);border:1.5px solid currentColor;border-radius:2px}
+  #featLayer .fbox .nw{left:-5px;top:-5px;cursor:nwse-resize}
+  #featLayer .fbox .ne{right:-5px;top:-5px;cursor:nesw-resize}
+  #featLayer .fbox .sw{left:-5px;bottom:-5px;cursor:nesw-resize}
+  #featLayer .fbox .se{right:-5px;bottom:-5px;cursor:nwse-resize}
+  #featLayer .fbox .flabel{position:absolute;left:0;top:-17px;font-size:9px;letter-spacing:.05em;text-transform:uppercase;
+    color:var(--ink-dim);white-space:nowrap;background:rgba(11,15,20,.82);padding:1px 4px;border-radius:3px}
+  /* the inspector floats over the drawing so you can still see what you're changing */
+  #featPanel{position:absolute;left:14px;top:14px;width:214px;z-index:20;background:rgba(11,15,20,.96);
+    border:1px solid var(--accent);border-radius:10px;backdrop-filter:blur(8px);box-shadow:0 8px 28px rgba(0,0,0,.5)}
+  #featPanel .fp-bar{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:6px 9px;cursor:move;
+    border-bottom:1px solid var(--line-2);font-size:11px;font-weight:600;letter-spacing:.04em;color:var(--ink)}
+  #featPanel .fp-x{cursor:pointer;opacity:.6;font-size:14px;line-height:1}
+  #featPanel .fp-x:hover{opacity:1}
+  #featPanel .fp-body{padding:9px}
+  #railBtn{display:none;font-size:16px;padding:5px 9px;margin-right:2px}
+  #railScrim{display:none}
+
+  /* =====================================================================
+     PHONE / SMALL TABLET
+     Nothing is removed — every tool is still here. The 316px sidebar just
+     can't sit next to a 390px screen, so it becomes a drawer you pull out,
+     the toolbars scroll sideways instead of wrapping into a wall of
+     buttons, and the feature panel becomes a sheet at the bottom where a
+     thumb can reach it. Touch targets go up to ~38px throughout.
+     ===================================================================== */
+  @media (max-width: 860px){
+    header{padding:6px 8px;gap:6px}
+    header h1.disp{font-size:15px}
+    header .sub{display:none}
+    .logo{width:22px;height:22px}
+    .proj-name{width:104px;font-size:12px;padding:5px 7px}
+    #projCat{width:88px}
+    .readout{gap:8px}
+    .readout .stat span{display:none}          /* keep the numbers, drop the captions */
+    .readout .stat b{font-size:11px}
+    .stamp .d{display:none}
+    #railBtn{display:inline-block}
+
+    main{grid-template-columns:1fr;height:calc(100% - 46px)}
+    /* the rail slides over the top instead of stealing a column */
+    main > .rail{position:fixed;left:0;top:0;bottom:0;width:min(88vw,330px);z-index:60;
+      transform:translateX(-102%);transition:transform .22s ease;box-shadow:0 0 40px rgba(0,0,0,.6);
+      padding-top:8px;overflow-y:auto}
+    main > .rail.open{transform:none}
+    main.no-rail > .rail{display:none}
+    #railScrim{display:block;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:59;
+      opacity:0;pointer-events:none;transition:opacity .22s}
+    #railScrim.on{opacity:1;pointer-events:auto}
+
+    .tabs{padding:4px 8px 0;gap:4px}
+    .tab{padding:7px 12px;font-size:11px}
+    .tabs.subtabs{padding:4px 8px 0}
+    .tabs.subtabs .tab{padding:6px 10px}
+
+    /* toolbars scroll sideways rather than stacking six rows deep */
+    .vp-bar,.imp-bar{flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;
+      -webkit-overflow-scrolling:touch;scrollbar-width:none;padding:6px 8px}
+    .vp-bar::-webkit-scrollbar,.imp-bar::-webkit-scrollbar{display:none}
+    .vp-bar > *,.imp-bar > *{flex:0 0 auto}
+    .btn{min-height:34px;padding:7px 10px}
+    .seg button{min-height:32px;padding:6px 10px}
+    #viewSeg{width:auto}
+    #featTool{width:auto}
+    input[type=range]{height:26px}
+
+    /* the inspector becomes a sheet at the bottom, where a thumb lives */
+    #featPanel{left:0;right:0;bottom:0;top:auto;width:auto;border-radius:12px 12px 0 0;
+      border-left:0;border-right:0;border-bottom:0;max-height:52%;overflow-y:auto}
+    #featPanel .fp-bar{cursor:default;padding:9px 12px}
+    #featPanel .fp-body{padding:10px 12px 14px}
+
+    /* same idea for the workshop's panel */
+    .ws-panel{left:0;right:0;bottom:0;top:auto;width:auto;max-height:46%;
+      border-radius:12px 12px 0 0;border-left:0;border-right:0;border-bottom:0}
+    .sc-panel{left:8px;top:8px;width:180px}
+    .vp-tools{top:6px;right:6px;gap:4px}
+    .vp-tools .btn{min-height:30px;padding:5px 8px;font-size:10px}
+
+    #pageStrip .pg{width:76px}
+    .lib-grid{grid-template-columns:1fr 1fr}
+    .modal .card{width:min(94vw,380px)}
+  }
+  /* very small phones: give the drawing every pixel it can get */
+  @media (max-width: 420px){
+    .readout .stat:nth-child(2),.readout .stat:nth-child(3){display:none}
+    .proj-name{width:84px}
+    #projCat{width:72px}
+  }
   .drop-note{position:absolute;inset:0;display:grid;place-items:center;pointer-events:none;text-align:center}
   .drop-note .box{border:1.5px dashed var(--line);border-radius:12px;padding:34px 44px;color:var(--ink-faint)}
   .drop-note .box b{display:block;color:var(--ink-dim);font-size:15px;margin-bottom:6px;font-family:"Saira Semi Condensed",sans-serif;letter-spacing:.04em}
@@ -275,6 +368,7 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
 <body>
 
 <header>
+  <button id="railBtn" class="btn ghost" title="Settings" aria-label="Settings">☰</button>
   <div class="brand">
     <div class="logo"></div>
     <div>
@@ -370,33 +464,10 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
         <div class="hint">Only used by <b>Follow my drawing</b>. High = hard, machined corners. Low = softened.</div>
       </div>
     </details>
-
     <details class="sec">
-      <summary><span class="idx">5</span><span class="ttl">Features <span style="opacity:.55;font-weight:400">· windows, mirrors…</span></span><span class="chev">▶</span></summary>
+      <summary><span class="idx">5</span><span class="ttl">Features <span style="opacity:.55;font-weight:400">· <span id="featCount">none yet</span></span></span><span class="chev">▶</span></summary>
       <div class="sec-body">
-        <div class="hint">Add detail on top of the outline — a window, a scoop, a vent, a badge. Pick a view in <b>Reference &amp; Trace</b>, choose a tool, then <b>+ New feature</b>.<br>
-          <b>Shape</b> — click around anything, then Finish. <b>Box</b> — click two corners. <b>Text</b> — type the wording, click two corners to place it.<br>
-          <b>Depth</b> below: <b>negative</b> presses in (indent / engrave), <b>positive</b> pops out (raise / emboss).</div>
-        <div class="seg" id="featTool" style="width:100%;margin-bottom:6px">
-          <button data-t="poly" class="on">Shape</button>
-          <button data-t="box">Box</button>
-          <button data-t="text">Text</button>
-          <button data-t="svg">From drawing</button>
-        </div>
-        <div id="featSvgRow" style="display:none;margin-bottom:6px">
-          <div class="hint" style="margin:0 0 5px">The shapes already in your drawing are outlined in yellow — <b>click one</b> to take it. Works for <b>SVG</b> (exact vector lines) and for <b>photos / PNG / JPEG</b> (the shapes your lines enclose). No tracing either way.</div>
-          <button class="btn ghost" id="featSvgAll" style="width:100%">⚡ Take every detail on this view</button>
-        </div>
-        <div id="featTextRow" style="display:none;margin-bottom:6px">
-          <input id="featText" class="proj-name mono" style="width:100%;font-size:12px" placeholder="type the wording…" value="LEE3D">
-        </div>
-        <div class="btn-row" style="margin-top:6px">
-          <button class="btn primary" id="featNew">+ New feature</button>
-          <button class="btn ghost" id="featDone" style="display:none">✓ Finish</button>
-          <button class="btn ghost" id="featCancel" style="display:none">✕ Cancel</button>
-        </div>
-        <div id="featList" class="ws-list" style="margin-top:7px"></div>
-        <div class="hint" style="margin-top:6px">Pressed in/out of the surface, so the model stays sealed. It can dish a window in or bulge a mirror out — it can't cut a hole clean through yet.</div>
+        <div class="hint">Detail lives on the drawing, not in here. Open <b>Reference &amp; Trace</b>: pick a tool in the toolbar, draw the shape, then a small panel opens <b>over the view</b> with that feature's own depth, wording and cut-through — so you can see what you're changing while you change it. Drag a feature's box to move it, or its corners to resize.</div>
       </div>
     </details>
 
@@ -504,6 +575,7 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
       </div>
     </details>
   </aside>
+  <div id="railScrim"></div>
 
   <!-- ================= STAGE ================= -->
   <section class="stage">
@@ -590,6 +662,18 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
           </div>
           <button class="btn" id="bCal">⊹ Set scale</button>
           <button class="btn primary" id="bAuto">✨ Auto-trace</button>
+          <span style="width:1px;height:18px;background:var(--line-2);margin:0 2px"></span>
+          <div class="seg" id="featTool" style="margin:0;width:250px;flex:0 0 auto">
+            <button data-t="poly" class="on">Shape</button>
+            <button data-t="box">Box</button>
+            <button data-t="text">Text</button>
+            <button data-t="svg">From drawing</button>
+          </div>
+          <button class="btn primary" id="featNew">+ Feature</button>
+          <button class="btn ghost" id="featDone" style="display:none">✓ Finish</button>
+          <button class="btn ghost" id="featCancel" style="display:none">✕ Cancel</button>
+          <input id="featText" class="proj-name mono" style="width:110px;font-size:11px;display:none" placeholder="wording…" value="LEE3D">
+          <button class="btn ghost" id="featSvgAll" style="display:none">⚡ take all</button>
           <button class="btn ghost" id="bRot" title="Rotate this view 90° — use it if the object is drawn sideways">⟳ 90°</button>
           <button class="btn ghost" id="pickImg">🖼 drawing</button>
           <input type="file" id="imgFile" accept="image/*,.svg" hidden>
@@ -605,6 +689,11 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
         </div>
         <div id="canvasHost">
           <canvas id="trace"></canvas>
+          <div id="featLayer"></div>
+          <div id="featPanel" style="display:none">
+            <div class="fp-bar" id="fpDrag"><span id="fpTitle">feature</span><span class="fp-x" id="fpClose">×</span></div>
+            <div class="fp-body" id="fpBody"></div>
+          </div>
           <div class="drop-note" id="dropNote"><div class="box"><b id="dropTitle">Drop a side-view drawing</b><span id="dropSub">Side view = the profile. Switch views to trace top (width) and front/rear (end cross-sections). Set scale, then trace.</span></div></div>
         </div>
         <div class="hint" style="padding:6px 12px 0;user-select:none">Drop an <b>SVG</b> and it traces itself from the real lines — press <b>Auto-trace</b> again to step to the next shape if it grabbed the wrong one. Otherwise trace <b>one closed outline</b> around the silhouette — click points all the way around; it connects automatically (no gaps). Drag a point to move it · right-click to delete · then open 3D Preview.</div>
@@ -1444,25 +1533,60 @@ function animate(){
   renderer.render(scene,camera);
 }
 
-/* custom orbit / pan / zoom */
+/* orbit / pan / zoom — mouse AND touch.
+   On a mouse: drag orbits, right-drag (or shift) pans, wheel zooms.
+   On a phone none of that exists: there is no right button and no wheel, so panning and
+   zooming were simply unreachable. One finger orbits (or paints, in Sculpt); TWO fingers
+   pan and pinch to zoom, which is what every map and photo app has already taught people. */
 (function(){
   let mode=0,px=0,py=0;
-  glCanvas.addEventListener("pointerdown",e=>{glCanvas.setPointerCapture(e.pointerId);px=e.clientX;py=e.clientY;
+  const pts=new Map();                       // every finger currently down
+  let pinch=null;                            // {dist, cx, cy} while two are down
+  const mid=()=>{const a=[...pts.values()];
+    return {x:(a[0].x+a[1].x)/2, y:(a[0].y+a[1].y)/2, d:Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y)};};
+  const panBy=(dx,dy)=>{
+    const s=cam.rad*0.0016;
+    const fwd=new THREE.Vector3().subVectors(target,camera.position).normalize();
+    const right=new THREE.Vector3().crossVectors(fwd,camera.up).normalize();
+    const up=new THREE.Vector3().crossVectors(right,fwd).normalize();
+    target.addScaledVector(right,-dx*s); target.addScaledVector(up,dy*s);
+  };
+  glCanvas.addEventListener("pointerdown",e=>{
+    glCanvas.setPointerCapture(e.pointerId);
+    pts.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(pts.size===2){                        // a second finger: stop whatever one was doing
+      if(mode===3)commitSculpt();
+      mode=0; pinch=mid(); return;
+    }
+    px=e.clientX;py=e.clientY;
     if(SC.on && e.button===0 && !e.shiftKey){ sculptCache(); if(sculptDab(e)){mode=3;return;} }
-    mode=(e.button===2||e.shiftKey)?2:1;});
+    mode=(e.button===2||e.shiftKey)?2:1;
+  });
   glCanvas.addEventListener("pointermove",e=>{
+    if(pts.has(e.pointerId))pts.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(pts.size>=2){                         // two fingers: pan with the middle, pinch to zoom
+      if(!pinch){pinch=mid();return;}
+      const m=mid();
+      panBy(m.x-pinch.x, m.y-pinch.y);
+      if(pinch.d>4&&m.d>4)cam.rad*=pinch.d/m.d;
+      cam.rad=Math.max(1,cam.rad);
+      pinch=m; updateCam(); return;
+    }
     if(!mode){ if(SC.on)scShowRing(scHitAt(e)); return; }     // hover: show the brush
     const dx=e.clientX-px,dy=e.clientY-py;px=e.clientX;py=e.clientY;
     if(mode===3){scShowRing(scHitAt(e));sculptDab(e);return;}
     if(mode===1){cam.az-=dx*0.008;cam.pol-=dy*0.008;}
-    else{const s=cam.rad*0.0016;                        // screen-relative pan (right + true up)
-      const fwd=new THREE.Vector3().subVectors(target,camera.position).normalize();
-      const right=new THREE.Vector3().crossVectors(fwd,camera.up).normalize();
-      const up=new THREE.Vector3().crossVectors(right,fwd).normalize();
-      target.addScaledVector(right,-dx*s);target.addScaledVector(up,dy*s);}
-    updateCam();});
-  glCanvas.addEventListener("pointerup",()=>{if(mode===3)commitSculpt();mode=0;});
-  glCanvas.addEventListener("pointerleave",()=>{if(mode===3)commitSculpt();mode=0;scShowRing(null);});
+    else panBy(dx,dy);
+    updateCam();
+  });
+  const lift=e=>{
+    pts.delete(e.pointerId);
+    if(pts.size<2)pinch=null;
+    if(pts.size===0){ if(mode===3)commitSculpt(); mode=0; }
+  };
+  glCanvas.addEventListener("pointerup",lift);
+  glCanvas.addEventListener("pointercancel",lift);
+  glCanvas.addEventListener("pointerleave",e=>{lift(e);scShowRing(null);});
   glCanvas.addEventListener("wheel",e=>{e.preventDefault();cam.rad*=(1+Math.sign(e.deltaY)*0.09);updateCam();},{passive:false});
   glCanvas.addEventListener("contextmenu",e=>e.preventDefault());
 })();
@@ -1530,7 +1654,7 @@ function fitTrace(){
 }
 function img2canvas(p){return {x:fit.ox+p.x*fit.s, y:fit.oy+p.y*fit.s};}
 function canvas2img(cx,cy){return {x:(cx-fit.ox)/fit.s, y:(cy-fit.oy)/fit.s};}
-function drawTrace(){
+function drawTrace(){ if(typeof featRenderGizmos==="function")setTimeout(featRenderGizmos,0);
   const v=cv();
   const w=traceCanvas.width/devicePixelRatio,h=traceCanvas.height/devicePixelRatio;
   tctx.clearRect(0,0,w,h);
@@ -1597,6 +1721,7 @@ traceCanvas.addEventListener("pointerdown",e=>{
   const {x:cx,y:cy}=tcXY(e);
   if(traceMode==="cal"){calPts.push(canvas2img(cx,cy));drawTrace();if(calPts.length===2)openModal();return;}
   const v=cv();
+  if(typeof featDeselect==="function" && featSel>=0 && !featDraft)featDeselect();
   if(featTool==="svg" && V[activeView] && V[activeView].img){
     const p=canvas2img(cx,cy), poly=svgDetailAt(activeView,p);
     if(!poly){toast("Nothing from the drawing under there — the yellow outlines are what you can take.");return;}
@@ -1868,42 +1993,159 @@ function featNormalize(view,pts){
 }
 // how deep anything is allowed to press: the thinnest face of the frame
 function featCap(){ return Math.max(0.2, Math.min(S.wallPerFace?S.wallTop:S.wall, S.wallPerFace?S.wallSide:S.wall, S.wallPerFace?S.wallBottom:S.wall)); }
-function featRender(){
-  const host=document.getElementById("featList"); if(!host)return;
-  host.innerHTML="";
-  if(!features.length){host.innerHTML='<div class="hint" style="opacity:.6">No features yet.</div>';return;}
+/* =========================================================================
+   FEATURE EDITING — on the drawing, not in the sidebar.
+   Every feature gets a box you can drag and resize, exactly like the crop boxes
+   on the import sheet. Selecting one opens a small panel that floats over the
+   model, so the thing you're adjusting stays visible while you adjust it. The
+   left rail keeps only what the whole object is: its shape and its size.
+   ========================================================================= */
+let featSel=-1;                       // which feature is selected (index into features)
+
+// a feature's box in the view's 0..1 frame, whatever kind it is
+function featBox(f){
+  if(f.box)return f.box.slice();
+  if(f.poly&&f.poly.length){
+    const us=f.poly.map(q=>q[0]), vs=f.poly.map(q=>q[1]);
+    return [Math.min(...us),Math.min(...vs),Math.max(...us),Math.max(...vs)];
+  }
+  return null;
+}
+// move/scale a feature by remapping its box; the outline rides along
+function featSetBox(f,nb){
+  const ob=featBox(f); if(!ob)return;
+  const ow=Math.max(1e-6,ob[2]-ob[0]), oh=Math.max(1e-6,ob[3]-ob[1]);
+  const nw=Math.max(0.004,nb[2]-nb[0]), nh=Math.max(0.004,nb[3]-nb[1]);
+  if(f.poly)f.poly=f.poly.map(q=>[nb[0]+((q[0]-ob[0])/ow)*nw, nb[1]+((q[1]-ob[1])/oh)*nh]);
+  if(f.box)f.box=[nb[0],nb[1],nb[0]+nw,nb[1]+nh];
+}
+// 0..1 view frame  <->  pixels on screen (via the body outline's own box)
+function featToScreen(f){
+  const B=featBounds(activeView), b=featBox(f); if(!B||!b)return null;
+  const p0=img2canvas({x:B.minX+b[0]*B.sx, y:B.maxY-b[3]*B.sy});
+  const p1=img2canvas({x:B.minX+b[2]*B.sx, y:B.maxY-b[1]*B.sy});
+  return {x:Math.min(p0.x,p1.x), y:Math.min(p0.y,p1.y), w:Math.abs(p1.x-p0.x), h:Math.abs(p1.y-p0.y)};
+}
+function featFromScreen(x,y,w,h){
+  const B=featBounds(activeView); if(!B)return null;
+  const a=canvas2img(x,y), c=canvas2img(x+w,y+h);
+  const u0=(a.x-B.minX)/B.sx, u1=(c.x-B.minX)/B.sx;
+  const v0=(B.maxY-c.y)/B.sy, v1=(B.maxY-a.y)/B.sy;
+  return [Math.min(u0,u1),Math.min(v0,v1),Math.max(u0,u1),Math.max(v0,v1)];
+}
+
+function featRenderGizmos(){
+  const layer=document.getElementById("featLayer"); if(!layer)return;
+  layer.innerHTML="";
+  if(!featBounds(activeView))return;
   features.forEach((f,i)=>{
+    if(f.view!==activeView)return;
+    const r=featToScreen(f); if(!r||r.w<2||r.h<2)return;
     const el=document.createElement("div");
-    el.style.cssText="border:1px solid var(--line-2);border-radius:7px;padding:7px;margin-bottom:5px";
-    el.innerHTML=`<div style="display:flex;align-items:center;gap:6px">
-        <input class="proj-name mono" style="flex:1;font-size:11px;padding:3px 6px" value="">
-        <span class="tag" style="font-size:9px">${f.view}</span>
-        <button class="btn ghost" style="padding:2px 6px;font-size:10px">✕</button></div>
-      <div class="field" style="margin-top:5px"><label>Depth <span class="val"><span class="dv"></span> mm</span></label>
-        <input type="range" class="fd" min="${f.through?-40:-featCap()}" max="12" step="0.2" value="${f.depth}"></div>
-      <div class="field"><label>Soft edge <span class="val"><span class="sv"></span></span></label>
-        <input type="range" class="fs" min="0.01" max="0.4" step="0.01" value="${f.soft}"></div>
-      <label class="fthru" style="display:${f.depth<0?"flex":"none"};align-items:center;gap:6px;font-size:10.5px;cursor:pointer">
-        <input type="checkbox" class="ft"${f.through?" checked":""}> Cut clean through
-        <span style="opacity:.6">· needs <b>Follow my drawing</b></span></label>`;
-    const nm=el.querySelector("input.proj-name"); nm.value=f.name||("feature "+(i+1));
-    nm.oninput=()=>{f.name=nm.value;};
-    el.querySelector(".dv").textContent=f.depth.toFixed(1);
-    el.querySelector(".sv").textContent=f.soft.toFixed(2);
-    el.querySelector(".fd").oninput=e=>{f.depth=+e.target.value;el.querySelector(".dv").textContent=f.depth.toFixed(1);requestRebuild();
-      const fl=el.querySelector(".fthru"); if(fl)fl.style.display=(f.depth<0)?"flex":"none";   // a bump can't cut
-      if(f.depth>=0)f.through=false;};
-    el.querySelector(".fs").oninput=e=>{f.soft=+e.target.value;el.querySelector(".sv").textContent=f.soft.toFixed(2);requestRebuild();};
-    const th=el.querySelector(".ft");
-    if(th)th.onchange=e=>{f.through=e.target.checked; requestRebuild();
-      toast(e.target.checked
-        ? (S.mode==="projection"
-            ? "Cut clean through — that's a <b>real opening</b> now, right here."
-            : "Marked as an opening. <b>Smooth</b> can only dent it — switch <b>Shape style</b> to <b>Follow my drawing</b> and it becomes a real hole.")
-        : "Back to a surface dish.");};
-    el.querySelector("button").onclick=()=>{features.splice(i,1);featRender();requestRebuild();};
-    host.appendChild(el);
+    el.className="fbox"+(f.depth>=0?" out":"")+(i===featSel?" sel":"");
+    el.style.cssText=`left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px;color:${f.depth<0?"#46B7D9":"#5BD6A0"}`;
+    el.innerHTML=`<span class="flabel">${(f.name||"feature")}${f.through?" · through":""}</span>
+      <span class="fh nw"></span><span class="fh ne"></span><span class="fh sw"></span><span class="fh se"></span>`;
+    layer.appendChild(el);
+
+    let drag=null;
+    el.addEventListener("pointerdown",e=>{
+      e.stopPropagation(); e.preventDefault();
+      featSelect(i);
+      const h=e.target.classList.contains("fh")?[...e.target.classList].find(c=>["nw","ne","sw","se"].includes(c)):null;
+      drag={h, sx:e.clientX, sy:e.clientY, r:{...r}};
+      try{el.setPointerCapture(e.pointerId);}catch(_){}
+    });
+    el.addEventListener("pointermove",e=>{
+      if(!drag)return;
+      const dx=e.clientX-drag.sx, dy=e.clientY-drag.sy;
+      let {x,y,w,h}=drag.r;
+      if(!drag.h){ x+=dx; y+=dy; }                              // move the whole thing
+      else{                                                      // or pull one corner
+        if(drag.h.includes("w")){x+=dx; w-=dx;} else w+=dx;
+        if(drag.h.includes("n")){y+=dy; h-=dy;} else h+=dy;
+        if(w<6){w=6;} if(h<6){h=6;}
+      }
+      const nb=featFromScreen(x,y,w,h); if(!nb)return;
+      featSetBox(f,nb);
+      el.style.left=x+"px"; el.style.top=y+"px"; el.style.width=w+"px"; el.style.height=h+"px";
+      drawTrace(); requestRebuild();
+    });
+    const stop=()=>{ if(drag){drag=null; featRenderGizmos();} };
+    el.addEventListener("pointerup",stop);
+    el.addEventListener("pointercancel",stop);
   });
+}
+
+/* ---- the floating inspector: only the selected feature's own controls ---- */
+function featSelect(i){
+  featSel=i;
+  featRenderGizmos();
+  featPanelRender();
+  drawTrace();
+}
+function featDeselect(){ featSel=-1; featRenderGizmos(); featPanelRender(); drawTrace(); }
+
+function featPanelRender(){
+  const panel=document.getElementById("featPanel"), body=document.getElementById("fpBody");
+  if(!panel||!body)return;
+  const f=features[featSel];
+  if(!f){panel.style.display="none";return;}
+  panel.style.display="";
+  document.getElementById("fpTitle").textContent=f.name||"feature";
+  const cap=featCap();
+  const isText=f.kind==="text";
+  body.innerHTML=`
+    <input class="proj-name mono" id="fpName" style="width:100%;font-size:11px;padding:3px 6px" value="">
+    ${isText?`<input class="proj-name mono" id="fpText" style="width:100%;font-size:12px;padding:3px 6px;margin-top:5px" placeholder="wording…" value="">`:""}
+    <div class="field" style="margin-top:7px"><label>Depth <span class="val"><span id="fpDv"></span> mm</span></label>
+      <input type="range" id="fpDepth" min="${f.through?-40:-cap}" max="12" step="0.1" value="${f.depth}"></div>
+    <div class="field"><label>Soft edge <span class="val"><span id="fpSv"></span></span></label>
+      <input type="range" id="fpSoft" min="0.01" max="0.4" step="0.01" value="${f.soft}"></div>
+    <label id="fpThruRow" style="display:${f.depth<0?"flex":"none"};align-items:center;gap:6px;font-size:10.5px;cursor:pointer;margin:2px 0 7px">
+      <input type="checkbox" id="fpThru"${f.through?" checked":""}> Cut clean through</label>
+    <div class="hint" id="fpNote" style="margin:0 0 7px"></div>
+    <button class="btn ghost" id="fpDel" style="width:100%">⌫ Delete this feature</button>`;
+  const $=id=>document.getElementById(id);
+  $("fpName").value=f.name||""; $("fpName").oninput=e=>{f.name=e.target.value;document.getElementById("fpTitle").textContent=f.name||"feature";featRenderGizmos();};
+  if(isText){const t=$("fpText"); t.value=f.text||"";
+    t.oninput=e=>{f.text=e.target.value||"TEXT";
+      const b=f.box, ar=(b&&(b[3]-b[1])>0)?((b[2]-b[0])/(b[3]-b[1])):4;
+      f.mask=rasterizeText(f.text,ar); f.name=f.text.slice(0,14);
+      document.getElementById("fpTitle").textContent=f.name; requestRebuild(); featRenderGizmos();};}
+  $("fpDv").textContent=Number(f.depth).toFixed(1);
+  $("fpSv").textContent=Number(f.soft).toFixed(2);
+  $("fpDepth").oninput=e=>{f.depth=+e.target.value; $("fpDv").textContent=f.depth.toFixed(1);
+    if(f.depth>=0)f.through=false;
+    $("fpThruRow").style.display=(f.depth<0)?"flex":"none";
+    featNote(); requestRebuild(); featRenderGizmos();};
+  $("fpSoft").oninput=e=>{f.soft=+e.target.value; $("fpSv").textContent=f.soft.toFixed(2); requestRebuild();};
+  const th=$("fpThru"); if(th)th.onchange=e=>{f.through=e.target.checked;
+    $("fpDepth").min=f.through?-40:-featCap(); featNote(); requestRebuild(); featRenderGizmos();};
+  $("fpDel").onclick=()=>{features.splice(featSel,1); featDeselect(); requestRebuild();};
+  featNote();
+}
+// say plainly what this feature will actually do, given the mode and the frame
+function featNote(){
+  const el=document.getElementById("fpNote"), f=features[featSel]; if(!el||!f)return;
+  const cap=featCap();
+  if(f.through && f.depth<0){
+    el.innerHTML = (S.mode==="projection")
+      ? "<b style='color:var(--good)'>A real opening.</b> Cut clean through, right here."
+      : "<b style='color:var(--warn)'>Smooth can only dent this.</b> Switch <b>Shape style</b> to <b>Follow my drawing</b> for a real hole.";
+    return;
+  }
+  if(f.depth<0 && Math.abs(f.depth)>=cap-0.05)
+    el.innerHTML=`Pressed in as far as the <b>${cap.toFixed(1)} mm</b> frame allows. Thicken the frame in <b>Advanced</b> to go deeper.`;
+  else if(f.depth<0) el.textContent="Pressed into the surface.";
+  else if(f.depth>0) el.textContent="Raised out of the surface.";
+  else el.textContent="No depth — this does nothing yet.";
+}
+
+function featRender(){
+  featRenderGizmos(); featPanelRender();
+  const c=document.getElementById("featCount");
+  if(c)c.textContent=features.length?`${features.length} on this model`:"none yet";
 }
 // The SVG already contains every line in the drawing. The biggest path becomes the body
 // outline; everything else — windows, lights, scoops, badges — is detail sitting unused.
@@ -1955,8 +2197,8 @@ function featAddSvgPoly(view,poly,quiet){
   const norm=featNormalize(view,resamplePoly(poly,64));
   if(!norm)return false;
   features.push({kind:"poly",view,poly:norm,depth:-2.5,soft:0.08,name:"detail "+(features.length+1)});
-  if(!quiet){featRender();requestRebuild();
-    toast("Taken straight from your drawing — set its <b>depth</b> in Features (in = indent, out = raised).");}
+  if(!quiet){featSelect(features.length-1);requestRebuild();
+    toast("Taken straight from your drawing — its panel opened over the view.");}
   return true;
 }
 function featStart(){
@@ -1992,7 +2234,7 @@ function featFinish(){
                      depth:-1.2,soft:0.05,name:txt.slice(0,14)});
     }
   }
-  featCancelDraft(); featRender(); requestRebuild();
+  featCancelDraft(); featSelect(features.length-1); requestRebuild();
   toast(tool==="text"
     ? "Wording added — <b>depth</b> negative engraves it, positive raises it. Resize by re-placing it."
     : "Feature added — <b>depth</b> negative presses in, positive pops out.");
@@ -2286,8 +2528,8 @@ document.getElementById("bAuto").onclick=()=>{
 document.querySelectorAll("#featTool button").forEach(b=>b.onclick=()=>{
   document.querySelectorAll("#featTool button").forEach(x=>x.classList.remove("on"));
   b.classList.add("on"); featTool=b.dataset.t;
-  document.getElementById("featTextRow").style.display=(featTool==="text")?"":"none";
-  document.getElementById("featSvgRow").style.display=(featTool==="svg")?"":"none";
+  document.getElementById("featText").style.display=(featTool==="text")?"":"none";
+  document.getElementById("featSvgAll").style.display=(featTool==="svg")?"":"none";
   document.getElementById("featNew").style.display=(featTool==="svg")?"none":"";
   if(featDraft)featCancelDraft();
   if(featTool==="svg"){
@@ -2306,6 +2548,18 @@ document.getElementById("featSvgAll").onclick=()=>{
   featRender(); requestRebuild(); drawTrace();
   toast(`Took <b>${added}</b> line(s) straight from the drawing — tune each one's depth in the list.`);
 };
+document.getElementById("railBtn").onclick=railToggle;
+document.getElementById("railScrim").onclick=()=>railOpen(false);
+document.getElementById("fpClose").onclick=()=>featDeselect();
+(function(){                                   // drag the inspector by its bar
+  const p=document.getElementById("featPanel"), bar=document.getElementById("fpDrag");
+  let d=null;
+  bar.addEventListener("pointerdown",e=>{d={x:e.clientX,y:e.clientY,l:p.offsetLeft,t:p.offsetTop};
+    try{bar.setPointerCapture(e.pointerId);}catch(_){}});
+  bar.addEventListener("pointermove",e=>{ if(!d)return;
+    p.style.left=Math.max(0,d.l+e.clientX-d.x)+"px"; p.style.top=Math.max(0,d.t+e.clientY-d.y)+"px";});
+  const stop=()=>d=null; bar.addEventListener("pointerup",stop); bar.addEventListener("pointercancel",stop);
+})();
 document.getElementById("featNew").onclick=featStart;
 document.getElementById("featDone").onclick=featFinish;
 document.getElementById("featCancel").onclick=featCancelDraft;
@@ -2531,9 +2785,10 @@ function switchTab(t){
   requestAnimationFrame(()=>{ if(t==="workshop"){wsResize();wsRequestRender();} else if(t==="three"){resize();requestRender();} });
 }
 let lastBuildTab="import";
-document.querySelectorAll("#subTabs .tab").forEach(x=>x.onclick=()=>switchTab(x.dataset.tab));
-document.querySelectorAll("#mainTabs .tab").forEach(x=>x.onclick=()=>
-  switchTab(x.dataset.main==="workshop"?"workshop":(lastBuildTab||"import")));
+function railAutoClose(){ if(window.matchMedia("(max-width:860px)").matches)railOpen(false); }
+document.querySelectorAll("#subTabs .tab").forEach(x=>x.onclick=()=>{switchTab(x.dataset.tab);railAutoClose();});
+document.querySelectorAll("#mainTabs .tab").forEach(x=>x.onclick=()=>{
+  switchTab(x.dataset.main==="workshop"?"workshop":(lastBuildTab||"import"));railAutoClose();});
 
 /* viewport tools */
 document.getElementById("tWire").onclick=function(){wireOn=!wireOn;this.classList.toggle("active",wireOn);
@@ -2640,6 +2895,14 @@ function beBase(){return (document.getElementById("backendUrl").value||"").trim(
 
 // Everything that was filled in at deploy time gets used silently and its input hidden,
 // so the studio arrives already connected and there is nothing to set up.
+/* On a phone the settings rail slides over instead of sitting beside. Same rail, same
+   controls — it just can't have a third of a 390px screen to itself. */
+function railOpen(on){
+  const r=document.querySelector("main > .rail"), sc=document.getElementById("railScrim");
+  if(!r)return;
+  r.classList.toggle("open",on); if(sc)sc.classList.toggle("on",on);
+}
+function railToggle(){ railOpen(!document.querySelector("main > .rail")?.classList.contains("open")); }
 function applyWiredConfig(){
   const beUrl=window.LEE3D_CFG("backendUrl");
   if(beUrl){
