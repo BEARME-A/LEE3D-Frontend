@@ -1067,6 +1067,41 @@ t("ship: the deploy publishes index.html", () => {
   ok(/upload-pages-artifact/.test(y) && /path:\s*_site/.test(y), "deploy.yml doesn't upload _site");
 });
 
+// =====================  12b. CSS CONTRACT  =====================
+// A rule for a class that doesn't exist is silently dead — the browser never complains,
+// it just does nothing. That's how a whole mobile layout shipped styling ".vp-bar" and
+// ".imp-bar", neither of which was ever a class in this app: every test passed and the
+// phone layout did nothing at all. Same failure as a querySelector that matches nothing.
+t("css: every selector targets something that actually exists", () => {
+  const css = html.slice(html.indexOf("<style>") + 7, html.indexOf("</style>"));
+  const rest = html.slice(0, html.indexOf("<style>")) + html.slice(html.indexOf("</style>"));
+  // pull class/id names out of selectors only (skip declaration blocks)
+  const names = new Set();
+  css.replace(/\{[^{}]*\}/g, "{}")                       // blank out declarations
+     .replace(/@media[^{]*/g, " ")                        // and media conditions
+     .replace(/([.#])(-?[A-Za-z_][\w-]*)/g, (_, sig, nm) => { names.add(sig + nm); return ""; });
+  // a class can also be added from JS, so accept the bare word anywhere outside the CSS
+  const phantom = [...names].filter(n => {
+    const bare = n.slice(1);
+    if (/^(on|active|sel|open|hide|primary|ghost|mono|disp|box|card|nm|tg|h|d|t|val)$/.test(bare)) return false;
+    return !new RegExp("\\b" + bare.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&") + "\\b").test(rest);
+  });
+  ok(phantom.length === 0, "these style rules match nothing and do nothing: " + phantom.join(", "));
+});
+t("css: the mobile rules target the real toolbar", () => {
+  const css = html.slice(html.indexOf("<style>"), html.indexOf("</style>"));
+  const mq = css.slice(css.indexOf("@media (max-width: 860px)"));
+  ok(mq.includes(".trace-bar"), "the toolbars are .trace-bar — style that, not an invented name");
+  ok(!/\.(vp|imp)-bar/.test(css), "those class names have never existed in this app");
+});
+t("css: a bare .btn in the header can't stretch across the screen", () => {
+  const css = html.slice(html.indexOf("<style>"), html.indexOf("</style>"));
+  // .btn is width:100% by design (it's built for the sidebar), so anything using it
+  // outside a row container has to opt out or it takes a whole line to itself
+  ok(/\.btn\{[^}]*width:100%/.test(css.replace(/\s+/g, "")), "assumption changed: .btn is no longer full-width");
+  ok(/#railBtn\{[^}]*width:auto/.test(css.replace(/\s+/g, "")), "#railBtn must opt out of the full-width default");
+});
+
 // =====================  13. MOBILE  =====================
 // Collin drives this from a phone and his neighbour's machine barely runs it. The layout
 // has to fold, and — more importantly — every tool has to stay REACHABLE. Panning used to
