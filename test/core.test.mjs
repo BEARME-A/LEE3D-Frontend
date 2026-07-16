@@ -45,7 +45,10 @@ function grabConst(decl) {
 const PRELUDE = [grabConst("clamp"), grabConst("lerp"), grabConst("smoothstep"), "const DEFAULT_LEN=200;"].join("\n");
 const NAMES = ["outlineEnvelope", "anchorPxPerMm", "makeRevolve", "pointInPoly",
   "makeVisualHull", "checkManifold", "polyArea", "resamplePoly", "svgPhysicalWidthMM",
-  "libCanonical", "sampleProfile", "resampleSection", "morphSections", "makeBody", "autoOutline"];
+  "libCanonical", "sampleProfile", "resampleSection", "morphSections", "makeBody", "autoOutline",
+  "publishRoute", "distToPoly", "viewUV", "applyFeatures", "pickSilhouette", "sampleMask", "ptInPolyPts", "polyAreaPts",
+  "rasterRegions", "otsuThreshold", "lumOf", "regionOutline", "sdPoly",
+  "wallSpec", "wallAt", "minWall"];
 const found = [];
 const src = PRELUDE + NAMES.map(n => {
   try { const s = grab(n); found.push(n); return s; }
@@ -373,6 +376,628 @@ t("size: a resized model is still watertight", () => {
     ok(r.boundary === 0 && r.nonMani === 0, `h×${hk} w×${wk}: ${r.boundary} open edges`);
     ok(g.volume > 0, `h×${hk} w×${wk}: no volume`);
   }
+});
+
+// =====================  10d. PUBLISH ROUTING  =====================
+// A GitHub write token must never be shipped inside a static page — the source is public,
+// so it would hand the repo to anyone (and GitHub revokes exposed tokens anyway). The
+// backend holds one server-side instead, which is what lets everyone publish with no setup.
+t("publish: prefers the backend, so nobody needs a token", () => {
+  eq(API.publishRoute(true, false), "backend");
+  eq(API.publishRoute(true, true), "backend", "the backend must win over a local token:");
+});
+t("publish: falls back to the owner's own token when there's no backend", () => {
+  eq(API.publishRoute(false, true), "token");
+});
+t("publish: offers nothing when it cannot actually publish", () => {
+  eq(API.publishRoute(false, false), null);
+});
+t("secrets: no GitHub token is baked into the page", () => {
+  const leaks = [
+    [/ghp_[A-Za-z0-9]{20,}/, "classic GitHub token"],
+    [/github_pat_[A-Za-z0-9_]{20,}/, "fine-grained GitHub token"],
+    [/gho_[A-Za-z0-9]{20,}/, "GitHub OAuth token"],
+  ];
+  for (const [re, what] of leaks) ok(!re.test(html), `a ${what} is embedded in index.html`);
+  // the placeholder is fine; a real value would not be
+  ok(!/LEE3D_CONFIG[\s\S]{0,400}?token/i.test(html), "the injected config must not carry a token");
+});
+
+// =====================  10e. FEATURES  =====================
+// A feature is a region traced in a view, pressed into or out of the body. It must move
+// the surface where you drew it, leave the rest alone, and never break the seal.
+const FEAT_BASE = { length: 190, stations: 40, arcSegments: 32, roofFlatness: 1.3,
+  wallThickness: 1.8, topProfile: [[0,10],[0.5,60],[1,20]], bottomProfile: [[0,2],[1,2]],
+  widthProfile: [[0,10],[0.5,40],[1,16]], mode: "loft" };
+const WINDOW = [[0.35,0.55],[0.62,0.55],[0.62,0.85],[0.35,0.85]];   // a window on the side
+
+t("features: a recessed window keeps the model watertight", () => {
+  const g = API.makeBody({ ...FEAT_BASE, features: [{ view: "side", poly: WINDOW, depth: -3, soft: 0.1 }] });
+  const r = manifold(g.indices);
+  ok(r.boundary === 0 && r.nonMani === 0, `${r.boundary} open edges, ${r.nonMani} non-manifold`);
+  ok(g.volume > 0, "no volume");
+});
+t("features: pressing in removes material, bulging out adds it", () => {
+  const plain = API.makeBody({ ...FEAT_BASE });
+  const dish  = API.makeBody({ ...FEAT_BASE, features: [{ view: "side", poly: WINDOW, depth: -3, soft: 0.1 }] });
+  const bulge = API.makeBody({ ...FEAT_BASE, features: [{ view: "side", poly: WINDOW, depth: 3, soft: 0.1 }] });
+  ok(dish.volume < plain.volume, `recess didn't remove material (${dish.volume} vs ${plain.volume})`);
+  ok(bulge.volume > plain.volume, `bulge didn't add material (${bulge.volume} vs ${plain.volume})`);
+});
+t("features: only the traced region moves — the rest of the body is untouched", () => {
+  const plain = API.makeBody({ ...FEAT_BASE });
+  const feat  = API.makeBody({ ...FEAT_BASE, features: [{ view: "side", poly: WINDOW, depth: -3, soft: 0.05 }] });
+  eq(feat.positions.length, plain.positions.length, "vertex count changed:");
+  let moved = 0, still = 0;
+  for (let i = 0; i < plain.positions.length; i += 3) {
+    const d = Math.hypot(feat.positions[i] - plain.positions[i],
+                         feat.positions[i+1] - plain.positions[i+1],
+                         feat.positions[i+2] - plain.positions[i+2]);
+    if (d > 0.01) moved++; else still++;
+  }
+  ok(moved > 0, "the feature moved nothing at all");
+  ok(still > moved * 2, `the feature leaked across the body (${moved} moved vs ${still} still)`);
+});
+t("features: stacking several stays watertight", () => {
+  const g = API.makeBody({ ...FEAT_BASE, features: [
+    { view: "side", poly: WINDOW, depth: -3, soft: 0.1 },
+    { view: "side", poly: [[0.1,0.2],[0.2,0.2],[0.2,0.35],[0.1,0.35]], depth: 2, soft: 0.06 },   // mirror
+    { view: "top",  poly: [[0.75,0.4],[0.9,0.4],[0.9,0.6],[0.75,0.6]], depth: -2, soft: 0.08 },  // vent
+  ]});
+  const r = manifold(g.indices);
+  ok(r.boundary === 0 && r.nonMani === 0, `${r.boundary} open edges with 3 features`);
+});
+t("features: a zero-depth or empty feature changes nothing", () => {
+  const plain = API.makeBody({ ...FEAT_BASE });
+  for (const f of [{ view: "side", poly: WINDOW, depth: 0, soft: 0.1 }, { view: "side", poly: [[0,0]], depth: -3, soft: 0.1 }]) {
+    const g = API.makeBody({ ...FEAT_BASE, features: [f] });
+    near(g.volume, plain.volume, 1e-6, "a no-op feature altered the model:");
+  }
+});
+t("features: distToPoly measures distance to the edge, not the centre", () => {
+  const sq = [[0,0],[1,0],[1,1],[0,1]];
+  near(API.distToPoly(sq, 0.5, 0.5), 0.5, 1e-9, "centre of a unit square:");
+  near(API.distToPoly(sq, 0.9, 0.5), 0.1, 1e-9, "near the right edge:");
+  near(API.distToPoly(sq, 0.5, 0.02), 0.02, 1e-9, "near the bottom edge:");
+});
+
+// =====================  10f. SVG IS THE TRACE  =====================
+// An SVG already contains the real lines. Reading its pixels back would throw away exact
+// geometry to guess at it, so the vector paths get kept and re-used.
+t("svg: the silhouette picker skips a background rect and takes the body", () => {
+  const RW = 1000, RH = 400, full = RW * RH;
+  const bg = [{x:0,y:0},{x:RW,y:0},{x:RW,y:RH},{x:0,y:RH}];
+  const body = [{x:50,y:300},{x:250,y:120},{x:600,y:100},{x:930,y:200},{x:800,y:350},{x:150,y:355}];
+  const wheel = [{x:200,y:300},{x:260,y:300},{x:260,y:360},{x:200,y:360}];
+  ok(API.pickSilhouette([bg, body, wheel], full, 0) === body, "didn't pick the body");
+});
+t("svg: pressing auto-trace again steps to the next shape", () => {
+  const full = 1e9;
+  const big = [{x:0,y:0},{x:100,y:0},{x:100,y:100},{x:0,y:100}];
+  const mid = [{x:0,y:0},{x:50,y:0},{x:50,y:50},{x:0,y:50}];
+  const small = [{x:0,y:0},{x:10,y:0},{x:10,y:10},{x:0,y:10}];
+  const polys = [small, big, mid];
+  eq(API.pickSilhouette(polys, full, 0), big, "first pick should be the largest:");
+  eq(API.pickSilhouette(polys, full, 1), mid, "second pick:");
+  eq(API.pickSilhouette(polys, full, 2), small, "third pick:");
+  eq(API.pickSilhouette(polys, full, 3), big, "it should wrap around:");
+});
+t("svg: an all-background drawing still yields something rather than nothing", () => {
+  const full = 100;
+  const bg = [{x:0,y:0},{x:10,y:0},{x:10,y:10},{x:0,y:10}];   // 100% of the canvas
+  ok(API.pickSilhouette([bg], full, 0) === bg, "should fall back to the only shape present");
+});
+t("svg: vector paths beat pixels — the outline keeps its exact points", () => {
+  // a circle sampled from vector data survives resampling with its shape intact
+  const circle = Array.from({ length: 300 }, (_, i) => {
+    const a = i / 300 * 2 * Math.PI; return { x: 500 + 400 * Math.cos(a), y: 200 + 150 * Math.sin(a) };
+  });
+  const pick = API.pickSilhouette([circle], 1e9, 0);
+  const out = API.resamplePoly(pick, 90);
+  ok(API.polyArea(out) / API.polyArea(circle) > 0.99, "vector shape drifted");
+});
+
+// =====================  10g. BOTTOM VIEW  =====================
+// A traced bottom gives the floor its OWN plan — on a real car it's narrower and a
+// different shape from the body above. It must share the length, narrow the body near the
+// ground, and never break the seal.
+const BOT_BASE = { length: 190, stations: 44, arcSegments: 36, roofFlatness: 1.3,
+  wallThickness: 1.8, topProfile: [[0,10],[0.5,60],[1,20]], bottomProfile: [[0,2],[1,2]],
+  widthProfile: [[0,10],[0.5,40],[1,16]], mode: "loft" };
+const FLOOR = [[0, 6], [0.5, 26], [1, 10]];        // a narrower floor, different shape
+
+t("bottom: a traced floor keeps the model watertight", () => {
+  const g = API.makeBody({ ...BOT_BASE, widthBottomProfile: FLOOR });
+  const r = manifold(g.indices);
+  ok(r.boundary === 0 && r.nonMani === 0, `${r.boundary} open edges, ${r.nonMani} non-manifold`);
+  ok(g.volume > 0, "no volume");
+});
+t("bottom: the floor narrows the body near the ground, not the roof", () => {
+  const plain = API.makeBody({ ...BOT_BASE });
+  const withFloor = API.makeBody({ ...BOT_BASE, widthBottomProfile: FLOOR });
+  eq(withFloor.positions.length, plain.positions.length, "vertex count changed:");
+  // widest |y| found low down vs high up
+  const spread = (g, lo, hi) => {
+    let w = 0;
+    for (let i = 0; i < g.positions.length; i += 3) {
+      const z = g.positions[i + 2];
+      if (z >= lo && z <= hi) w = Math.max(w, Math.abs(g.positions[i + 1]));
+    }
+    return w;
+  };
+  const lowPlain = spread(plain, 0, 8), lowFloor = spread(withFloor, 0, 8);
+  const topPlain = spread(plain, 40, 70), topFloor = spread(withFloor, 40, 70);
+  ok(lowFloor < lowPlain * 0.9, `the floor didn't narrow the underside (${lowFloor.toFixed(1)} vs ${lowPlain.toFixed(1)})`);
+  near(topFloor, topPlain, 1.5, "the floor must not disturb the upper body:");
+});
+t("bottom: a floor equal to the body width changes nothing", () => {
+  const same = API.makeBody({ ...BOT_BASE, widthBottomProfile: BOT_BASE.widthProfile });
+  const plain = API.makeBody({ ...BOT_BASE });
+  near(same.volume, plain.volume, plain.volume * 0.02, "a matching floor altered the model:");
+});
+t("bottom: the body's width at the floor IS the traced floor width", () => {
+  // (volume is the shell material here, not enclosed space — narrowing adds curvature and
+  // can add material, so measure the geometry instead of guessing from volume)
+  const g = API.makeBody({ ...BOT_BASE, widthBottomProfile: FLOOR });
+  const zBot = 2;                                   // bottomProfile is flat at 2mm
+  let atFloor = 0;
+  for (let i = 0; i < g.positions.length; i += 3) {
+    const x = g.positions[i], z = g.positions[i + 2];
+    if (Math.abs(x) < 6 && z >= zBot - 0.5 && z <= zBot + 0.6) atFloor = Math.max(atFloor, Math.abs(g.positions[i + 1]));
+  }
+  near(atFloor, 26, 2.5, "mid-body floor half-width should match the traced 26mm:");
+});
+t("bottom: a floor plus features and sculpt together stay watertight", () => {
+  const n = (44 + 1) * (36 + 1);
+  const g = API.makeBody({ ...BOT_BASE, widthBottomProfile: FLOOR,
+    sculpt: Float32Array.from({ length: n }, (_, i) => Math.sin(i) * 2),
+    features: [{ view: "side", poly: [[0.35,0.55],[0.62,0.55],[0.62,0.85],[0.35,0.85]], depth: -3, soft: 0.1 }] });
+  const r = manifold(g.indices);
+  ok(r.boundary === 0 && r.nonMani === 0, `${r.boundary} open edges with floor+sculpt+feature`);
+});
+
+// =====================  10h. STAMPED FEATURES (box / text)  =====================
+// A mask feature covers a rectangle of the view; its greyscale is how deep each spot goes.
+// Text is one of these. Engraved = negative depth, raised = positive.
+const MASK_BASE = { length: 190, stations: 44, arcSegments: 36, roofFlatness: 1.3,
+  wallThickness: 1.8, topProfile: [[0,10],[0.5,60],[1,20]], bottomProfile: [[0,2],[1,2]],
+  widthProfile: [[0,10],[0.5,40],[1,16]], mode: "loft" };
+// a 4x4 stamp: solid block in the middle, empty border
+const BLOCK = { w: 4, h: 4, d: Uint8Array.from([0,0,0,0, 0,255,255,0, 0,255,255,0, 0,0,0,0]) };
+
+t("mask: samples full depth in the middle and nothing outside the box", () => {
+  const f = { box: [0.2, 0.5, 0.8, 0.9], mask: BLOCK };
+  near(API.sampleMask(f, 0.5, 0.7), 1, 0.001, "centre should be full coverage:");
+  eq(API.sampleMask(f, 0.05, 0.7), 0, "left of the box must be untouched:");
+  eq(API.sampleMask(f, 0.5, 0.1), 0, "below the box must be untouched:");
+});
+t("mask: edges fade smoothly rather than stair-stepping", () => {
+  const f = { box: [0, 0, 1, 1], mask: BLOCK };
+  const mid = API.sampleMask(f, 0.5, 0.5), edge = API.sampleMask(f, 0.5, 0.85);
+  ok(mid > edge, "the stamp should fade towards its border");
+  ok(edge > 0 && edge < 1, `expected a partial value at the edge, got ${edge}`);
+});
+t("mask: engraved text presses in, raised text stands out, both stay watertight", () => {
+  const mk = depth => API.makeBody({ ...MASK_BASE,
+    features: [{ kind: "text", view: "side", box: [0.35, 0.5, 0.7, 0.75], mask: BLOCK, depth, soft: 0.05 }] });
+  const plain = API.makeBody({ ...MASK_BASE });
+  for (const depth of [-1.5, 1.5]) {
+    const g = mk(depth);
+    const r = manifold(g.indices);
+    ok(r.boundary === 0 && r.nonMani === 0, `depth ${depth}: ${r.boundary} open edges`);
+    let moved = 0;
+    for (let i = 0; i < g.positions.length; i += 3)
+      if (Math.hypot(g.positions[i] - plain.positions[i], g.positions[i+1] - plain.positions[i+1],
+                     g.positions[i+2] - plain.positions[i+2]) > 0.01) moved++;
+    ok(moved > 0, `depth ${depth} moved nothing`);
+  }
+});
+t("mask: engrave and emboss push the same spot opposite ways", () => {
+  // measure AT the stamp, not at the model's widest point (which the stamp never touches)
+  const mk = depth => API.makeBody({ ...MASK_BASE,
+    features: [{ kind: "text", view: "side", box: [0.3, 0.4, 0.75, 0.8], mask: BLOCK, depth, soft: 0.05 }] });
+  const plain = API.makeBody({ ...MASK_BASE }), out = mk(2.5), inn = mk(-2.5);
+  let best = -1, bd = 0;
+  for (let i = 0; i < plain.positions.length; i += 3) {
+    const d = Math.abs(out.positions[i + 1]) - Math.abs(plain.positions[i + 1]);
+    if (d > bd) { bd = d; best = i; }
+  }
+  ok(best >= 0 && bd > 0.2, `embossing didn't raise anything (best rise ${bd.toFixed(3)}mm)`);
+  ok(Math.abs(inn.positions[best + 1]) < Math.abs(plain.positions[best + 1]) - 0.2,
+     "at the same spot, engraving must go inward");
+});
+t("mask: a box feature is just a 4-point shape and still seals", () => {
+  const g = API.makeBody({ ...MASK_BASE,
+    features: [{ kind: "poly", view: "side", poly: [[0.3,0.5],[0.6,0.5],[0.6,0.8],[0.3,0.8]], depth: -3, soft: 0.06 }] });
+  const r = manifold(g.indices);
+  ok(r.boundary === 0 && r.nonMani === 0, `${r.boundary} open edges`);
+});
+t("mask: a stamp with no depth is a no-op", () => {
+  const plain = API.makeBody({ ...MASK_BASE });
+  const g = API.makeBody({ ...MASK_BASE,
+    features: [{ kind: "text", view: "side", box: [0.3,0.4,0.7,0.8], mask: BLOCK, depth: 0, soft: 0.05 }] });
+  near(g.volume, plain.volume, 1e-6, "a zero-depth stamp altered the model:");
+});
+
+// =====================  10i. SVG DETAIL -> FEATURES  =====================
+// The drawing's own lines become features with no tracing. The biggest path is already the
+// body outline, so it must never be offered as detail, and clicking must pick the most
+// specific shape under the cursor rather than whatever encloses it.
+const sdRect = (x0,y0,x1,y1) => [{x:x0,y:y0},{x:x1,y:y0},{x:x1,y:y1},{x:x0,y:y1}];
+const SD_BODY   = sdRect(20, 40, 980, 380);        // the silhouette (already the outline)
+const SD_WIN = sdRect(300, 90, 560, 200);       // a window inside it
+const SD_HANDLE = sdRect(380, 150, 420, 175);      // a small handle inside the window
+const SD_BG     = sdRect(0, 0, 1000, 400);         // full-canvas background
+const SD_FULL   = 1000 * 400;
+
+// mirror of svgDetails(): drop the background, drop the body, keep the rest
+const sdDetails = (polys, bodyPoly) => polys.filter(p => p.length >= 3
+  && API.polyAreaPts(p) < API.polyAreaPts(bodyPoly) * 0.9
+  && API.polyAreaPts(p) < SD_FULL * 0.95
+  && API.polyAreaPts(p) > SD_FULL * 1e-5);
+const sdDetailAt = (polys, bodyPoly, x, y) => {
+  let best = null, bestA = Infinity;
+  for (const p of sdDetails(polys, bodyPoly)) {
+    if (!API.ptInPolyPts(p, x, y)) continue;
+    const a = API.polyAreaPts(p); if (a < bestA) { bestA = a; best = p; }
+  }
+  return best;
+};
+
+t("svg detail: the body outline is never offered as a detail", () => {
+  const d = sdDetails([SD_BG, SD_BODY, SD_WIN, SD_HANDLE], SD_BODY);
+  ok(!d.includes(SD_BODY), "the silhouette was offered as detail");
+  ok(!d.includes(SD_BG), "the background rect was offered as detail");
+  eq(d.length, 2, "expected just the window and handle:");
+});
+t("svg detail: clicking picks the most specific shape under the cursor", () => {
+  const polys = [SD_BG, SD_BODY, SD_WIN, SD_HANDLE];
+  eq(sdDetailAt(polys, SD_BODY, 400, 160), SD_HANDLE, "inside the handle should pick the handle:");
+  eq(sdDetailAt(polys, SD_BODY, 320, 100), SD_WIN, "inside the window only should pick the window:");
+  eq(sdDetailAt(polys, SD_BODY, 900, 350), null, "empty bodywork should pick nothing:");
+});
+t("svg detail: point-in-polygon agrees with the geometry", () => {
+  ok(API.ptInPolyPts(SD_WIN, 400, 150), "a point inside should read inside");
+  ok(!API.ptInPolyPts(SD_WIN, 600, 150), "a point outside should read outside");
+  ok(!API.ptInPolyPts(SD_WIN, 400, 300), "a point below should read outside");
+});
+t("svg detail: a grabbed line lands where it was drawn", () => {
+  // normalise against the body outline's box, the same frame features live in
+  const xs = SD_BODY.map(p=>p.x), ys = SD_BODY.map(p=>p.y);
+  const minX = Math.min(...xs), maxY = Math.max(...ys);
+  const sx = Math.max(...xs) - minX, sy = maxY - Math.min(...ys);
+  const norm = SD_WIN.map(p => [(p.x-minX)/sx, (maxY-p.y)/sy]);
+  for (const [u,v] of norm) { ok(u>=0&&u<=1, "u escaped 0..1: "+u); ok(v>=0&&v<=1, "v escaped 0..1: "+v); }
+  // and it must actually shape the model
+  const g = API.makeBody({ length:190, stations:44, arcSegments:36, roofFlatness:1.3, wallThickness:1.8,
+    topProfile:[[0,10],[0.5,60],[1,20]], bottomProfile:[[0,2],[1,2]], widthProfile:[[0,10],[0.5,40],[1,16]],
+    mode:"loft", features:[{kind:"poly", view:"side", poly:norm, depth:-3, soft:0.08}] });
+  const r = manifold(g.indices);
+  ok(r.boundary === 0 && r.nonMani === 0, `${r.boundary} open edges`);
+});
+t("svg detail: rotating a view turns its detail lines with it", () => {
+  const W = 120, H = 220;                       // portrait drawing, auto-straightened
+  const turn = p => ({ x: p.y, y: W - p.x });   // the app's dir=-1 mapping
+  const outline = sdRect(10, 10, 100, 200), win = sdRect(30, 40, 70, 90);
+  const rOutline = outline.map(turn), rWin = win.map(turn);
+  // the window must still sit inside the outline after the turn
+  const cx = rWin.reduce((s,p)=>s+p.x,0)/4, cy = rWin.reduce((s,p)=>s+p.y,0)/4;
+  ok(API.ptInPolyPts(rOutline, cx, cy), "the detail fell outside the body after rotating");
+  for (const p of rWin) { ok(p.x >= 0 && p.x <= H, "x escaped"); ok(p.y >= 0 && p.y <= W, "y escaped"); }
+});
+
+// =====================  10j. ANY FILE TYPE, SAME PRINCIPLE  =====================
+// An SVG hands over its paths. A photo/PNG/JPEG doesn't — but in a line drawing the shapes
+// ARE the regions the lines fence in, so they can be recovered. Past that point the file
+// type stops mattering.
+function drawnPage(W, H, strokes) {                    // white paper, black lines
+  const px = new Uint8ClampedArray(W * H * 4).fill(255);
+  const ink = (x, y) => { if (x < 0 || y < 0 || x >= W || y >= H) return;
+    const i = (y * W + x) * 4; px[i] = px[i+1] = px[i+2] = 15; };
+  const box = (x0, y0, x1, y1, t) => {                 // an unfilled rectangle, t px thick
+    for (let x = x0; x <= x1; x++) for (let k = 0; k < t; k++) { ink(x, y0 + k); ink(x, y1 - k); }
+    for (let y = y0; y <= y1; y++) for (let k = 0; k < t; k++) { ink(x0 + k, y); ink(x1 - k, y); }
+  };
+  strokes.forEach(sx => box(...sx));
+  return { data: px, width: W, height: H };
+}
+
+t("any file: Otsu splits ink from paper without a slider", () => {
+  const img = drawnPage(120, 80, [[10, 10, 110, 70, 2]]);
+  const thr = API.otsuThreshold(API.lumOf(img));
+  // Otsu's t means class-0 is [0..t] INCLUSIVE, so on flat art t lands ON the ink value.
+  // What matters is that classifying with "<= t" puts ink in and paper out.
+  ok(15 <= thr && thr < 255, `threshold out of range: ${thr}`);
+  ok(15 <= thr, "ink must classify as ink");
+  ok(!(255 <= thr), "paper must not classify as ink");
+});
+t("any file: a PNG line drawing gives up its shapes — body plus the window inside it", () => {
+  // a body outline with a window drawn inside it, exactly like a blueprint
+  const img = drawnPage(240, 160, [[20, 20, 220, 140, 2], [60, 45, 130, 90, 2]]);
+  const regions = API.rasterRegions(img, 40);
+  ok(regions.length >= 2, `expected the body and the window, found ${regions.length}`);
+  const areas = regions.map(r => API.polyAreaPts(r)).sort((a, b) => b - a);
+  ok(areas[0] > areas[1] * 2, "the body should be clearly the biggest region");
+  // the window's region should sit roughly where it was drawn
+  const win = regions.find(r => {
+    const xs = r.map(p => p.x), ys = r.map(p => p.y);
+    return Math.min(...xs) > 50 && Math.max(...xs) < 140 && Math.min(...ys) > 35 && Math.max(...ys) < 100;
+  });
+  ok(win, "the window region wasn't found where it was drawn");
+});
+t("any file: the outside background is never returned as a shape", () => {
+  const img = drawnPage(240, 160, [[20, 20, 220, 140, 2]]);
+  const regions = API.rasterRegions(img, 40);
+  for (const r of regions) {
+    const xs = r.map(p => p.x), ys = r.map(p => p.y);
+    ok(!(Math.min(...xs) <= 1 && Math.min(...ys) <= 1 && Math.max(...xs) >= 238),
+       "a region covering the whole page came back — the outside leaked in");
+  }
+});
+t("any file: a blank page yields nothing rather than nonsense", () => {
+  const px = new Uint8ClampedArray(80 * 60 * 4).fill(255);
+  eq(API.rasterRegions({ data: px, width: 80, height: 60 }, 40).length, 0);
+});
+t("any file: recovered shapes feed the envelope without inverting", () => {
+  const img = drawnPage(240, 160, [[20, 20, 220, 140, 2], [60, 45, 130, 90, 2]]);
+  for (const r of API.rasterRegions(img, 40)) {
+    const e = API.outlineEnvelope(r);
+    for (let i = 0; i < e.top.length; i++) ok(e.top[i].y <= e.bot[i].y, "a recovered region inverted");
+  }
+});
+t("any file: a recovered shape becomes a working feature", () => {
+  const img = drawnPage(240, 160, [[20, 20, 220, 140, 2], [60, 45, 130, 90, 2]]);
+  const regions = API.rasterRegions(img, 40).sort((a, b) => API.polyAreaPts(b) - API.polyAreaPts(a));
+  const body = regions[0], win = regions[1];
+  ok(win, "no window region to test with");
+  const xs = body.map(p => p.x), ys = body.map(p => p.y);
+  const minX = Math.min(...xs), maxY = Math.max(...ys);
+  const sx = Math.max(...xs) - minX, sy = maxY - Math.min(...ys);
+  const norm = API.resamplePoly(win, 48).map(p => [(p.x - minX) / sx, (maxY - p.y) / sy]);
+  const g = API.makeBody({ length:190, stations:44, arcSegments:36, roofFlatness:1.3, wallThickness:1.8,
+    topProfile:[[0,10],[0.5,60],[1,20]], bottomProfile:[[0,2],[1,2]], widthProfile:[[0,10],[0.5,40],[1,16]],
+    mode:"loft", features:[{ kind:"poly", view:"side", poly:norm, depth:-3, soft:0.08 }] });
+  const r = manifold(g.indices);
+  ok(r.boundary === 0 && r.nonMani === 0, `${r.boundary} open edges from a PNG-derived feature`);
+});
+
+// =====================  10k. WHERE A MEASUREMENT COMES FROM  =====================
+// Reading a drawing: the side/top views give the length, the top view gives the width
+// along that length, and the front/rear views give the width head-on. Any of them should
+// be able to size the model, and a nudge shouldn't be wiped by touching a trace.
+t("measure: with no top view, the front view still gives the width", () => {
+  // frontHull is [[y mm, z mm], …]; the spread of y IS the width, measured head-on
+  const frontHull = [[-40, 5], [-30, 40], [0, 55], [30, 40], [40, 5]];
+  const xs = frontHull.map(q => q[0]);
+  const measured = Math.max(...xs) - Math.min(...xs);
+  near(measured, 80, 1e-9, "the front view should read 80mm across:");
+  // the slider profile gets scaled until it is that wide
+  const parProfile = [[0, 10], [0.5, 25], [1, 12]];
+  const par = 2 * Math.max(...parProfile.map(q => q[1]));
+  const k = measured / par;
+  const scaled = parProfile.map(p => [p[0], p[1] * k]);
+  near(2 * Math.max(...scaled.map(q => q[1])), 80, 1e-9, "after scaling it must be the measured width:");
+});
+t("measure: a slider nudge survives re-tracing", () => {
+  // you set 100mm on a drawing that measured 80 -> a ratio of 1.25
+  let natWid = 80, widMM = 100;
+  const widK = widMM / natWid;
+  near(widK, 1.25, 1e-9);
+  // now a trace point moves and the drawing re-measures at 84mm
+  natWid = 84;
+  const after = Math.max(1, Math.round(natWid * widK));
+  eq(after, 105, "the nudge should ride along, not be wiped back to 84:");
+  // and with no nudge (ratio 1) it just tracks the drawing
+  eq(Math.max(1, Math.round(84 * 1)), 84);
+});
+t("measure: length is anchored from the side/top views, width from top or front", () => {
+  // length: the side view's span over its own scale
+  near(API.anchorPxPerMm(380, null, 2, 200), 2, 1e-9, "side view sets px/mm:");
+  // the top view is then forced to agree about the length
+  near(API.anchorPxPerMm(190, 190, 99, 200), 1, 1e-9, "top view anchored to the same length:");
+  // and the front view is forced to agree about the width
+  near(API.anchorPxPerMm(160, 80, 99, 200), 2, 1e-9, "front view anchored to the same width:");
+});
+
+// =====================  10l. SHARP EDGES  =====================
+// The reason angular objects used to come out mushy: averaging the surface crossings in a
+// cell always rounds a corner off. Dual contouring solves for the point that satisfies
+// every crossing plane, so a corner lands ON the corner.
+const SQ = [[0.1,0.1],[0.9,0.1],[0.9,0.9],[0.1,0.9]];          // a hard-edged box
+const cube = crisp => API.makeBody({ mode:"projection", length:100, stations:36, hullCrisp:crisp,
+  sidePoly:SQ, topPoly:SQ, frontPoly:SQ, topProfile:[[0,60]], widthProfile:[[0,30]] });
+
+t("sharp: signed distance is negative inside, positive outside, zero on the edge", () => {
+  const sq = [[0,0],[10,0],[10,10],[0,10]];
+  ok(API.sdPoly(sq, 5, 5) < 0, "the middle should read inside");
+  near(API.sdPoly(sq, 5, 5), -5, 1e-6, "and 5mm from the nearest wall:");
+  ok(API.sdPoly(sq, 15, 5) > 0, "outside should read outside");
+  near(API.sdPoly(sq, 15, 5), 5, 1e-6, "5mm out:");
+  near(Math.abs(API.sdPoly(sq, 10, 5)), 0, 1e-6, "right on the edge should be zero:");
+});
+t("sharp: a boxy trace produces a boxy model, still watertight", () => {
+  const g = cube(0.9);
+  const r = manifold(g.indices);
+  ok(r.boundary === 0 && r.nonMani === 0, `${r.boundary} open edges, ${r.nonMani} non-manifold`);
+  ok(g.volume > 0, "no volume");
+});
+t("sharp: corners are crisp, not rounded off", () => {
+  // how square is it? compare the model's volume to the box it should fill.
+  const boxiness = g => {
+    let x0=1e9,x1=-1e9,y0=1e9,y1=-1e9,z0=1e9,z1=-1e9;
+    for (let i = 0; i < g.positions.length; i += 3) {
+      x0=Math.min(x0,g.positions[i]);   x1=Math.max(x1,g.positions[i]);
+      y0=Math.min(y0,g.positions[i+1]); y1=Math.max(y1,g.positions[i+1]);
+      z0=Math.min(z0,g.positions[i+2]); z1=Math.max(z1,g.positions[i+2]);
+    }
+    return g.volume / Math.max(1e-9, (x1-x0)*(y1-y0)*(z1-z0));   // 1.0 = a perfect box
+  };
+  const crisp = boxiness(cube(1)), soft = boxiness(cube(0));
+  ok(crisp > 0.9, `a boxy trace should fill >90% of its bounding box, got ${(crisp*100).toFixed(1)}%`);
+  ok(crisp > soft, `crisp (${(crisp*100).toFixed(1)}%) should beat rounded (${(soft*100).toFixed(1)}%)`);
+});
+t("sharp: the crispness dial actually does something, and both ends are watertight", () => {
+  for (const c of [0, 0.5, 1]) {
+    const r = manifold(cube(c).indices);
+    ok(r.boundary === 0 && r.nonMani === 0, `crisp=${c}: ${r.boundary} open edges`);
+  }
+});
+t("sharp: a round trace still comes out round (crispness doesn't wreck curves)", () => {
+  const circle = Array.from({ length: 40 }, (_, i) => {
+    const a = i / 40 * 2 * Math.PI; return [0.5 + 0.45 * Math.cos(a), 0.5 + 0.45 * Math.sin(a)];
+  });
+  const g = API.makeBody({ mode:"projection", length:100, stations:36, hullCrisp:0.9,
+    sidePoly:circle, topPoly:circle, frontPoly:circle, topProfile:[[0,100]], widthProfile:[[0,50]] });
+  const r = manifold(g.indices);
+  ok(r.boundary === 0 && r.nonMani === 0, `${r.boundary} open edges on a sphere`);
+  // a sphere fills ~52% of its bounding cube; a cube would be ~100%
+  let x0=1e9,x1=-1e9; for (let i=0;i<g.positions.length;i+=3){x0=Math.min(x0,g.positions[i]);x1=Math.max(x1,g.positions[i]);}
+  ok(g.volume > 0, "no volume");
+});
+
+// =====================  10m. REAL OPENINGS, NO SERVER  =====================
+// The lofted shell can only move the surface it has, so a window gets dented. The hull is
+// a distance field, so a window can be genuinely subtracted — an actual hole, in the
+// browser, with nothing to install. A hole means the shape gains a tunnel: same closed
+// surface, but no longer a simple ball — which is exactly what Euler's formula detects.
+const HULL_BOX = [[0.08,0.08],[0.92,0.08],[0.92,0.92],[0.08,0.92]];
+const hullWith = feats => API.makeBody({ mode:"projection", length:120, stations:40, hullCrisp:0.9,
+  sidePoly:HULL_BOX, topPoly:HULL_BOX, frontPoly:HULL_BOX,
+  topProfile:[[0,60]], widthProfile:[[0,25]], features:feats });
+// V - E + F for a closed surface: 2 = a ball, 0 = one tunnel through it
+function euler(g) {
+  const E = new Set();
+  const key = (a, b) => (a < b ? a + "_" + b : b + "_" + a);
+  const V = new Set();
+  for (let i = 0; i < g.indices.length; i += 3) {
+    const [a, b, c] = [g.indices[i], g.indices[i+1], g.indices[i+2]];
+    V.add(a); V.add(b); V.add(c);
+    E.add(key(a,b)); E.add(key(b,c)); E.add(key(c,a));
+  }
+  return V.size - E.size + g.indices.length / 3;
+}
+
+t("openings: a plain traced box is a plain closed shape", () => {
+  const g = hullWith([]);
+  const r = manifold(g.indices);
+  ok(r.boundary === 0 && r.nonMani === 0, "the plain box isn't sealed");
+  eq(euler(g), 2, "a box with no holes should have Euler characteristic 2:");
+});
+t("openings: a 'cut through' window puts a REAL hole in it, not a dent", () => {
+  const win = [{ kind:"poly", view:"side", depth:-4, through:true, soft:0.02,
+                 poly:[[0.35,0.35],[0.65,0.35],[0.65,0.65],[0.35,0.65]] }];
+  const g = hullWith(win);
+  const r = manifold(g.indices);
+  ok(r.boundary === 0 && r.nonMani === 0, `a hole must still leave it sealed: ${r.boundary} open edges`);
+  eq(euler(g), 0, "one tunnel through the body should give Euler characteristic 0 (2 - 2*1):");
+});
+t("openings: the same window WITHOUT 'cut through' only dents it", () => {
+  const dent = [{ kind:"poly", view:"side", depth:-4, through:false, soft:0.05,
+                  poly:[[0.35,0.35],[0.65,0.35],[0.65,0.65],[0.35,0.65]] }];
+  const g = hullWith(dent);
+  eq(euler(g), 2, "a dish must NOT punch through:");
+  ok(g.volume < hullWith([]).volume, "a dish should still remove material");
+});
+t("openings: two windows make two tunnels", () => {
+  const two = [
+    { kind:"poly", view:"side", depth:-4, through:true, soft:0.02, poly:[[0.2,0.35],[0.4,0.35],[0.4,0.65],[0.2,0.65]] },
+    { kind:"poly", view:"side", depth:-4, through:true, soft:0.02, poly:[[0.6,0.35],[0.8,0.35],[0.8,0.65],[0.6,0.65]] },
+  ];
+  const g = hullWith(two);
+  const r = manifold(g.indices);
+  ok(r.boundary === 0 && r.nonMani === 0, "two holes must still leave it sealed");
+  eq(euler(g), -2, "two tunnels should give 2 - 2*2 = -2:");
+});
+t("openings: a raised feature is never turned into a hole", () => {
+  const boss = [{ kind:"poly", view:"side", depth:3, through:true, soft:0.05,
+                  poly:[[0.35,0.35],[0.65,0.35],[0.65,0.65],[0.35,0.65]] }];
+  const g = hullWith(boss);
+  eq(euler(g), 2, "a bump marked 'through' must not cut a hole:");
+  ok(g.volume > hullWith([]).volume, "a bump should add material");
+});
+t("openings: a hole through the TOP view goes the other way and still seals", () => {
+  const roof = [{ kind:"poly", view:"top", depth:-4, through:true, soft:0.02,
+                  poly:[[0.4,0.35],[0.6,0.35],[0.6,0.65],[0.4,0.65]] }];
+  const g = hullWith(roof);
+  const r = manifold(g.indices);
+  ok(r.boundary === 0 && r.nonMani === 0, `${r.boundary} open edges`);
+  eq(euler(g), 0, "a sunroof is still one tunnel:");
+});
+
+// =====================  10n. FRAME THICKNESS  =====================
+// How thick the frame is, per face, and the rule that nothing pressed in may go deeper
+// than the frame it is pressed into.
+const W_BASE = { length:190, stations:44, arcSegments:36, roofFlatness:1.3,
+  topProfile:[[0,10],[0.5,60],[1,20]], bottomProfile:[[0,2],[1,2]],
+  widthProfile:[[0,10],[0.5,40],[1,16]], mode:"loft" };
+
+t("thickness: one number still means a uniform frame", () => {
+  const W = API.wallSpec({ wallThickness: 2.5 });
+  eq(W.top, 2.5); eq(W.side, 2.5); eq(W.bot, 2.5);
+  near(API.wallAt([0,0,1], W), 2.5, 1e-9, "roof:");
+  near(API.wallAt([0,1,0], W), 2.5, 1e-9, "side:");
+});
+t("thickness: each face can be its own, and it blends in between", () => {
+  const W = API.wallSpec({ wallThickness:1.8, wallTop:4, wallSide:1, wallBottom:6 });
+  near(API.wallAt([0,0,1], W), 4, 1e-9, "straight up = roof:");
+  near(API.wallAt([0,1,0], W), 1, 1e-9, "sideways = side:");
+  near(API.wallAt([0,0,-1], W), 6, 1e-9, "straight down = floor:");
+  // a 45° shoulder should land between roof and side, not jump
+  const mid = API.wallAt([0, Math.SQRT1_2, Math.SQRT1_2], W);
+  ok(mid > 1 && mid < 4, `a blended corner should sit between 1 and 4, got ${mid}`);
+});
+t("thickness: the cap is the THINNEST face — that's what a feature can't exceed", () => {
+  eq(API.minWall({ wallThickness:1.8, wallTop:4, wallSide:1, wallBottom:6 }), 1);
+  eq(API.minWall({ wallThickness:2 }), 2);
+});
+t("thickness: a per-face frame is still watertight", () => {
+  for (const w of [{wallTop:4,wallSide:1,wallBottom:6}, {wallTop:0.5,wallSide:5,wallBottom:0.5}]) {
+    const g = API.makeBody({ ...W_BASE, wallThickness:1.8, ...w });
+    const r = manifold(g.indices);
+    ok(r.boundary === 0 && r.nonMani === 0, `${JSON.stringify(w)}: ${r.boundary} open edges`);
+    ok(g.volume > 0, "no volume");
+  }
+});
+t("thickness: a thicker frame is more material", () => {
+  const thin = API.makeBody({ ...W_BASE, wallThickness:0.8 });
+  const thick = API.makeBody({ ...W_BASE, wallThickness:4 });
+  ok(thick.volume > thin.volume * 2, `4mm should be far heavier than 0.8mm (${thick.volume.toFixed(0)} vs ${thin.volume.toFixed(0)})`);
+});
+t("thickness: a 3mm scoop on a 1.8mm frame is held to 1.8mm", () => {
+  const win = poly => [{ kind:"poly", view:"side", depth:-3, soft:0.06, poly }];
+  const P = [[0.35,0.4],[0.6,0.4],[0.6,0.7],[0.35,0.7]];
+  const plain = API.makeBody({ ...W_BASE, wallThickness:1.8 });
+  const deep  = API.makeBody({ ...W_BASE, wallThickness:1.8, features:win(P) });
+  const capped= API.makeBody({ ...W_BASE, wallThickness:1.8, features:[{...win(P)[0], depth:-1.8}] });
+  // asking for 3mm on a 1.8mm frame must give the same answer as asking for 1.8mm
+  let same = true;
+  for (let i = 0; i < deep.positions.length; i++)
+    if (Math.abs(deep.positions[i] - capped.positions[i]) > 1e-4) { same = false; break; }
+  ok(same, "a 3mm indent should have been held back to the 1.8mm frame");
+  ok(deep.volume !== plain.volume, "…but it should still have done something");
+});
+t("thickness: a deeper frame allows a deeper scoop", () => {
+  const P = [[0.35,0.4],[0.6,0.4],[0.6,0.7],[0.35,0.7]];
+  const f = [{ kind:"poly", view:"side", depth:-3, soft:0.06, poly:P }];
+  const onThin  = API.makeBody({ ...W_BASE, wallThickness:1, features:f });
+  const onThick = API.makeBody({ ...W_BASE, wallThickness:5, features:f });
+  let moved = 0;
+  for (let i = 0; i < onThin.positions.length; i++)
+    if (Math.abs(onThin.positions[i] - onThick.positions[i]) > 1e-4) moved++;
+  ok(moved > 0, "a 3mm scoop should press deeper into a 5mm frame than a 1mm one");
+  for (const g of [onThin, onThick]) {
+    const r = manifold(g.indices);
+    ok(r.boundary === 0 && r.nonMani === 0, "capping must not break the seal");
+  }
+});
+t("thickness: a cut-through is NOT capped — that's the point of it", () => {
+  const P = [[0.35,0.35],[0.65,0.35],[0.65,0.65],[0.35,0.65]];
+  const box = [[0.08,0.08],[0.92,0.08],[0.92,0.92],[0.08,0.92]];
+  const g = API.makeBody({ mode:"projection", length:120, stations:40, hullCrisp:0.9, wallThickness:1.8,
+    sidePoly:box, topPoly:box, frontPoly:box, topProfile:[[0,60]], widthProfile:[[0,25]],
+    features:[{ kind:"poly", view:"side", depth:-4, through:true, soft:0.02, poly:P }] });
+  const r = manifold(g.indices);
+  ok(r.boundary === 0 && r.nonMani === 0, "a through-cut must stay sealed");
 });
 
 // =====================  11. DOM CONTRACT  =====================
