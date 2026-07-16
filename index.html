@@ -208,7 +208,7 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
   #featPanel .fp-x{cursor:pointer;opacity:.6;font-size:14px;line-height:1}
   #featPanel .fp-x:hover{opacity:1}
   #featPanel .fp-body{padding:9px}
-  #railBtn{display:none;font-size:16px;padding:5px 9px;margin-right:2px}
+  #railBtn{display:none;width:auto;flex:0 0 auto;font-size:16px;padding:6px 10px;margin:0}
   #railScrim{display:none}
 
   /* =====================================================================
@@ -220,7 +220,8 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
      thumb can reach it. Touch targets go up to ~38px throughout.
      ===================================================================== */
   @media (max-width: 860px){
-    header{padding:6px 8px;gap:6px}
+    header{height:auto;min-height:48px;padding:6px 8px;gap:7px;flex-wrap:nowrap}
+    header > .btn{width:auto;flex:0 0 auto}
     header h1.disp{font-size:15px}
     header .sub{display:none}
     .logo{width:22px;height:22px}
@@ -248,11 +249,12 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
     .tabs.subtabs{padding:4px 8px 0}
     .tabs.subtabs .tab{padding:6px 10px}
 
-    /* toolbars scroll sideways rather than stacking six rows deep */
-    .vp-bar,.imp-bar{flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;
-      -webkit-overflow-scrolling:touch;scrollbar-width:none;padding:6px 8px}
-    .vp-bar::-webkit-scrollbar,.imp-bar::-webkit-scrollbar{display:none}
-    .vp-bar > *,.imp-bar > *{flex:0 0 auto}
+    /* toolbars scroll sideways rather than stacking into a wall of rows */
+    .trace-bar{flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;
+      -webkit-overflow-scrolling:touch;scrollbar-width:none;padding:7px 8px;gap:6px}
+    .trace-bar::-webkit-scrollbar{display:none}
+    .trace-bar > *{flex:0 0 auto}
+    .trace-bar .btn{width:auto}
     .btn{min-height:34px;padding:7px 10px}
     .seg button{min-height:32px;padding:6px 10px}
     #viewSeg{width:auto}
@@ -272,6 +274,9 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
     .vp-tools{top:6px;right:6px;gap:4px}
     .vp-tools .btn{min-height:30px;padding:5px 8px;font-size:10px}
 
+    .drop-note .box{padding:16px 14px;margin:0 10px;border-radius:10px}
+    .drop-note .box b{font-size:13px;margin-bottom:4px}
+    .drop-note .box span{font-size:11px;line-height:1.5;display:block}
     #pageStrip .pg{width:76px}
     .lib-grid{grid-template-columns:1fr 1fr}
     .modal .card{width:min(94vw,380px)}
