@@ -1088,6 +1088,38 @@ t("css: every selector targets something that actually exists", () => {
   });
   ok(phantom.length === 0, "these style rules match nothing and do nothing: " + phantom.join(", "));
 });
+t("css: no inline style silently beats the phone layout", () => {
+  // An inline style="" wins over any stylesheet rule, media query included. So a phone rule
+  // can be perfectly written, target a real element, and still do nothing — which is exactly
+  // how the import toolbar kept wrapping into four rows on a 390px screen while every test
+  // passed. If the phone layout sets a property, no element it targets may set that same
+  // property inline (unless the rule shouts !important).
+  const css = html.slice(html.indexOf("<style>"), html.indexOf("</style>"));
+  const mq = css.slice(css.indexOf("@media (max-width: 860px)"));
+  const clashes = [];
+  // every "#id{...}" rule inside the phone layout
+  for (const m of mq.matchAll(/#([A-Za-z][\w-]*)\s*\{([^}]*)\}/g)) {
+    const [, id, decls] = m;
+    const el = html.match(new RegExp('id="' + id + '"[^>]*'));
+    if (!el) continue;
+    const inline = (el[0].match(/style="([^"]*)"/) || [])[1];
+    if (!inline) continue;
+    for (const d of decls.split(";")) {
+      const prop = (d.split(":")[0] || "").trim();
+      if (!prop) continue;
+      if (new RegExp("(^|;)\\s*" + prop + "\\s*:").test(inline) && !/!important/.test(d))
+        clashes.push(`#${id} { ${prop} } is overridden by its own inline style`);
+    }
+  }
+  ok(clashes.length === 0, clashes.join("; "));
+});
+t("css: layout that must change on a phone isn't nailed down inline", () => {
+  // flex-wrap on a toolbar decides whether a phone gets a scrolling strip or a wall of
+  // rows, so it belongs in CSS where a media query can reach it
+  ok(!/class="trace-bar"[^>]*style="[^"]*flex-wrap/.test(html),
+     "the toolbar's flex-wrap is pinned inline; the phone layout can't override it");
+  ok(html.includes('class="trace-bar wrap"'), "use a class for wrapping so it stays overridable");
+});
 t("css: the mobile rules target the real toolbar", () => {
   const css = html.slice(html.indexOf("<style>"), html.indexOf("</style>"));
   const mq = css.slice(css.indexOf("@media (max-width: 860px)"));
