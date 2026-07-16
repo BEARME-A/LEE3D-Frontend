@@ -365,7 +365,38 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
           <button data-m="loft" class="on">Smooth</button>
           <button data-m="projection">Follow my drawing</button>
         </div>
-        <div class="hint" id="modeHint"><b>Smooth</b> &mdash; a flowing, rounded body. Best for cars, boats, anything streamlined.<br><b>Follow my drawing</b> &mdash; carves out exactly what your outlines say, corners and all. Use this when Smooth will not hold the shape.</div>
+        <div class="hint" id="modeHint"><b>Smooth</b> &mdash; a flowing, rounded body. Best for cars, boats, anything streamlined. Features here are dents and bumps.<br><b>Follow my drawing</b> &mdash; carves out exactly what your outlines say, corners and all. Use it for angular things, and it's the only mode that can <b>cut a window clean through</b>.</div>
+        <div class="field" id="crispField"><label>Edge crispness <span class="val"><span id="vCrisp">0.90</span></span></label><input type="range" id="sCrisp" min="0" max="1" value="0.9" step="0.05"></div>
+        <div class="hint">Only used by <b>Follow my drawing</b>. High = hard, machined corners. Low = softened.</div>
+      </div>
+    </details>
+
+    <details class="sec">
+      <summary><span class="idx">5</span><span class="ttl">Features <span style="opacity:.55;font-weight:400">· windows, mirrors…</span></span><span class="chev">▶</span></summary>
+      <div class="sec-body">
+        <div class="hint">Add detail on top of the outline — a window, a scoop, a vent, a badge. Pick a view in <b>Reference &amp; Trace</b>, choose a tool, then <b>+ New feature</b>.<br>
+          <b>Shape</b> — click around anything, then Finish. <b>Box</b> — click two corners. <b>Text</b> — type the wording, click two corners to place it.<br>
+          <b>Depth</b> below: <b>negative</b> presses in (indent / engrave), <b>positive</b> pops out (raise / emboss).</div>
+        <div class="seg" id="featTool" style="width:100%;margin-bottom:6px">
+          <button data-t="poly" class="on">Shape</button>
+          <button data-t="box">Box</button>
+          <button data-t="text">Text</button>
+          <button data-t="svg">From drawing</button>
+        </div>
+        <div id="featSvgRow" style="display:none;margin-bottom:6px">
+          <div class="hint" style="margin:0 0 5px">The shapes already in your drawing are outlined in yellow — <b>click one</b> to take it. Works for <b>SVG</b> (exact vector lines) and for <b>photos / PNG / JPEG</b> (the shapes your lines enclose). No tracing either way.</div>
+          <button class="btn ghost" id="featSvgAll" style="width:100%">⚡ Take every detail on this view</button>
+        </div>
+        <div id="featTextRow" style="display:none;margin-bottom:6px">
+          <input id="featText" class="proj-name mono" style="width:100%;font-size:12px" placeholder="type the wording…" value="LEE3D">
+        </div>
+        <div class="btn-row" style="margin-top:6px">
+          <button class="btn primary" id="featNew">+ New feature</button>
+          <button class="btn ghost" id="featDone" style="display:none">✓ Finish</button>
+          <button class="btn ghost" id="featCancel" style="display:none">✕ Cancel</button>
+        </div>
+        <div id="featList" class="ws-list" style="margin-top:7px"></div>
+        <div class="hint" style="margin-top:6px">Pressed in/out of the surface, so the model stays sealed. It can dish a window in or bulge a mirror out — it can't cut a hole clean through yet.</div>
       </div>
     </details>
 
@@ -373,7 +404,15 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
       <summary><span class="idx">⚙</span><span class="ttl">Advanced <span style="opacity:.55;font-weight:400">· detail &amp; thickness</span></span><span class="chev">▶</span></summary>
       <div class="sec-body">
         <div class="hint">Only touch these if you want to. Higher detail = smoother but slower.</div>
-        <div class="field"><label>Shell thickness <span class="val"><span id="vWall">1.8</span> mm</span></label><input type="range" id="sWall" min="0.6" max="5.0" value="1.8" step="0.1"></div>
+        <div class="field"><label>Frame thickness <span class="val"><span id="vWall">1.8</span> mm</span></label><input type="range" id="sWall" min="0.4" max="12" value="1.8" step="0.1"></div>
+        <div class="hint" style="margin:-2px 0 4px">How thick the frame is. Nothing pressed in is allowed to go deeper than this — a 1&nbsp;mm scoop needs more than 1&nbsp;mm of frame. Tick <b>cut clean through</b> on a feature when you actually want a hole.</div>
+        <label style="display:flex;align-items:center;gap:7px;font-size:11px;margin:2px 0 6px;cursor:pointer"><input type="checkbox" id="wallPerFace"> Different thickness per face</label>
+        <div id="wallFaces" style="display:none">
+          <div class="field"><label>Top / roof <span class="val"><span id="vWallTop">1.8</span> mm</span></label><input type="range" id="sWallTop" min="0.4" max="12" value="1.8" step="0.1"></div>
+          <div class="field"><label>Sides <span class="val"><span id="vWallSide">1.8</span> mm</span></label><input type="range" id="sWallSide" min="0.4" max="12" value="1.8" step="0.1"></div>
+          <div class="field"><label>Bottom / floor <span class="val"><span id="vWallBot">1.8</span> mm</span></label><input type="range" id="sWallBot" min="0.4" max="12" value="1.8" step="0.1"></div>
+          <div class="hint" style="margin-top:2px">Blends where faces meet, so there's no seam. The <b>thinnest</b> face is what limits how deep a feature can press.</div>
+        </div>
         <div class="field"><label>Detail &mdash; along the length <span class="val"><span id="vSt">72</span></span></label><input type="range" id="sSt" min="16" max="160" value="72" step="1"></div>
         <div class="field"><label>Detail &mdash; around the shape <span class="val"><span id="vSeg">56</span></span></label><input type="range" id="sSeg" min="12" max="120" value="56" step="1"></div>
         <label style="display:flex;align-items:center;gap:8px;font-size:12px;margin-top:6px;cursor:pointer"><input type="checkbox" id="sepBottom" checked> Bottom as a separate plate <span style="opacity:.55">· keeps the shell hollow</span></label>
@@ -381,7 +420,7 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
     </details>
 
     <details class="sec">
-      <summary><span class="idx">5</span><span class="ttl">Cross-section <span style="opacity:.55;font-weight:400">· the shape end-on</span></span><span class="chev">▶</span></summary>
+      <summary><span class="idx">6</span><span class="ttl">Cross-section <span style="opacity:.55;font-weight:400">· the shape end-on</span></span><span class="chev">▶</span></summary>
       <div class="sec-body">
         <div class="hint">A cross-section is pinned at each cut; the model morphs between them. Front &amp; rear views become cuts automatically. <b>Drag the dots to reshape</b> the selected cut — this edits the 3D model live.</div>
         <div class="hint" id="secMode">From: <span class="tag">the sliders</span> — trace a <b>front view</b> for the real end-on shape.</div>
@@ -398,7 +437,7 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
     </details>
 
     <details class="sec" open>
-      <summary><span class="idx">6</span><span class="ttl">Save &amp; export</span><span class="chev">▶</span></summary>
+      <summary><span class="idx">7</span><span class="ttl">Save &amp; export</span><span class="chev">▶</span></summary>
       <div class="sec-body">
         <button class="btn primary" id="bSaveAll" style="width:100%;font-size:13px;padding:9px">💾 Save this model</button>
         <div class="hint" id="saveWhere" style="margin-top:5px">Keeps it on this device and in the shared cloud, and it appears in the <b>Workshop</b>. Saving again with the same name updates it instead of making a copy.</div>
@@ -417,9 +456,9 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
         </div>
         <button class="btn" id="saveLib">⌬ Save profile to library</button>
         <div class="btn-row">
-          <button class="btn" id="buildServer">⚙ Build on server (STEP)</button>
+          <button class="btn primary" id="buildServer">◈ Build exact (STEP)</button>
         </div>
-        <div class="hint">Optional extras that need the backend service running. <b>Build on server</b> makes a STEP file for proper CAD tools. Without a backend these just download the file locally instead — nothing breaks.</div>
+        <div class="hint">Everything on this page works without a backend, <b>including real cut-through openings</b> (use <b>Follow my drawing</b>). <b>Build exact</b> is an optional extra: it rebuilds the same outlines with a CAD kernel (OpenCascade) with no grid at all — corners exact at any zoom — and hands back a <b>STEP</b> file you can keep editing in any CAD package.</div>
       </div>
     </details>
 
@@ -444,11 +483,12 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
     <details class="sec">
       <summary><span class="idx">📚</span><span class="ttl">Shared library</span><span class="chev">▶</span></summary>
       <div class="sec-body">
-        <div class="hint">Models shared by everyone on the project. They also show up as pictures in the <b>Workshop</b> tab — click one to use it.</div>
+        <div class="hint">Models shared by everyone on the project. They also show up as pictures in the <b>Workshop</b> tab — click one to use it. <b>Publish</b> adds yours to the shared set (it goes through the backend, so there is nothing to set up).</div>
         <div class="btn-row" style="margin-top:6px">
           <button class="btn" id="ghRefresh">⟳ Refresh</button>
           <span class="hint" id="ghState" style="margin:0 0 0 2px">—</span>
         </div>
+        <button class="btn" id="ghPublish" style="width:100%;margin-top:6px">⬆ Publish this model to the shared library</button>
         <div id="ghList" class="ws-list" style="margin-top:6px"></div>
         <details id="ghWrite" style="margin-top:10px;border-top:1px solid var(--line-2);padding-top:8px">
           <summary style="cursor:pointer;font-size:11px;color:var(--ink-dim);list-style:none">⚙ Publishing tools <span style="opacity:.6">· for the repo owner</span></summary>
@@ -527,8 +567,9 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
         </div>
         <div class="field"><label>Brush size <span class="val"><span id="vScR">14</span> mm</span></label><input type="range" id="scR" min="3" max="80" value="14"></div>
         <div class="field"><label>Strength <span class="val"><span id="vScS">1.4</span></span></label><input type="range" id="scS" min="0.1" max="6" value="1.4" step="0.1"></div>
+        <label style="display:flex;align-items:center;gap:7px;font-size:11px;margin:2px 0 7px;cursor:pointer"><input type="checkbox" id="scSym" checked> Symmetry <span style="opacity:.55">· both sides at once</span></label>
         <button class="btn ghost" id="scClear" style="width:100%">⌫ Clear sculpt</button>
-        <div class="hint" style="margin-top:6px">Left-drag on the model to paint. Right-drag orbits, scroll zooms. Stays watertight.</div>
+        <div class="hint" style="margin-top:6px">Drag on the model to paint. The ring shows your brush. Right-drag orbits · scroll zooms · <b>[</b> and <b>]</b> resize the brush. Always stays sealed.</div>
       </div>
       <div class="vp-overlay">
         <div><span class="k">drag</span> orbit · <span class="k">scroll</span> zoom · <span class="k">right-drag</span> pan</div>
@@ -540,9 +581,10 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
     <div class="view hide" id="viewTrace">
       <div class="trace-wrap">
         <div class="trace-bar">
-          <div class="seg" id="viewSeg" style="margin:0;width:280px;flex:0 0 auto">
+          <div class="seg" id="viewSeg" style="margin:0;width:340px;flex:0 0 auto">
             <button data-v="side" class="on">Side</button>
             <button data-v="top">Top</button>
+            <button data-v="bottom">Bottom</button>
             <button data-v="front">Front</button>
             <button data-v="rear">Rear</button>
           </div>
@@ -565,7 +607,7 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
           <canvas id="trace"></canvas>
           <div class="drop-note" id="dropNote"><div class="box"><b id="dropTitle">Drop a side-view drawing</b><span id="dropSub">Side view = the profile. Switch views to trace top (width) and front/rear (end cross-sections). Set scale, then trace.</span></div></div>
         </div>
-        <div class="hint" style="padding:6px 12px 0;user-select:none">Drop an <b>SVG</b> here for exact vector lines (no tracing), or trace <b>one closed outline</b> around the silhouette — click points all the way around; it connects automatically (no gaps). Drag a point to move it · right-click to delete · then open 3D Preview.</div>
+        <div class="hint" style="padding:6px 12px 0;user-select:none">Drop an <b>SVG</b> and it traces itself from the real lines — press <b>Auto-trace</b> again to step to the next shape if it grabbed the wrong one. Otherwise trace <b>one closed outline</b> around the silhouette — click points all the way around; it connects automatically (no gaps). Drag a point to move it · right-click to delete · then open 3D Preview.</div>
       </div>
     </div>
 
@@ -713,11 +755,109 @@ function setSourceSection(src,at,prof){
   traced.sections.push({at,prof:resampleSection(prof),src});
   sortSections();
 }
+/* =========================================================================
+   FEATURES — a shape traced in a view (window, mirror, tailpipe…) pressed into
+   or out of the body. It reuses the tracer's mapping: the region is stored in the
+   same 0..1 frame as that view's body outline, then projected onto the model along
+   that view's axis. Displacement only — both shells move together, so the model
+   stays watertight. (A real cut-through needs CSG and is not this.)
+   ========================================================================= */
+function distToPoly(poly,x,y){
+  let best=Infinity;
+  for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+    const ax=poly[j][0],ay=poly[j][1],bx=poly[i][0],by=poly[i][1];
+    const dx=bx-ax,dy=by-ay, L2=dx*dx+dy*dy;
+    let t=L2?((x-ax)*dx+(y-ay)*dy)/L2:0; t=t<0?0:t>1?1:t;
+    const px=ax+dx*t-x, py=ay+dy*t-y, d=Math.hypot(px,py);
+    if(d<best)best=d;
+  }
+  return best;
+}
+// where a vertex lands in a given view's 0..1 frame
+function viewUV(view,x,y,z,B){
+  if(view==="side")  return [(x-B.x0)/B.dx, (z-B.z0)/B.dz];
+  if(view==="top")   return [(x-B.x0)/B.dx, (y-B.y0)/B.dy];
+  return               [(y-B.y0)/B.dy, (z-B.z0)/B.dz];        // front / rear
+}
+// A mask feature covers a rectangle of the view; the greyscale says how deep each spot
+// goes. Text becomes one of these, and so could any imported artwork. Sampled smoothly so
+// letter edges come out clean instead of stair-stepped.
+function sampleMask(f,u,v){
+  const b=f.box, m=f.mask; if(!b||!m||!m.d)return 0;
+  const du=b[2]-b[0], dv=b[3]-b[1];
+  if(du<=0||dv<=0)return 0;
+  const mu=(u-b[0])/du, mv=(v-b[1])/dv;
+  if(mu<0||mu>1||mv<0||mv>1)return 0;
+  const fx=mu*(m.w-1), fy=(1-mv)*(m.h-1);          // mask rows run top-down
+  const x0=Math.floor(fx), y0=Math.floor(fy);
+  const x1=Math.min(m.w-1,x0+1), y1=Math.min(m.h-1,y0+1);
+  const tx=fx-x0, ty=fy-y0;
+  const g=(X,Y)=>m.d[Y*m.w+X]/255;
+  const a=g(x0,y0)+(g(x1,y0)-g(x0,y0))*tx, c=g(x0,y1)+(g(x1,y1)-g(x0,y1))*tx;
+  return a+(c-a)*ty;
+}
+function applyFeatures(p,outer,inner,nrm){
+  const F=p.features; if(!F||!F.length)return 0;
+  let x0=Infinity,x1=-Infinity,y0=Infinity,y1=-Infinity,z0=Infinity,z1=-Infinity;
+  for(const P of outer){
+    if(P[0]<x0)x0=P[0]; if(P[0]>x1)x1=P[0];
+    if(P[1]<y0)y0=P[1]; if(P[1]>y1)y1=P[1];
+    if(P[2]<z0)z0=P[2]; if(P[2]>z1)z1=P[2];
+  }
+  const B={x0,y0,z0,dx:Math.max(1e-6,x1-x0),dy:Math.max(1e-6,y1-y0),dz:Math.max(1e-6,z1-z0)};
+  let hits=0;
+  const cap=minWall(p);                 // you cannot press 3mm into a 1.8mm panel
+  for(const f of F){
+    if(!f.depth)continue;
+    if(!f.mask && (!f.poly||f.poly.length<3))continue;
+    const soft=Math.max(0.001,(f.soft??0.12));
+    const side=(f.view==="rear")?-1:1;                        // rear is traced mirrored
+    for(let k=0;k<outer.length;k++){
+      const P=outer[k], nx=nrm[k];
+      // only the surface actually facing this view gets stamped
+      const face = f.view==="side" ? Math.abs(nx[1]) : f.view==="top" ? nx[2] : nx[0]*side;
+      if(f.view==="side"){ if(face<0.25)continue; }
+      else if(face<=0.05)continue;
+      let [u,v]=viewUV(f.view,P[0],P[1],P[2],B);
+      if(f.view==="rear")u=1-u;
+      if(u<-0.02||u>1.02||v<-0.02||v>1.02)continue;
+      let cover;
+      if(f.mask){ cover=sampleMask(f,u,v); if(cover<=0.004)continue; }
+      else {
+        if(!f.poly||!pointInPoly(f.poly,u,v))continue;
+        const d=distToPoly(f.poly,u,v), t=Math.min(1,d/soft); cover=t*t*(3-2*t);
+      }
+      const d=(f.depth<0)?Math.max(f.depth,-cap):f.depth;   // indents are held to the frame
+      const amt=d*cover;
+      if(!amt)continue;
+      outer[k][0]+=nx[0]*amt; outer[k][1]+=nx[1]*amt; outer[k][2]+=nx[2]*amt;
+      inner[k][0]+=nx[0]*amt; inner[k][1]+=nx[1]*amt; inner[k][2]+=nx[2]*amt;
+      hits++;
+    }
+  }
+  return hits;
+}
+// How thick the frame is at a given spot, decided by which way that spot FACES. Roof,
+// sides and floor can each be their own thickness; in between it blends, so there is no
+// seam and no change to the topology — it stays sealed whatever you pick.
+function wallSpec(p){
+  const base=Math.max(0.2,p.wallThickness??1.8);
+  return {top:Math.max(0.2,p.wallTop??base), side:Math.max(0.2,p.wallSide??base),
+          bot:Math.max(0.2,p.wallBottom??base), base};
+}
+function wallAt(n,W){
+  const up=Math.max(0,n[2]), down=Math.max(0,-n[2]), side=Math.hypot(n[0],n[1]);
+  const s=up+down+side; if(s<1e-9)return W.base;
+  return (W.top*up + W.bot*down + W.side*side)/s;
+}
+// The thinnest the frame ever gets — nothing pressed into it should go deeper than this,
+// or you are through the panel rather than shaping it.
+function minWall(p){const W=wallSpec(p);return Math.min(W.top,W.side,W.bot);}
 function makeBody(p){
   if(p.shape==="revolve") return makeRevolve(p);        // round objects (sphere/cylinder/…)
   if(p.mode==="projection" && p.sidePoly && p.sidePoly.length>2) return makeVisualHull(p);  // any-shape solid
   const N=Math.max(8,p.stations|0), M=Math.max(6,p.arcSegments|0);
-  const L=p.length, pow=p.roofFlatness??1, t=Math.max(0.2,p.wallThickness??1.8);
+  const L=p.length, pow=p.roofFlatness??1, WSPEC=wallSpec(p);
   const rows=M+1; const gi=(i,j)=>i*rows+j;
   const outer=new Array((N+1)*rows);
 
@@ -735,6 +875,11 @@ function makeBody(p){
     const xf=i/N, x=(xf-0.5)*L;
     const zTop=sampleProfile(p.topProfile,xf), zBot=sampleProfile(p.bottomProfile,xf);
     const halfW=Math.max(0.05,sampleProfile(p.widthProfile,xf));
+    // A traced BOTTOM view gives the floor's own plan, which on a real car is narrower and
+    // a different shape from the body above it. Blend from the floor width up to the body
+    // width over the first third of the height — the section keeps the same point count, so
+    // the topology (and the seal) is untouched.
+    const halfWB=p.widthBottomProfile?Math.max(0.05,sampleProfile(p.widthBottomProfile,xf)):null;
     const secHere = sections ? morphSections(sections,xf) : singleSec;   // cross-section at this station
     const Y=proj?Math.max(0.05,Math.min(halfW,fW)):halfW;
     for(let j=0;j<=M;j++){
@@ -747,7 +892,12 @@ function makeBody(p){
         z=Math.max(zBot,zUp);
       } else if(secHere){ yNorm=2*u-1; z=zBot+(zTop-zBot)*clamp(sampleProfile(secHere,u),0,1.4); }
       else { const th=Math.PI*u; yNorm=-Math.cos(th); z=zBot+(zTop-zBot)*Math.pow(Math.max(0,Math.sin(th)),pow); }
-      const y=yNorm*Y;
+      let W=Y;
+      if(halfWB!==null && !proj){
+        const zf=(zTop-zBot)>1e-6?clamp((z-zBot)/(zTop-zBot),0,1):0;
+        W = halfWB + (Y-halfWB)*smoothstep(Math.min(1, zf/0.35));
+      }
+      const y=yNorm*W;
       outer[gi(i,j)]=[x,y,z];
     }
   }
@@ -762,7 +912,8 @@ function makeBody(p){
   for(const[a,b,c]of tris){const n=crs(sub(outer[b],outer[a]),sub(outer[c],outer[a]));
     for(const k of[a,b,c]){nrm[k][0]+=n[0];nrm[k][1]+=n[1];nrm[k][2]+=n[2];}}
   for(const n of nrm){const l=Math.hypot(n[0],n[1],n[2])||1;n[0]/=l;n[1]/=l;n[2]/=l;}
-  const inner=outer.map((P,k)=>[P[0]-nrm[k][0]*t,P[1]-nrm[k][1]*t,P[2]-nrm[k][2]*t]);
+  const inner=outer.map((P,k)=>{const t=wallAt(nrm[k],WSPEC);
+    return [P[0]-nrm[k][0]*t,P[1]-nrm[k][1]*t,P[2]-nrm[k][2]*t];});
 
   // SCULPT: per-vertex trim(-)/add(+) along the outer normal, applied to BOTH shells
   // together so wall thickness and topology are preserved (stays watertight).
@@ -774,6 +925,8 @@ function makeBody(p){
       inner[k][0]+=n[0]*d; inner[k][1]+=n[1]*d; inner[k][2]+=n[2]*d;
     }
   }
+
+  applyFeatures(p,outer,inner,nrm);      // windows / mirrors / vents, same watertight rule
 
   const positions=[];
   for(const P of outer)positions.push(P[0],P[1],P[2]);
@@ -811,7 +964,8 @@ function makeBottom(p){
   const N=Math.max(8,Math.round(p.stations||72)), M=Math.max(6,Math.round((p.arcSegments||56)/2));
   const L=p.length, plateT=Math.max(0.8,(p.wallThickness||1.8));
   const rows=M+1, gi=(i,j)=>i*rows+j, topV=[]; let zFloor=Infinity;
-  for(let i=0;i<=N;i++){const xf=i/N,x=(xf-0.5)*L,hw=Math.max(0.05,sampleProfile(p.widthProfile,xf)),zb=sampleProfile(p.bottomProfile,xf);
+  const wProf=p.widthBottomProfile||p.widthProfile;      // follow the traced floor when there is one
+  for(let i=0;i<=N;i++){const xf=i/N,x=(xf-0.5)*L,hw=Math.max(0.05,sampleProfile(wProf,xf)),zb=sampleProfile(p.bottomProfile,xf);
     if(zb<zFloor)zFloor=zb;
     for(let j=0;j<=M;j++)topV[gi(i,j)]=[x,(2*j/M-1)*hw,zb];}
   zFloor-=plateT;
@@ -881,39 +1035,149 @@ function pointInPoly(poly,x,y){let ins=false;
   for(let i=0,j=poly.length-1;i<poly.length;j=i++){const xi=poly[i][0],yi=poly[i][1],xj=poly[j][0],yj=poly[j][1];
     if(((yi>y)!==(yj>y))&&(x<(xj-xi)*(y-yi)/((yj-yi)||1e-9)+xi))ins=!ins;}
   return ins;}
+// Signed distance to a polygon: negative inside, positive outside, in real mm. Knowing
+// HOW FAR (not just in/out) is what lets corners come out sharp instead of rounded.
+function sdPoly(poly,x,y){
+  let d=Infinity, inside=false;
+  for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+    const ax=poly[j][0],ay=poly[j][1],bx=poly[i][0],by=poly[i][1];
+    const ex=bx-ax,ey=by-ay, L2=ex*ex+ey*ey;
+    let t=L2?((x-ax)*ex+(y-ay)*ey)/L2:0; t=t<0?0:t>1?1:t;
+    const px=ax+ex*t-x, py=ay+ey*t-y, dd=px*px+py*py;
+    if(dd<d)d=dd;
+    if(((ay>y)!==(by>y)) && (x<(bx-ax)*(y-ay)/((by-ay)||1e-9)+ax))inside=!inside;
+  }
+  return (inside?-1:1)*Math.sqrt(d);
+}
+/* VISUAL HULL — the volume inside every traced outline at once.
+   Dual contouring rather than plain surface nets: each cell's vertex is solved from where
+   the surface actually crosses its edges AND which way it faces there, so a corner lands
+   ON the corner. Averaging those crossings (the old way) always rounds an edge off, which
+   is exactly what made angular objects come out mushy. */
 function makeVisualHull(p){
   const BOX=[[0,0],[1,0],[1,1],[0,1]];
-  const sideP=(p.sidePoly&&p.sidePoly.length>2)?p.sidePoly:BOX;
-  const topP =(p.topPoly &&p.topPoly.length>2)?p.topPoly :BOX;
-  const frontP=(p.frontPoly&&p.frontPoly.length>2)?p.frontPoly:BOX;
+  const sideN=(p.sidePoly&&p.sidePoly.length>2)?p.sidePoly:BOX;
+  const topN =(p.topPoly &&p.topPoly.length>2)?p.topPoly :BOX;
+  const frontN=(p.frontPoly&&p.frontPoly.length>2)?p.frontPoly:BOX;
   const L=p.length||150;
   const H=Math.max(8, p.topProfile&&p.topProfile.length?Math.max(...p.topProfile.map(q=>q[1])):60);
   const W=Math.max(8, p.widthProfile&&p.widthProfile.length?2*Math.max(...p.widthProfile.map(q=>q[1])):60);
-  const res=Math.max(24,Math.min(72,Math.round(p.hullRes||Math.max(p.stations||48,40))));
+  // every outline into real mm, so the three of them can be compared honestly
+  const sideP =sideN.map(q=>[q[0]*L,q[1]*H]);      // (x , z)
+  const topP  =topN.map(q=>[q[0]*L,q[1]*W]);       // (x , y)
+  const frontP=frontN.map(q=>[q[0]*W,q[1]*H]);     // (y , z)
+  const crisp=Math.max(0,Math.min(1,p.hullCrisp==null?0.9:p.hullCrisp));
+
+  // Features, on their own plane, in mm. Because the body is a distance field here rather
+  // than a fixed surface, a feature is just more arithmetic on that field — which means a
+  // window can genuinely be REMOVED, not merely dented. That's the one thing the lofted
+  // shell can never do, and it needs no server.
+  const soft0=Math.max(L,W,H)*0.5;
+  const feats=(p.features||[]).map(f=>{
+    if(!f||!f.poly||f.poly.length<3||!f.depth)return null;      // text/mask stay surface-only
+    const view=f.view||"side";
+    let pts,kind;
+    if(view==="side"){pts=f.poly.map(q=>[q[0]*L,q[1]*H]); kind="xz";}
+    else if(view==="top"||view==="bottom"){pts=f.poly.map(q=>[q[0]*L,q[1]*W]); kind="xy";}
+    else {pts=f.poly.map(q=>[(view==="rear"?1-q[0]:q[0])*W,q[1]*H]); kind="yz";}
+    return {pts,kind,depth:f.depth,through:!!f.through&&f.depth<0,
+            soft:Math.max(0.35,(f.soft==null?0.1:f.soft)*soft0)};
+  }).filter(Boolean);
+  const sdFeat=(f,x,y,z)=> f.kind==="xz"?sdPoly(f.pts,x,z) : f.kind==="xy"?sdPoly(f.pts,x,y) : sdPoly(f.pts,y,z);
+
+  // inside all three outlines = the largest of the three distances, then features applied
+  // Hollowing a distance field means keeping only the band between the outside and `wall`
+  // deep — one line of arithmetic. The catch is real: the grid has to be able to SEE that
+  // band. A 1.8mm frame on a ~4mm grid flips outside->inside->outside inside a single cell
+  // and tears the surface. So it is only done when the frame is thick enough to resolve;
+  // otherwise this stays a solid, which is what you want for printing anyway — the slicer
+  // sets wall and infill from a solid far better than a modelled shell would.
+  const wall=Math.max(0.2,p.wallThickness??1.8);
+  const F=(x,y,z)=>{
+    let d=Math.max(sdPoly(sideP,x,z), sdPoly(topP,x,y), sdPoly(frontP,y,z));
+    for(let q=0;q<feats.length;q++){
+      const f=feats[q], s=sdFeat(f,x,y,z);
+      if(f.through){ d=Math.max(d,-s); continue; }              // a real opening, straight through
+      const t=Math.min(1,Math.max(0,-s/f.soft)), cover=t*t*(3-2*t);
+      const dep=(f.depth<0)?Math.max(f.depth,-wall):f.depth;    // an indent stays inside the frame
+      d += (-dep)*cover;                 // depth<0 pushes the surface in, >0 pushes it out
+    }
+    if(doHollow) d=Math.max(d, -(d+wall));   // keep only the shell -> a frame, not a lump
+    return d;
+  };
+  const res=Math.max(24,Math.min(80,Math.round(p.hullRes||Math.max(p.stations||48,40))));
   const nx=res, ny=Math.max(10,Math.round(res*W/L)), nz=Math.max(10,Math.round(res*H/L));
-  const NX=nx+1,NY=ny+1,NZ=nz+1, inside=new Uint8Array(NX*NY*NZ), idx=(i,j,k)=>(i*NY+j)*NZ+k;
+  const NX=nx+1,NY=ny+1,NZ=nz+1, idx=(i,j,k)=>(i*NY+j)*NZ+k;
+  const hx=L/nx, hy=W/ny, hz=H/nz;
+  const cell=Math.max(hx,hy,hz);
+  const doHollow=(p.hullHollow===true) && wall>=cell*2;   // only when the grid can see the frame
+  const px=i=>i*hx, py=j=>j*hy-W/2+W/2, pz=k=>k*hz;   // grid -> mm (y centred later)
+  const field=new Float32Array(NX*NY*NZ);
+  const BIG=Math.max(L,W,H);
   for(let i=0;i<NX;i++)for(let j=0;j<NY;j++)for(let k=0;k<NZ;k++){
     const border=(i===0||j===0||k===0||i===nx||j===ny||k===nz);
-    inside[idx(i,j,k)]=(!border && pointInPoly(sideP,i/nx,k/nz) && pointInPoly(topP,i/nx,j/ny) && pointInPoly(frontP,j/ny,k/nz))?1:0;
+    field[idx(i,j,k)] = border ? BIG : F(px(i),py(j),pz(k));   // keep the shell closed
   }
-  const cellV=new Int32Array(nx*ny*nz).fill(-1), cIdx=(i,j,k)=>(i*ny+j)*nz+k, V=[];
+  const inside=(i,j,k)=>field[idx(i,j,k)]<0;
+  const grad=(x,y,z)=>{                       // which way the surface faces here
+    const e=Math.min(hx,hy,hz)*0.35;
+    const gx=F(x+e,y,z)-F(x-e,y,z), gy=F(x,y+e,z)-F(x,y-e,z), gz=F(x,y,z+e)-F(x,y,z-e);
+    const l=Math.hypot(gx,gy,gz)||1; return [gx/l,gy/l,gz/l];
+  };
   const CC=[[0,0,0],[1,0,0],[0,1,0],[1,1,0],[0,0,1],[1,0,1],[0,1,1],[1,1,1]];
   const ED=[[0,1],[0,2],[0,4],[1,3],[1,5],[2,3],[2,6],[3,7],[4,5],[4,6],[5,7],[6,7]];
+  const cellV=new Int32Array(nx*ny*nz).fill(-1), cIdx=(i,j,k)=>(i*ny+j)*nz+k, V=[];
   for(let i=0;i<nx;i++)for(let j=0;j<ny;j++)for(let k=0;k<nz;k++){
-    let mask=0; for(let c=0;c<8;c++){const d=CC[c]; if(inside[idx(i+d[0],j+d[1],k+d[2])])mask|=(1<<c);}
+    let mask=0; for(let c=0;c<8;c++){const d=CC[c]; if(inside(i+d[0],j+d[1],k+d[2]))mask|=(1<<c);}
     if(mask===0||mask===255)continue;
-    let sx=0,sy=0,sz=0,cnt=0;
-    for(const e of ED){const a=e[0],b=e[1]; if(!!(mask&(1<<a))!==!!(mask&(1<<b))){const pa=CC[a],pb=CC[b];sx+=(pa[0]+pb[0])/2;sy+=(pa[1]+pb[1])/2;sz+=(pa[2]+pb[2])/2;cnt++;}}
-    cellV[cIdx(i,j,k)]=V.length; V.push([(i+sx/cnt)/nx*L, (j+sy/cnt)/ny*W - W/2, (k+sz/cnt)/nz*H]);
+    const pts=[],nrms=[];
+    for(const e of ED){
+      const a=e[0],b=e[1], ia=!!(mask&(1<<a)), ib=!!(mask&(1<<b));
+      if(ia===ib)continue;
+      const A=CC[a],B=CC[b];
+      const fa=field[idx(i+A[0],j+A[1],k+A[2])], fb=field[idx(i+B[0],j+B[1],k+B[2])];
+      let t=(fa-fb)!==0?fa/(fa-fb):0.5; t=t<0?0:t>1?1:t;        // where it actually crosses
+      const wx=px(i+A[0]+(B[0]-A[0])*t), wy=py(j+A[1]+(B[1]-A[1])*t), wz=pz(k+A[2]+(B[2]-A[2])*t);
+      pts.push([wx,wy,wz]); nrms.push(grad(wx,wy,wz));
+    }
+    if(!pts.length)continue;
+    // average of the crossings — where a rounded-off surface net would put the vertex
+    let mx=0,my=0,mz=0; for(const q of pts){mx+=q[0];my+=q[1];mz+=q[2];}
+    mx/=pts.length; my/=pts.length; mz/=pts.length;
+    // solve for the point that best satisfies every crossing plane -> lands on the corner
+    let a00=0,a01=0,a02=0,a11=0,a12=0,a22=0,b0=0,b1=0,b2=0;
+    for(let q=0;q<pts.length;q++){
+      const n=nrms[q], d=n[0]*pts[q][0]+n[1]*pts[q][1]+n[2]*pts[q][2];
+      a00+=n[0]*n[0]; a01+=n[0]*n[1]; a02+=n[0]*n[2];
+      a11+=n[1]*n[1]; a12+=n[1]*n[2]; a22+=n[2]*n[2];
+      b0+=n[0]*d; b1+=n[1]*d; b2+=n[2]*d;
+    }
+    const lam=(1.0-crisp)*pts.length+0.02;      // pull back toward the average = softer edges
+    a00+=lam; a11+=lam; a22+=lam; b0+=lam*mx; b1+=lam*my; b2+=lam*mz;
+    const det=a00*(a11*a22-a12*a12)-a01*(a01*a22-a12*a02)+a02*(a01*a12-a11*a02);
+    let vx=mx,vy=my,vz=mz;
+    if(Math.abs(det)>1e-9){
+      vx=( b0*(a11*a22-a12*a12) - a01*(b1*a22-a12*b2) + a02*(b1*a12-a11*b2))/det;
+      vy=( a00*(b1*a22-a12*b2) - b0*(a01*a22-a12*a02) + a02*(a01*b2-b1*a02))/det;
+      vz=( a00*(a11*b2-b1*a12) - a01*(a01*b2-b1*a02) + b0*(a01*a12-a11*a02))/det;
+    }
+    // never let the solve fling a vertex out of its own cell — that would tear the surface
+    const cx0=px(i),cy0=py(j),cz0=pz(k);
+    vx=Math.max(cx0-hx*0.25,Math.min(cx0+hx*1.25,vx));
+    vy=Math.max(cy0-hy*0.25,Math.min(cy0+hy*1.25,vy));
+    vz=Math.max(cz0-hz*0.25,Math.min(cz0+hz*1.25,vz));
+    if(!isFinite(vx)||!isFinite(vy)||!isFinite(vz)){vx=mx;vy=my;vz=mz;}
+    cellV[cIdx(i,j,k)]=V.length; V.push([vx, vy-W/2, vz]);
   }
   const indices=[]; const quad=(a,b,c,d,flip)=>{if(a<0||b<0||c<0||d<0)return; if(flip)indices.push(a,b,c,a,c,d); else indices.push(a,d,c,a,c,b);};
-  for(let i=0;i<NX;i++)for(let j=0;j<NY;j++)for(let k=0;k<NZ;k++){const p0=inside[idx(i,j,k)];
-    if(i<nx && j>0&&j<ny&&k>0&&k<nz){const p1=inside[idx(i+1,j,k)]; if(p0!==p1)quad(cellV[cIdx(i,j-1,k-1)],cellV[cIdx(i,j,k-1)],cellV[cIdx(i,j,k)],cellV[cIdx(i,j-1,k)],p1>p0);}
-    if(j<ny && i>0&&i<nx&&k>0&&k<nz){const p1=inside[idx(i,j+1,k)]; if(p0!==p1)quad(cellV[cIdx(i-1,j,k-1)],cellV[cIdx(i,j,k-1)],cellV[cIdx(i,j,k)],cellV[cIdx(i-1,j,k)],p1<p0);}
-    if(k<nz && i>0&&i<nx&&j>0&&j<ny){const p1=inside[idx(i,j,k+1)]; if(p0!==p1)quad(cellV[cIdx(i-1,j-1,k)],cellV[cIdx(i,j-1,k)],cellV[cIdx(i,j,k)],cellV[cIdx(i-1,j,k)],p1>p0);}
+  for(let i=0;i<NX;i++)for(let j=0;j<NY;j++)for(let k=0;k<NZ;k++){const p0=inside(i,j,k)?1:0;
+    if(i<nx && j>0&&j<ny&&k>0&&k<nz){const p1=inside(i+1,j,k)?1:0; if(p0!==p1)quad(cellV[cIdx(i,j-1,k-1)],cellV[cIdx(i,j,k-1)],cellV[cIdx(i,j,k)],cellV[cIdx(i,j-1,k)],p1>p0);}
+    if(j<ny && i>0&&i<nx&&k>0&&k<nz){const p1=inside(i,j+1,k)?1:0; if(p0!==p1)quad(cellV[cIdx(i-1,j,k-1)],cellV[cIdx(i,j,k-1)],cellV[cIdx(i,j,k)],cellV[cIdx(i-1,j,k)],p1<p0);}
+    if(k<nz && i>0&&i<nx&&j>0&&j<ny){const p1=inside(i,j,k+1)?1:0; if(p0!==p1)quad(cellV[cIdx(i-1,j-1,k)],cellV[cIdx(i,j-1,k)],cellV[cIdx(i,j,k)],cellV[cIdx(i-1,j,k)],p1>p0);}
   }
   const positions=new Float32Array(V.length*3); V.forEach((v,q)=>{positions[q*3]=v[0];positions[q*3+1]=v[1];positions[q*3+2]=v[2];});
-  let vol=0; for(let q=0;q<indices.length;q+=3){const A=indices[q]*3,B=indices[q+1]*3,C=indices[q+2]*3;vol+=(positions[A]*(positions[B+1]*positions[C+2]-positions[B+2]*positions[C+1])-positions[A+1]*(positions[B]*positions[C+2]-positions[B+2]*positions[C])+positions[A+2]*(positions[B]*positions[C+1]-positions[B+1]*positions[C]))/6;}
+  let vol=0; for(let q=0;q<indices.length;q+=3){const A=indices[q]*3,B=indices[q+1]*3,C=indices[q+2]*3;
+    vol+=(positions[A]*(positions[B+1]*positions[C+2]-positions[B+2]*positions[C+1])-positions[A+1]*(positions[B]*positions[C+2]-positions[B+2]*positions[C])+positions[A+2]*(positions[B]*positions[C+1]-positions[B+1]*positions[C]))/6;}
   if(vol<0){for(let q=0;q<indices.length;q+=3){const t=indices[q+1];indices[q+1]=indices[q+2];indices[q+2]=t;}vol=-vol;}
   return {positions,indices,volume:Math.abs(vol)};
 }
@@ -955,10 +1219,12 @@ const PRESETS={
   sedan :{len:230,nose:30,cowl:44,roof:62,roofPos:.52,tail:46,sill:9, nw:22,mw:46,wp:.5 ,tw:40,round:1.8},
   suv   :{len:210,nose:38,cowl:56,roof:84,roofPos:.5 ,tail:74,sill:14,nw:26,mw:52,wp:.5 ,tw:48,round:2.2},
 };
-const S={...PRESETS.hotrod, wall:1.8, st:72, seg:56, opacity:.55, mode:"loft", sepBottom:true, shape:"loft", revShape:"sphere", revSize:50, widMM:0, hgtMM:0};
+const S={...PRESETS.hotrod, wall:1.8, st:72, seg:56, opacity:.55, mode:"loft", sepBottom:true, shape:"loft", revShape:"sphere", revSize:50, widMM:0, hgtMM:0, widK:1, hgtK:1, hullCrisp:0.9,
+  wallTop:1.8, wallSide:1.8, wallBottom:1.8, wallPerFace:false, hullHollow:false};
 // NOTE: revolve primitives (sphere/cylinder/dome/cone) are retired from the UI — this tool
 // is for IMPORTED shapes. makeRevolve() stays so old saved files still load.
-let traced={top:null,bottom:null,width:null,section:null,sections:null,frontHull:null,rearHull:null,sidePoly:null,topPoly:null,frontPoly:null,natWid:null,natHgt:null}; // mm-space / normalized profiles when traced
+let traced={top:null,bottom:null,width:null,widthBot:null,section:null,sections:null,frontHull:null,rearHull:null,sidePoly:null,topPoly:null,frontPoly:null,bottomPoly:null,natWid:null,natHgt:null};
+let features=[];   // [{view,poly:[[u,v]…],depth,soft,name}] // mm-space / normalized profiles when traced
 
 function buildTop(){
   if(traced.top)return traced.top;
@@ -989,7 +1255,7 @@ function imgToDataURL(im){try{
 // Full editable tracing state: raw points, scale, and the reference image per view
 function buildTrace(){
   const out={};
-  for(const v of ["side","top","front","rear"]){
+  for(const v of ["side","top","bottom","front","rear"]){
     const V0=V[v]; if(!V0)continue;
     const hasPts=(V0.A&&V0.A.length)||(V0.B&&V0.B.length);
     if(hasPts||V0.img){
@@ -1008,24 +1274,27 @@ function sizedProfiles(){
     const k=S.hgtMM/traced.natHgt;
     if(Math.abs(k-1)>1e-6){topP=topP.map(p=>[p[0],p[1]*k]); botP=botP.map(p=>[p[0],p[1]*k]);}
   }
+  let widBotP=traced.widthBot||null;
   if(traced.natWid>0 && S.widMM>0){
     const k=S.widMM/traced.natWid;
-    if(Math.abs(k-1)>1e-6)widP=widP.map(p=>[p[0],p[1]*k]);
+    if(Math.abs(k-1)>1e-6){widP=widP.map(p=>[p[0],p[1]*k]); if(widBotP)widBotP=widBotP.map(p=>[p[0],p[1]*k]);}
   }
-  return {topP,botP,widP};
+  return {topP,botP,widP,widBotP};
 }
 function currentProfile(){
   const SZ=sizedProfiles();
   return {
     schema:"lee3d.profile/v1", units:"mm", name:projName.value||"untitled-object", category:(projCat.value||"uncategorized").trim(),
     length:S.len, stations:S.st, arcSegments:S.seg, roofFlatness:S.round,
-    wallThickness:S.wall,
-    topProfile:SZ.topP, bottomProfile:SZ.botP, widthProfile:SZ.widP,
+    wallThickness:S.wall, wallPerFace:S.wallPerFace, hullHollow:S.hullHollow,
+    wallTop:S.wallPerFace?S.wallTop:S.wall, wallSide:S.wallPerFace?S.wallSide:S.wall, wallBottom:S.wallPerFace?S.wallBottom:S.wall,
+    topProfile:SZ.topP, bottomProfile:SZ.botP, widthProfile:SZ.widP, widthBottomProfile:SZ.widBotP,
     section:buildSection(),
     sections:(traced.sections&&traced.sections.length?traced.sections:null),
     mode:S.mode, frontHull:(S.mode==="projection"?traced.frontHull:null), sepBottom:S.sepBottom,
-    sidePoly:traced.sidePoly, topPoly:traced.topPoly, frontPoly:traced.frontPoly,
+    sidePoly:traced.sidePoly, topPoly:traced.topPoly, frontPoly:traced.frontPoly, hullCrisp:S.hullCrisp,
     sculpt:(SC.off && SC.off.length)?Array.from(SC.off):null,
+    features:features.length?features.map(f=>{const o={...f}; if(o.kind==="text")delete o.mask; return o;}):null,
     shape:S.shape, revShape:S.revShape, revSize:S.revSize, widMM:S.widMM, hgtMM:S.hgtMM,
     revProfile:(S.shape==="revolve"?buildRevProfile():null), revLen:(S.shape==="revolve"?revLenFor():null),
   };
@@ -1182,8 +1451,9 @@ function animate(){
     if(SC.on && e.button===0 && !e.shiftKey){ sculptCache(); if(sculptDab(e)){mode=3;return;} }
     mode=(e.button===2||e.shiftKey)?2:1;});
   glCanvas.addEventListener("pointermove",e=>{
-    if(!mode)return;const dx=e.clientX-px,dy=e.clientY-py;px=e.clientX;py=e.clientY;
-    if(mode===3){sculptDab(e);return;}
+    if(!mode){ if(SC.on)scShowRing(scHitAt(e)); return; }     // hover: show the brush
+    const dx=e.clientX-px,dy=e.clientY-py;px=e.clientX;py=e.clientY;
+    if(mode===3){scShowRing(scHitAt(e));sculptDab(e);return;}
     if(mode===1){cam.az-=dx*0.008;cam.pol-=dy*0.008;}
     else{const s=cam.rad*0.0016;                        // screen-relative pan (right + true up)
       const fwd=new THREE.Vector3().subVectors(target,camera.position).normalize();
@@ -1192,7 +1462,7 @@ function animate(){
       target.addScaledVector(right,-dx*s);target.addScaledVector(up,dy*s);}
     updateCam();});
   glCanvas.addEventListener("pointerup",()=>{if(mode===3)commitSculpt();mode=0;});
-  glCanvas.addEventListener("pointerleave",()=>{if(mode===3)commitSculpt();mode=0;});
+  glCanvas.addEventListener("pointerleave",()=>{if(mode===3)commitSculpt();mode=0;scShowRing(null);});
   glCanvas.addEventListener("wheel",e=>{e.preventDefault();cam.rad*=(1+Math.sign(e.deltaY)*0.09);updateCam();},{passive:false});
   glCanvas.addEventListener("contextmenu",e=>e.preventDefault());
 })();
@@ -1206,7 +1476,7 @@ const tctx=traceCanvas.getContext("2d");
 let fit={s:1,ox:0,oy:0};
 // Per-view tracing state. side: A=roof/top edge, B=sill/lower edge.
 //                          top:  A=left edge,     B=right edge.
-const V={ side:{img:null,imgRaw:null,inv:null,scale:null,A:[],B:[]}, top:{img:null,imgRaw:null,inv:null,scale:null,A:[],B:[]}, front:{img:null,imgRaw:null,inv:null,scale:null,A:[],B:[]}, rear:{img:null,imgRaw:null,inv:null,scale:null,A:[],B:[]} };
+const V={ side:{img:null,imgRaw:null,inv:null,scale:null,A:[],B:[]}, top:{img:null,imgRaw:null,inv:null,scale:null,A:[],B:[]}, front:{img:null,imgRaw:null,inv:null,scale:null,A:[],B:[]}, rear:{img:null,imgRaw:null,inv:null,scale:null,A:[],B:[]}, bottom:{img:null,imgRaw:null,inv:null,scale:null,A:[],B:[]} };
 let activeView="side";
 let traceMode="trace";          // 'trace' (outline) | 'cal'
 let calPts=[];                   // canvas px
@@ -1277,6 +1547,40 @@ function drawTrace(){
     tctx.fillStyle=color;pts.forEach((p,i)=>{const c=img2canvas(p);tctx.beginPath();tctx.arc(c.x,c.y,i===0?5:4,0,7);tctx.fill();});
   };
   dp(v.A,"#FF7A2F",true); if(v.B&&v.B.length)dp(v.B,"#46B7D9",true);
+  // features already placed on this view, drawn back in the body outline's frame
+  const B=(typeof featBounds==="function")?featBounds(activeView):null;
+  if(B&&typeof features!=="undefined"){
+    features.filter(f=>f.view===activeView).forEach(f=>{
+      const col=f.depth<0?"#46B7D9":"#5BD6A0";
+      if(f.poly){
+        dp(f.poly.map(q=>({x:B.minX+q[0]*B.sx, y:B.maxY-q[1]*B.sy})), col, true);
+      } else if(f.box){
+        const b=f.box, c0=img2canvas({x:B.minX+b[0]*B.sx,y:B.maxY-b[1]*B.sy}), c1=img2canvas({x:B.minX+b[2]*B.sx,y:B.maxY-b[3]*B.sy});
+        tctx.strokeStyle=col;tctx.lineWidth=2;tctx.setLineDash([5,4]);
+        tctx.strokeRect(Math.min(c0.x,c1.x),Math.min(c0.y,c1.y),Math.abs(c1.x-c0.x),Math.abs(c1.y-c0.y));
+        tctx.setLineDash([]);
+        if(f.text){tctx.fillStyle=col;tctx.font="600 11px Inter,sans-serif";tctx.textAlign="center";
+          tctx.fillText(f.text,(c0.x+c1.x)/2,Math.min(c0.y,c1.y)-4);}
+      }
+    });
+  }
+  if(featTool==="svg" && typeof svgDetails==="function"){          // what you can click
+    tctx.save(); tctx.strokeStyle="rgba(232,197,71,.85)"; tctx.lineWidth=1.5;
+    svgDetails(activeView).forEach(poly=>{
+      tctx.beginPath();
+      poly.forEach((p,i)=>{const c=img2canvas(p); i?tctx.lineTo(c.x,c.y):tctx.moveTo(c.x,c.y);});
+      tctx.closePath(); tctx.stroke();
+    });
+    tctx.restore();
+  }
+  if(featDraft&&featDraft.view===activeView){
+    if(featDraft.tool==="poly")dp(featDraft.pts,"#E8C547",featDraft.pts.length>2);
+    else{
+      dp(featDraft.pts,"#E8C547",false);
+      if(featDraft.pts.length===1){const c=img2canvas(featDraft.pts[0]);
+        tctx.strokeStyle="#E8C547";tctx.setLineDash([4,4]);tctx.strokeRect(c.x-1,c.y-1,2,2);tctx.setLineDash([]);}
+    }
+  }
   if(calPts.length){tctx.strokeStyle="#E5B45B";tctx.setLineDash([6,5]);tctx.lineWidth=2;
     tctx.beginPath();calPts.forEach((p,i)=>{const c=img2canvas(p);i?tctx.lineTo(c.x,c.y):tctx.moveTo(c.x,c.y);});tctx.stroke();tctx.setLineDash([]);
     tctx.fillStyle="#E5B45B";calPts.forEach(p=>{const c=img2canvas(p);tctx.beginPath();tctx.arc(c.x,c.y,5,0,7);tctx.fill();});}
@@ -1293,6 +1597,16 @@ traceCanvas.addEventListener("pointerdown",e=>{
   const {x:cx,y:cy}=tcXY(e);
   if(traceMode==="cal"){calPts.push(canvas2img(cx,cy));drawTrace();if(calPts.length===2)openModal();return;}
   const v=cv();
+  if(featTool==="svg" && V[activeView] && V[activeView].img){
+    const p=canvas2img(cx,cy), poly=svgDetailAt(activeView,p);
+    if(!poly){toast("Nothing from the drawing under there — the yellow outlines are what you can take.");return;}
+    featAddSvgPoly(activeView,poly); drawTrace(); return;
+  }
+  if(featDraft && featDraft.view===activeView){          // placing a feature, not the body
+    featDraft.pts.push(canvas2img(cx,cy)); drawTrace();
+    if(featDraft.tool!=="poly" && featDraft.pts.length>=2)featFinish();   // two corners is a box
+    return;
+  }
   const hit=nearestPoint(v,cx,cy);                       // grab an existing point to refine
   if(hit){pointDrag={edge:hit.edge,idx:hit.idx};try{traceCanvas.setPointerCapture(e.pointerId);}catch(_){}return;}
   v.A.push(canvas2img(cx,cy));                           // add to the single outline
@@ -1325,8 +1639,8 @@ function syncSize(){
   if(okH){h.max=Math.max(400,Math.round(traced.natHgt*3));h.value=Math.round(S.hgtMM||traced.natHgt);vh.textContent=Math.round(S.hgtMM||traced.natHgt);}
   else vh.textContent="—";
   if(hint)hint.innerHTML = (okW||okH)
-    ? "The finished measurements — what your drawing measured. Move them to resize the model; <b>your tracing is left alone</b>."
-    : "How long always works. <b>How wide</b> needs a traced <b>top</b> view and <b>how tall</b> a traced <b>side</b> view — until then the shape sliders below set those.";
+    ? "The finished measurements — what your drawing measured. Move them to resize; <b>your tracing is left alone</b>, and a nudge survives re-tracing."
+    : "<b>How long</b> comes from the side or top view and always works. <b>How wide</b> comes from the top view, or head-on from front/rear. <b>How tall</b> comes from the side view. Until one of those is traced, the shape sliders below set them.";
 }
 function markSil(on){
   const e=document.getElementById("silMode");
@@ -1381,18 +1695,84 @@ function anchorPxPerMm(spanPx, anchorMM, ownScale, defMM){
 // to click 40 points by hand. Reference images are normalised to dark-ink-on-light-paper
 // first (see normalizeRef), which makes "ink = darker than the Otsu threshold" reliable.
 // Uses the same vertical-slice idea as outlineEnvelope, so it cannot invert top/bottom.
-function autoOutline(imgData,K){
-  K=K||48;
-  const data=imgData.data, W=imgData.width, H=imgData.height;
-  const lum=new Uint8Array(W*H);
-  for(let i=0,p=0;i<lum.length;i++,p+=4)lum[i]=(0.299*data[p]+0.587*data[p+1]+0.114*data[p+2])|0;
-  // Otsu: split ink from paper without asking the user for a threshold
+// The same principle as an SVG's paths, for a picture. In a line drawing the shapes ARE
+// the regions the lines enclose — a window is the patch of paper fenced in by ink. So:
+// split ink from paper, flood the outside away, and whatever paper is left trapped inside
+// is a shape you drew. Outlines are built with the same vertical-slice method used
+// everywhere else, so they cannot invert either.
+function otsuThreshold(lum){
   const hist=new Array(256).fill(0); for(let i=0;i<lum.length;i++)hist[lum[i]]++;
   const total=lum.length; let sum=0; for(let i=0;i<256;i++)sum+=i*hist[i];
   let sumB=0,wB=0,best=-1,thr=128;
   for(let i=0;i<256;i++){wB+=hist[i]; if(!wB)continue; const wF=total-wB; if(wF<=0)break;
     sumB+=i*hist[i]; const mB=sumB/wB, mF=(sum-sumB)/wF, v=wB*wF*(mB-mF)*(mB-mF);
     if(v>best){best=v;thr=i;}}
+  return thr;
+}
+function lumOf(imgData){
+  const d=imgData.data, lum=new Uint8Array(imgData.width*imgData.height);
+  for(let i=0,p=0;i<lum.length;i++,p+=4)lum[i]=(0.299*d[p]+0.587*d[p+1]+0.114*d[p+2])|0;
+  return lum;
+}
+// closed outline of one labelled region, by vertical slices (order-independent)
+function regionOutline(mark,W,H,id,K){
+  K=K||40;
+  let minX=-1,maxX=-1;
+  const colT=new Int32Array(W).fill(-1), colB=new Int32Array(W).fill(-1);
+  for(let x=0;x<W;x++){
+    let t=-1,b=-1;
+    for(let y=0;y<H;y++){ if(mark[y*W+x]===id){ if(t<0)t=y; b=y; } }
+    colT[x]=t; colB[x]=b;
+    if(t>=0){ if(minX<0)minX=x; maxX=x; }
+  }
+  if(minX<0||(maxX-minX)<2)return null;
+  const top=[],bot=[];
+  for(let i=0;i<=K;i++){
+    let x=Math.round(minX+(maxX-minX)*i/K);
+    if(colT[x]<0){for(let d=1;d<=W;d++){ if(x-d>=minX&&colT[x-d]>=0){x-=d;break;} if(x+d<=maxX&&colT[x+d]>=0){x+=d;break;} }}
+    if(colT[x]<0)continue;
+    top.push({x,y:colT[x]}); bot.push({x,y:colB[x]});
+  }
+  if(top.length<3)return null;
+  const loop=[...top,...bot.slice().reverse()];
+  return loop.filter((p,i,a)=>i===0||p.x!==a[i-1].x||p.y!==a[i-1].y);
+}
+function rasterRegions(imgData,maxOut){
+  const W=imgData.width,H=imgData.height, lum=lumOf(imgData), thr=otsuThreshold(lum);
+  const N=W*H, mark=new Int32Array(N);            // 0 = unclaimed paper, -1 = ink, -2 = outside
+  for(let i=0;i<N;i++)if(lum[i]<=thr)mark[i]=-1;
+  // flood the outside paper away from the border
+  const stack=[];
+  for(let x=0;x<W;x++){ if(mark[x]===0){mark[x]=-2;stack.push(x);} const b=(H-1)*W+x; if(mark[b]===0){mark[b]=-2;stack.push(b);} }
+  for(let y=0;y<H;y++){ const l=y*W, r=y*W+W-1; if(mark[l]===0){mark[l]=-2;stack.push(l);} if(mark[r]===0){mark[r]=-2;stack.push(r);} }
+  while(stack.length){ const i=stack.pop(), x=i%W, y=(i/W)|0;
+    if(x>0   && mark[i-1]===0){mark[i-1]=-2;stack.push(i-1);}
+    if(x<W-1 && mark[i+1]===0){mark[i+1]=-2;stack.push(i+1);}
+    if(y>0   && mark[i-W]===0){mark[i-W]=-2;stack.push(i-W);}
+    if(y<H-1 && mark[i+W]===0){mark[i+W]=-2;stack.push(i+W);}
+  }
+  // whatever paper is left is fenced in by ink -> label each pocket
+  const minPx=Math.max(24,Math.round(N*4e-5)); let id=0; const sizes=[];
+  for(let i=0;i<N;i++){
+    if(mark[i]!==0)continue;
+    id++; let count=0; const st=[i]; mark[i]=id;
+    while(st.length){ const j=st.pop(), x=j%W, y=(j/W)|0; count++;
+      if(x>0   && mark[j-1]===0){mark[j-1]=id;st.push(j-1);}
+      if(x<W-1 && mark[j+1]===0){mark[j+1]=id;st.push(j+1);}
+      if(y>0   && mark[j-W]===0){mark[j-W]=id;st.push(j-W);}
+      if(y<H-1 && mark[j+W]===0){mark[j+W]=id;st.push(j+W);}
+    }
+    sizes.push({id,count});
+  }
+  const keep=sizes.filter(r=>r.count>=minPx).sort((a,b)=>b.count-a.count).slice(0,maxOut||40);
+  const out=[];
+  for(const r of keep){ const o=regionOutline(mark,W,H,r.id,40); if(o)out.push(o); }
+  return out;
+}
+function autoOutline(imgData,K){
+  K=K||48;
+  const W=imgData.width, H=imgData.height;
+  const lum=lumOf(imgData), thr=otsuThreshold(lum);   // split ink from paper, no slider needed
   const colT=new Int32Array(W).fill(-1), colB=new Int32Array(W).fill(-1);
   let minX=-1,maxX=-1;
   for(let x=0;x<W;x++){
@@ -1430,7 +1810,11 @@ function rotateView(view,dir){
     setRefImage(v,c);
   }
   // a point (px,py) in a w×h image lands here in the new h×w image
-  v.A=(v.A||[]).map(p=> dir>0 ? {x:h-p.y, y:p.x} : {x:p.y, y:w-p.x});
+  const turn=p=> dir>0 ? {x:h-p.y, y:p.x} : {x:p.y, y:w-p.x};
+  v.A=(v.A||[]).map(turn);
+  if(v.svgPolys)v.svgPolys=v.svgPolys.map(poly=>poly.map(turn));   // keep the detail lines aligned
+  if(v._shapes)v._shapes=v._shapes.map(poly=>poly.map(turn));
+  v._shapesFor=v.img;
   v.B=[];
   if(v.scale)v.scale=v.scale;                    // uniform rotation -> px/mm unchanged
   return true;
@@ -1438,12 +1822,187 @@ function rotateView(view,dir){
 // For a car the length is always the longest dimension, so the side and top views must be
 // landscape. If one comes in portrait it was drawn rotated — straighten it.
 function autoOrientView(view){
-  if(view!=="side"&&view!=="top")return false;   // front/rear are width × height already
+  if(view!=="side"&&view!=="top"&&view!=="bottom")return false;   // front/rear are width × height already
   const v=V[view]; if(!v||!v.A||v.A.length<3)return false;
   const xs=v.A.map(p=>p.x), ys=v.A.map(p=>p.y);
   const w=Math.max(...xs)-Math.min(...xs), h=Math.max(...ys)-Math.min(...ys);
   if(h>w*1.15){ rotateView(view,-1); return true; }   // portrait -> length was vertical
   return false;
+}
+/* ---- feature tracing: same clicks, different target ---- */
+let featDraft=null;                 // {view, tool, pts:[…]} while you're placing one
+let featTool="poly";                // poly | box | text
+// Render the words once into a greyscale stamp. Only the words + size are saved; the
+// stamp is rebuilt on load, so a text feature costs a few bytes instead of a bitmap.
+function rasterizeText(txt,aspect){
+  const H=128, W=Math.max(8,Math.min(1024,Math.round(H*Math.max(0.15,aspect||4))));
+  const c=document.createElement("canvas"); c.width=W; c.height=H;
+  const x=c.getContext("2d",{willReadFrequently:true});
+  x.fillStyle="#000"; x.fillRect(0,0,W,H);
+  x.fillStyle="#fff"; x.textAlign="center"; x.textBaseline="middle";
+  let fs=H*0.8; x.font=`700 ${fs}px Saira Semi Condensed, Inter, sans-serif`;
+  const wNeeded=x.measureText(txt).width||1;
+  if(wNeeded>W*0.94){fs*=W*0.94/wNeeded; x.font=`700 ${fs}px Saira Semi Condensed, Inter, sans-serif`;}
+  x.fillText(txt,W/2,H/2+fs*0.03);
+  const d=x.getImageData(0,0,W,H).data, m=new Uint8Array(W*H);
+  for(let i=0,k=0;i<d.length;i+=4,k++)m[k]=d[i];      // white letters = full depth
+  return {w:W,h:H,d:m};
+}
+function featEnsureMasks(){          // rebuild stamps for text features after a load
+  features.forEach(f=>{ if(f.kind==="text" && f.text && !f.mask){
+    const b=f.box, ar=(b&&(b[3]-b[1])>0)?((b[2]-b[0])/(b[3]-b[1])):4;
+    f.mask=rasterizeText(f.text,ar);
+  }});
+}
+function featBounds(view){
+  const A=(V[view]&&V[view].A)||[]; if(A.length<3)return null;
+  const xs=A.map(p=>p.x),ys=A.map(p=>p.y);
+  const minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);
+  return {minX,minY,sx:Math.max(1,maxX-minX),sy:Math.max(1,maxY-minY),maxY};
+}
+// store the region in the SAME 0..1 frame as that view's body outline, so it lands
+// exactly where you drew it once it's projected onto the model
+function featNormalize(view,pts){
+  const B=featBounds(view); if(!B)return null;
+  return pts.map(p=>[(p.x-B.minX)/B.sx, (B.maxY-p.y)/B.sy]);
+}
+// how deep anything is allowed to press: the thinnest face of the frame
+function featCap(){ return Math.max(0.2, Math.min(S.wallPerFace?S.wallTop:S.wall, S.wallPerFace?S.wallSide:S.wall, S.wallPerFace?S.wallBottom:S.wall)); }
+function featRender(){
+  const host=document.getElementById("featList"); if(!host)return;
+  host.innerHTML="";
+  if(!features.length){host.innerHTML='<div class="hint" style="opacity:.6">No features yet.</div>';return;}
+  features.forEach((f,i)=>{
+    const el=document.createElement("div");
+    el.style.cssText="border:1px solid var(--line-2);border-radius:7px;padding:7px;margin-bottom:5px";
+    el.innerHTML=`<div style="display:flex;align-items:center;gap:6px">
+        <input class="proj-name mono" style="flex:1;font-size:11px;padding:3px 6px" value="">
+        <span class="tag" style="font-size:9px">${f.view}</span>
+        <button class="btn ghost" style="padding:2px 6px;font-size:10px">✕</button></div>
+      <div class="field" style="margin-top:5px"><label>Depth <span class="val"><span class="dv"></span> mm</span></label>
+        <input type="range" class="fd" min="${f.through?-40:-featCap()}" max="12" step="0.2" value="${f.depth}"></div>
+      <div class="field"><label>Soft edge <span class="val"><span class="sv"></span></span></label>
+        <input type="range" class="fs" min="0.01" max="0.4" step="0.01" value="${f.soft}"></div>
+      <label class="fthru" style="display:${f.depth<0?"flex":"none"};align-items:center;gap:6px;font-size:10.5px;cursor:pointer">
+        <input type="checkbox" class="ft"${f.through?" checked":""}> Cut clean through
+        <span style="opacity:.6">· needs <b>Follow my drawing</b></span></label>`;
+    const nm=el.querySelector("input.proj-name"); nm.value=f.name||("feature "+(i+1));
+    nm.oninput=()=>{f.name=nm.value;};
+    el.querySelector(".dv").textContent=f.depth.toFixed(1);
+    el.querySelector(".sv").textContent=f.soft.toFixed(2);
+    el.querySelector(".fd").oninput=e=>{f.depth=+e.target.value;el.querySelector(".dv").textContent=f.depth.toFixed(1);requestRebuild();
+      const fl=el.querySelector(".fthru"); if(fl)fl.style.display=(f.depth<0)?"flex":"none";   // a bump can't cut
+      if(f.depth>=0)f.through=false;};
+    el.querySelector(".fs").oninput=e=>{f.soft=+e.target.value;el.querySelector(".sv").textContent=f.soft.toFixed(2);requestRebuild();};
+    const th=el.querySelector(".ft");
+    if(th)th.onchange=e=>{f.through=e.target.checked; requestRebuild();
+      toast(e.target.checked
+        ? (S.mode==="projection"
+            ? "Cut clean through — that's a <b>real opening</b> now, right here."
+            : "Marked as an opening. <b>Smooth</b> can only dent it — switch <b>Shape style</b> to <b>Follow my drawing</b> and it becomes a real hole.")
+        : "Back to a surface dish.");};
+    el.querySelector("button").onclick=()=>{features.splice(i,1);featRender();requestRebuild();};
+    host.appendChild(el);
+  });
+}
+// The SVG already contains every line in the drawing. The biggest path becomes the body
+// outline; everything else — windows, lights, scoops, badges — is detail sitting unused.
+// Click one and it becomes a feature, exactly as drawn, with no tracing at all.
+function ptInPolyPts(poly,x,y){
+  let ins=false;
+  for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+    const xi=poly[i].x,yi=poly[i].y,xj=poly[j].x,yj=poly[j].y;
+    if(((yi>y)!==(yj>y)) && (x<(xj-xi)*(y-yi)/((yj-yi)||1e-9)+xi))ins=!ins;
+  }
+  return ins;
+}
+function polyAreaPts(p){let a=0;for(let i=0,j=p.length-1;i<p.length;j=i++)a+=(p[j].x*p[i].y-p[i].x*p[j].y);return Math.abs(a/2);}
+// Every shape this view's drawing contains. An SVG hands them over as paths; a photo or
+// PNG gives them up as the regions its lines enclose. Same idea, same result — the file
+// type stops mattering past this point. Worked out once, then cached.
+function viewShapes(view){
+  const v=V[view]; if(!v)return [];
+  if(v.svgPolys&&v.svgPolys.length)return v.svgPolys;      // vector: exact, nothing to work out
+  if(!v.img)return [];
+  if(v._shapes && v._shapesFor===v.img)return v._shapes;    // cached against this drawing
+  try{
+    const im=v.img, w=im.naturalWidth||im.width, h=im.naturalHeight||im.height;
+    const c=document.createElement("canvas"); c.width=w; c.height=h;
+    c.getContext("2d",{willReadFrequently:true}).drawImage(im,0,0,w,h);
+    v._shapes=rasterRegions(c.getContext("2d").getImageData(0,0,w,h),40);
+    v._shapesFor=v.img; v.svgArea=v.svgArea||w*h;
+  }catch(_){ v._shapes=[]; v._shapesFor=v.img; }
+  return v._shapes;
+}
+// everything except the shape already being used as the body outline
+function svgDetails(view){
+  const v=V[view]; if(!v||v.A.length<3)return [];
+  const shapes=viewShapes(view); if(!shapes.length)return [];
+  const bodyA=polyAreaPts(v.A), full=v.svgArea||Infinity;
+  return shapes.filter(p=>p.length>=3 && polyAreaPts(p)<bodyA*0.9 && polyAreaPts(p)<full*0.95
+                          && polyAreaPts(p)>full*1e-5);
+}
+// the smallest shape under the cursor -> the most specific thing you pointed at
+function svgDetailAt(view,pt){
+  let best=null,bestA=Infinity;
+  for(const poly of svgDetails(view)){
+    if(!ptInPolyPts(poly,pt.x,pt.y))continue;
+    const a=polyAreaPts(poly); if(a<bestA){bestA=a;best=poly;}
+  }
+  return best;
+}
+function featAddSvgPoly(view,poly,quiet){
+  const norm=featNormalize(view,resamplePoly(poly,64));
+  if(!norm)return false;
+  features.push({kind:"poly",view,poly:norm,depth:-2.5,soft:0.08,name:"detail "+(features.length+1)});
+  if(!quiet){featRender();requestRebuild();
+    toast("Taken straight from your drawing — set its <b>depth</b> in Features (in = indent, out = raised).");}
+  return true;
+}
+function featStart(){
+  if(!(V[activeView]&&V[activeView].A.length>=3)){toast("Trace the body outline on this view first — features are placed against it.");return;}
+  featDraft={view:activeView,tool:featTool,pts:[]};
+  document.getElementById("featNew").style.display="none";
+  document.getElementById("featDone").style.display="";
+  document.getElementById("featCancel").style.display="";
+  setTraceStatus();drawTrace();
+  toast(featTool==="poly"
+    ? `Click around the shape on the <b>${activeView}</b> view, then <b>Finish</b>.`
+    : `Click <b>two opposite corners</b> on the <b>${activeView}</b> view to place the ${featTool==="text"?"wording":"box"}.`);
+}
+function featFinish(){
+  if(!featDraft)return;
+  const tool=featDraft.tool||"poly";
+  const need = tool==="poly"?3:2;
+  if(featDraft.pts.length<need){toast(tool==="poly"?"A shape needs at least 3 points.":"Click two opposite corners.");return;}
+  const norm=featNormalize(featDraft.view,featDraft.pts);
+  if(!norm){toast("Trace the body outline on this view first.");featCancelDraft();return;}
+  const nm=n=>({poly:"feature",box:"box",text:"text"})[tool]+" "+(features.length+1);
+  if(tool==="poly"){
+    features.push({kind:"poly",view:featDraft.view,poly:norm,depth:-2.5,soft:0.12,name:nm()});
+  } else {
+    const u0=Math.min(norm[0][0],norm[1][0]), u1=Math.max(norm[0][0],norm[1][0]);
+    const v0=Math.min(norm[0][1],norm[1][1]), v1=Math.max(norm[0][1],norm[1][1]);
+    if(u1-u0<0.004||v1-v0<0.004){toast("That box is too small — try again with corners further apart.");return;}
+    const box=[u0,v0,u1,v1];
+    if(tool==="box") features.push({kind:"poly",view:featDraft.view,poly:[[u0,v0],[u1,v0],[u1,v1],[u0,v1]],depth:-2.5,soft:0.06,name:nm()});
+    else {
+      const txt=(document.getElementById("featText").value||"TEXT").trim()||"TEXT";
+      features.push({kind:"text",view:featDraft.view,text:txt,box,mask:rasterizeText(txt,(u1-u0)/Math.max(1e-6,(v1-v0))),
+                     depth:-1.2,soft:0.05,name:txt.slice(0,14)});
+    }
+  }
+  featCancelDraft(); featRender(); requestRebuild();
+  toast(tool==="text"
+    ? "Wording added — <b>depth</b> negative engraves it, positive raises it. Resize by re-placing it."
+    : "Feature added — <b>depth</b> negative presses in, positive pops out.");
+}
+function featCancelDraft(){
+  featDraft=null;
+  document.getElementById("featNew").style.display="";
+  document.getElementById("featDone").style.display="none";
+  document.getElementById("featCancel").style.display="none";
+  setTraceStatus();drawTrace();
 }
 function commitTrace(){
   const DEF=(typeof DEFAULT_LEN!=="undefined"?DEFAULT_LEN:200);
@@ -1460,7 +2019,7 @@ function commitTrace(){
     traced.bottom=env.bot.map(p=>[clamp((p.x-env.minX)/env.span,0,1),(datum-p.y)/pxmm]);
     lenMM=Math.max(5,Math.round(env.span/pxmm));
     hgtMM=Math.max(1, Math.max(...traced.top.map(q=>q[1])) - Math.min(...traced.bottom.map(q=>q[1])));
-    traced.natHgt=hgtMM; S.hgtMM=Math.round(hgtMM);
+    traced.natHgt=hgtMM; S.hgtMM=Math.max(1,Math.round(hgtMM*(S.hgtK||1)));
     S.len=lenMM; syncLen(); markSil(true);
   } else if(sv.scale && sv.A.length>=2){
     const minX=Math.min(...sv.A.map(p=>p.x)),maxX=Math.max(...sv.A.map(p=>p.x)),span=Math.max(1,maxX-minX),datum=Math.max(...sv.A.map(p=>p.y));
@@ -1478,10 +2037,20 @@ function commitTrace(){
     const pxmm=anchorPxPerMm(env.span, lenMM, tv.scale, DEF);  // anchored to the side view
     traced.width=env.top.map((p,i)=>[clamp((p.x-env.minX)/env.span,0,1),Math.max(0.4,(env.bot[i].y-p.y)/pxmm/2)]);
     widMM=2*Math.max(...traced.width.map(q=>q[1]),0.4);
-    traced.natWid=widMM; S.widMM=Math.round(widMM);
+    traced.natWid=widMM; S.widMM=Math.max(1,Math.round(widMM*(S.widK||1)));
     if(!lenMM){lenMM=Math.max(5,Math.round(env.span/pxmm));S.len=lenMM;}
     markWidth(true); syncLen();
   }
+
+  // BOTTOM view -> the floor's own plan. Same object, so it anchors to the same length as
+  // everything else; only its SHAPE differs from the roof plan above it.
+  const bv=V.bottom;
+  if(bv && bv.A.length>=3){
+    const env=outlineEnvelope(bv.A);
+    const pxmm=anchorPxPerMm(env.span, lenMM, bv.scale, DEF);
+    traced.widthBot=env.top.map((p,i)=>[clamp((p.x-env.minX)/env.span,0,1),Math.max(0.3,(env.bot[i].y-p.y)/pxmm/2)]);
+    if(!lenMM){lenMM=Math.max(5,Math.round(env.span/pxmm));S.len=lenMM;syncLen();}
+  } else traced.widthBot=null;
 
   // FRONT / REAR -> cross-section + absolute hull. Anchored the same way: the front
   // view's width span IS the object's width (from the top view).
@@ -1499,9 +2068,26 @@ function commitTrace(){
     } else { if(view==="front")traced.frontHull=null; else traced.rearHull=null; }
   };
   if(!traced.top)traced.natHgt=null;
-  if(!traced.width)traced.natWid=null;
   doSection("front",FRONT_AT,"front");
   doSection("rear",REAR_AT,"rear");
+
+  // WIDTH can come from either place, which is how you actually read a drawing: the TOP
+  // view measures it along the whole length, and the FRONT/REAR view measures it head-on.
+  // With no top view the front view still says how wide the thing is, so the slider works
+  // off that instead of going dead.
+  if(!traced.width){
+    const hull=traced.frontHull||traced.rearHull;
+    let measured=0;
+    if(hull&&hull.length>1){const xs=hull.map(q=>q[0]); measured=Math.max(...xs)-Math.min(...xs);}
+    if(measured>0.5){
+      // nothing traced the width PROFILE, so the sliders still shape it — we just scale that
+      // shape until it is as wide as the drawing says
+      const par=2*Math.max(...buildWidth().map(q=>q[1]),0.4);
+      traced.natWid=par;
+      S.widK=measured/par;                     // the front view IS the measurement
+      S.widMM=Math.max(1,Math.round(measured));
+    } else traced.natWid=null;
+  }
 
   const normPoly=(pts,flipY)=>{if(!pts||pts.length<3)return null;const xs=pts.map(p=>p.x),ys=pts.map(p=>p.y);
     const minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys),sx=Math.max(1,maxX-minX),sy=Math.max(1,maxY-minY);
@@ -1509,10 +2095,11 @@ function commitTrace(){
   traced.sidePoly =normPoly(V.side.A,true);
   traced.topPoly  =normPoly(V.top.A,false);
   traced.frontPoly=normPoly(V.front.A,true);
+  traced.bottomPoly=V.bottom?normPoly(V.bottom.A,false):null;
   setTraceStatus();requestRebuild();updateViewDots();
 }
 function updateViewDots(){
-  const has={side:!!(traced.top||traced.bottom),top:!!traced.width,front:!!traced.section,rear:!!(traced.sections&&traced.sections.some(s=>s.src==="rear"))};
+  const has={side:!!(traced.top||traced.bottom),top:!!traced.width,bottom:!!traced.widthBot,front:!!traced.section,rear:!!(traced.sections&&traced.sections.some(s=>s.src==="rear"))};
   document.querySelectorAll("#viewSeg button").forEach(b=>b.classList.toggle("traced",!!has[b.dataset.v]));
 }
 function setTraceStatus(){
@@ -1523,7 +2110,8 @@ function setTraceStatus(){
   const la={side:"top",top:"left",front:"outline",rear:"outline"}[activeView], lb={side:"lower",top:"right",front:"base",rear:"base"}[activeView];
   if(v.A.length)parts.push(`${la}: ${v.A.length}`);
   if(v.B.length&&activeView!=="front"&&activeView!=="rear")parts.push(`${lb}: ${v.B.length}`);
-  if(traceMode)parts.push(`<b style="color:var(--accent)">● ${traceMode==="cal"?"click 2 points to set scale":"click around the outline"}</b>`);
+  if(featDraft&&featDraft.view===activeView)parts.push(`<b style="color:#E8C547">● drawing a feature — ${featDraft.pts.length} point(s), then Finish</b>`);
+  else if(traceMode)parts.push(`<b style="color:var(--accent)">● ${traceMode==="cal"?"click 2 points to set scale":"click around the outline"}</b>`);
   s.innerHTML=parts.join(" &nbsp; ");
 }
 
@@ -1542,6 +2130,14 @@ function svgPhysicalWidthMM(svg){
   return u==="mm"?v : u==="cm"?v*10 : v*25.4;      // px / unitless -> physical size unknown
 }
 function polyArea(p){let a=0;for(let i=0,j=p.length-1;i<p.length;j=i++)a+=(p[j].x*p[i].y-p[i].x*p[j].y);return Math.abs(a/2);}
+// biggest shape wins, ignoring a full-canvas background rect. rank>0 steps to the next
+// candidate, for when the drawing's outer shape isn't the one you meant.
+function pickSilhouette(polys,fullArea,rank){
+  const cand=polys.filter(p=>p.length>2 && polyArea(p)<fullArea*0.95);
+  const list=(cand.length?cand:polys).slice().sort((a,b)=>polyArea(b)-polyArea(a));
+  if(!list.length)return null;
+  return list[((rank||0)%list.length+list.length)%list.length];
+}
 function resamplePoly(p,N){if(p.length<=N)return p;const o=[];for(let i=0;i<N;i++)o.push(p[Math.round(i*(p.length-1)/(N-1))]);return o;}
 async function loadSVGFile(file){
   const text=await file.text();
@@ -1572,15 +2168,16 @@ async function loadSVGFile(file){
     if(!polys.length)throw new Error("no drawable paths found");
     // the silhouette = the largest shape, ignoring a full-canvas background rect
     const full=RW*RH;
-    const cand=polys.filter(p=>polyArea(p)<full*0.95);
-    const outline=resamplePoly((cand.length?cand:polys).sort((a,b)=>polyArea(b)-polyArea(a))[0],90);
+    const outline=resamplePoly(pickSilhouette(polys,full,0),90);
     // raster backdrop, pixel-aligned with the sampled points
     const url=URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(svg)],{type:"image/svg+xml"}));
     const img=await new Promise((res,rej)=>{const im=new Image();im.onload=()=>res(im);im.onerror=()=>rej(new Error("couldn't rasterize the SVG"));im.src=url;});
     const cnv=document.createElement("canvas"); cnv.width=RW; cnv.height=RH;
     cnv.getContext("2d").drawImage(img,0,0,RW,RH); URL.revokeObjectURL(url);
     const v=cv();
-    setRefImage(v,cnv); v.A=outline; v.B=[];
+    v.A=outline; v.B=[];
+    setRefImage(v,cnv);
+    v.svgPolys=polys; v.svgArea=RW*RH; v.svgPick=0;      // the file IS the trace — keep the exact paths
     if(physMM)v.scale=RW/physMM;                    // real units in the file -> exact scale
     document.getElementById("imgOpField").style.display="inline-flex";
     switchTab("trace"); fitTrace(); drawTrace(); commitTrace(); updateViewDots();
@@ -1600,14 +2197,35 @@ function normalizeRef(img,force){
   if(!w||!h)return {canvas:img,inverted:false};
   const c=document.createElement("canvas"); c.width=w; c.height=h;
   const x=c.getContext("2d",{willReadFrequently:true});
-  x.fillStyle="#f4f6f9"; x.fillRect(0,0,w,h);          // paper -> transparent dark ink now reads
-  x.drawImage(img,0,0,w,h);
-  let d; try{d=x.getImageData(0,0,w,h);}catch(_){return {canvas:c,inverted:false};}  // tainted: keep paper
-  const p=d.data; let sum=0,n=0;
-  const step=Math.max(1,Math.floor(p.length/4/20000))*4;   // sample ~20k pixels
-  for(let i=0;i<p.length;i+=step){sum+=0.299*p[i]+0.587*p[i+1]+0.114*p[i+2];n++;}
-  const inv = (force===null||force===undefined) ? (n>0 && sum/n<115) : !!force;
-  if(inv){for(let i=0;i<p.length;i+=4){p[i]=255-p[i];p[i+1]=255-p[i+1];p[i+2]=255-p[i+2];}x.putImageData(d,0,0);}
+  x.drawImage(img,0,0,w,h);                            // raw first, alpha intact
+  let d;
+  try{ d=x.getImageData(0,0,w,h); }
+  catch(_){                                            // can't read the pixels: just back it with paper
+    x.globalCompositeOperation="destination-over"; x.fillStyle="#f4f6f9"; x.fillRect(0,0,w,h);
+    x.globalCompositeOperation="source-over"; return {canvas:c,inverted:false};
+  }
+  const p=d.data, step=Math.max(1,Math.floor(p.length/4/20000))*4;   // sample ~20k pixels
+  let opaque=0,total=0,inkSum=0,inkN=0,allSum=0;
+  for(let i=0;i<p.length;i+=step){
+    const L=0.299*p[i]+0.587*p[i+1]+0.114*p[i+2];
+    total++; allSum+=L;
+    if(p[i+3]>240)opaque++;
+    if(p[i+3]>16){inkN++; inkSum+=L;}                  // only pixels that actually have ink
+  }
+  // An SVG is usually strokes on nothing. Judging the finished picture would just measure
+  // the empty space, so line art gets judged on its INK: light strokes are the ones that
+  // need flipping, or they end up invisible on light paper.
+  const lineArt = total>0 && (opaque/total)<0.7;
+  let inv;
+  if(force===null||force===undefined){
+    inv = (lineArt && inkN>0) ? (inkSum/inkN)>140            // pale strokes -> make them dark
+                              : (total>0 && allSum/total<115); // solid picture -> flip if dark
+  } else inv=!!force;
+  if(inv){for(let i=0;i<p.length;i+=4){p[i]=255-p[i];p[i+1]=255-p[i+1];p[i+2]=255-p[i+2];}}
+  x.putImageData(d,0,0);
+  x.globalCompositeOperation="destination-over";       // paper goes BEHIND the ink, not over it
+  x.fillStyle="#f4f6f9"; x.fillRect(0,0,w,h);
+  x.globalCompositeOperation="source-over";
   return {canvas:c,inverted:inv};
 }
 function applyRefNorm(v){
@@ -1615,13 +2233,21 @@ function applyRefNorm(v){
   const r=normalizeRef(v.imgRaw, v.inv===undefined?null:v.inv);
   v.img=r.canvas; v.invActive=r.inverted;
 }
-function setRefImage(v,raw){ v.imgRaw=raw; if(v.inv===undefined)v.inv=null; applyRefNorm(v); }
+function setRefImage(v,raw,keepVector){ v.imgRaw=raw; if(v.inv===undefined)v.inv=null; if(!keepVector){v.svgPolys=null;v.svgArea=0;v.svgPick=0;} v._shapes=null; v._shapesFor=null; applyRefNorm(v); }
 
 /* image loading + drag/drop (into the active view) */
 function loadImageFile(file){
   if(!file)return;
   if(/\.svg$/i.test(file.name||"")||file.type==="image/svg+xml"){loadSVGFile(file);return;}   // vector path
-  if(!file.type.startsWith("image/")){toast("That file isn't an image or an SVG.");return;}
+  if(/\.json$/i.test(file.name||"")||file.type==="application/json"){                       // a saved model
+    const r=new FileReader();
+    r.onload=()=>{ try{ const d=JSON.parse(r.result);
+      if(d&&d.schema&&(""+d.schema).indexOf("assembly")>=0){switchTab("workshop");wsInit();requestAnimationFrame(wsResize);wsLoadAssembly(d);}
+      else {applyProfile(d);switchTab("three");toast(`Loaded “${d.name||"model"}”.`);}
+    }catch(e){toast("That JSON isn't a LEE3D model: "+e.message);} };
+    r.readAsText(file); return;
+  }
+  if(!file.type.startsWith("image/")){toast("Drop a drawing (SVG, PNG, JPEG) or a saved .json model.");return;}
   const url=URL.createObjectURL(file);const img=new Image();
   img.onload=()=>{setRefImage(cv(),img);document.getElementById("imgOpField").style.display="inline-flex";
     switchTab("trace");fitTrace();
@@ -1631,6 +2257,20 @@ function loadImageFile(file){
 document.getElementById("bAuto").onclick=()=>{
   const v=cv();
   if(!v.img){toast("Load a drawing into this view first (🖼 drawing), then Auto-trace.");return;}
+  // An SVG already contains the real lines. Reading its pixels back would be throwing away
+  // exact geometry to guess at it, so re-use the paths and just step to the next shape if
+  // the first pick wasn't the one you wanted.
+  if(v.svgPolys && v.svgPolys.length){
+    v.svgPick=(v.svgPick||0)+1;
+    const pick=pickSilhouette(v.svgPolys, v.svgArea||1e9, v.svgPick);
+    if(pick){
+      v.A=resamplePoly(pick,90); v.B=[];
+      const turned=autoOrientView(activeView);
+      fitTrace(); drawTrace(); commitTrace(); updateViewDots();
+      toast(`Using the SVG's own lines — <span class="mono">shape ${((v.svgPick)%Math.max(1,v.svgPolys.length))+1} of ${v.svgPolys.length}</span>, exact (no tracing)${turned?" · turned upright":""}. Press again for the next shape.`);
+      return;
+    }
+  }
   try{
     const im=v.img, w=im.naturalWidth||im.width, h=im.naturalHeight||im.height;
     const c=document.createElement("canvas"); c.width=w; c.height=h;
@@ -1643,6 +2283,32 @@ document.getElementById("bAuto").onclick=()=>{
     toast(`Auto-traced the <b>${activeView}</b> view — <span class="mono">${pts.length} points</span>${turned?" · turned it upright (it was drawn sideways)":""}. Drag any point to fix it.`);
   }catch(e){toast("Auto-trace failed: "+e.message);}
 };
+document.querySelectorAll("#featTool button").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll("#featTool button").forEach(x=>x.classList.remove("on"));
+  b.classList.add("on"); featTool=b.dataset.t;
+  document.getElementById("featTextRow").style.display=(featTool==="text")?"":"none";
+  document.getElementById("featSvgRow").style.display=(featTool==="svg")?"":"none";
+  document.getElementById("featNew").style.display=(featTool==="svg")?"none":"";
+  if(featDraft)featCancelDraft();
+  if(featTool==="svg"){
+    const have=(typeof svgDetails==="function")?svgDetails(activeView).length:0;
+    const kind=(V[activeView]&&V[activeView].svgPolys&&V[activeView].svgPolys.length)?"vector line":"shape";
+    toast(have?`${have} ${kind}(s) found in this drawing — click one to take it.`
+              :"No shapes found in this view's drawing. Load a drawing, or use Shape/Box/Text.");
+  }
+  drawTrace();
+});
+document.getElementById("featSvgAll").onclick=()=>{
+  const list=svgDetails(activeView);
+  if(!list.length){toast("No SVG lines on this view to take.");return;}
+  if(list.length>24 && !confirm(`Take all ${list.length} lines as features? That's a lot — you can delete any you don't want.`))return;
+  let added=0; list.forEach(p=>{ if(featAddSvgPoly(activeView,p,true))added++; });
+  featRender(); requestRebuild(); drawTrace();
+  toast(`Took <b>${added}</b> line(s) straight from the drawing — tune each one's depth in the list.`);
+};
+document.getElementById("featNew").onclick=featStart;
+document.getElementById("featDone").onclick=featFinish;
+document.getElementById("featCancel").onclick=featCancelDraft;
 document.getElementById("bRot").onclick=()=>{
   const v=cv();
   if(!v.img&&!(v.A&&v.A.length)){toast("Nothing in this view to rotate yet.");return;}
@@ -1663,10 +2329,11 @@ host.addEventListener("drop",e=>{if(e.dataTransfer.files[0])loadImageFile(e.data
 
 /* view switch (side / top / front) */
 function updateEdgeLabels(){
-  document.getElementById("dropTitle").textContent={side:"Drop a side-view drawing",top:"Drop a top-view drawing",front:"Drop a front-view drawing",rear:"Drop a rear-view drawing"}[activeView];
+  document.getElementById("dropTitle").textContent={side:"Drop a side-view drawing",top:"Drop a top-view drawing",bottom:"Drop a bottom-view drawing",front:"Drop a front-view drawing",rear:"Drop a rear-view drawing"}[activeView];
   document.getElementById("dropSub").textContent={
     side:"Side view = the profile. Set scale, then trace one closed outline all the way around the silhouette.",
     top:"Top view = real width. Set scale, then trace one closed outline around the plan shape.",
+    bottom:"Bottom view = the underside. Trace one closed outline around the floor. It shares the length with the side view; its own shape narrows the body near the ground.",
     front:"Front view = the front cross-section. Trace one closed outline around it — no scale needed.",
     rear:"Rear view = the back cross-section. Trace one closed outline around it — no scale needed."
   }[activeView];
@@ -1684,8 +2351,9 @@ function setMode(m){traceMode=(traceMode===m)?"trace":m;
   document.getElementById("bCal").classList.toggle("active",traceMode==="cal");
   setTraceStatus();}
 document.getElementById("bCal").onclick=()=>{calPts=[];calTarget="trace";setMode("cal");};
-document.getElementById("bUndo").onclick=()=>{const v=cv(); v.A.pop();
-  drawTrace();commitTrace();};
+document.getElementById("bUndo").onclick=()=>{
+  if(featDraft&&featDraft.pts.length){featDraft.pts.pop();drawTrace();return;}
+  const v=cv(); v.A.pop(); drawTrace();commitTrace();};
 document.getElementById("bClear").onclick=()=>{const v=cv();v.A=[];v.B=[];calPts=[];
   if(activeView==="side"){traced.top=null;traced.bottom=null;markSil(false);}
   else if(activeView==="top"){traced.width=null;markWidth(false);}
@@ -1697,11 +2365,12 @@ document.getElementById("clearWidth").onclick=()=>{V.top.A=[];V.top.B=[];traced.
 document.getElementById("clearSection").onclick=()=>{V.front.A=[];V.front.B=[];traced.section=null;traced.frontHull=null;if(traced.sections){traced.sections=traced.sections.filter(s=>s.src!=="front");if(!traced.sections.length)traced.sections=null;}markSection(false);refreshSecUI();if(activeView==="front")drawTrace();requestRebuild();};
 function backToParametric(){markSil(false);markWidth(false);markSection(false);}
 document.getElementById("b3D").onclick=()=>switchTab("three");
+function refreshCrispUI(){const f=document.getElementById("crispField");if(f)f.style.display=(S.mode==="projection")?"":"none";}
 document.querySelectorAll("#modeSeg button").forEach(b=>b.onclick=()=>{
   document.querySelectorAll("#modeSeg button").forEach(x=>x.classList.remove("on"));b.classList.add("on");
-  S.mode=b.dataset.m;
-  if(S.mode==="projection"&&!traced.frontHull)
-    toast("Orthographic needs a front view with a scale. Trace/Import a front view, then it projects all three silhouettes.");
+  S.mode=b.dataset.m; refreshCrispUI();
+  if(S.mode==="projection"&&!traced.sidePoly)
+    toast("Follow my drawing needs at least a traced <b>side</b> outline — it carves the volume your outlines describe.");
   requestRebuild();
 });
 document.getElementById("bSaveAll").onclick=async ()=>{
@@ -1779,14 +2448,32 @@ function bindSlider(id,key,label,decimals,after){
   });
 }
 bindSlider("sLen","len","vLen");
-bindSlider("sWid","widMM","vWid");
-bindSlider("sHgt","hgtMM","vHgt");
+// Moving these records how far you pushed it AWAY from what the drawing measured. Re-trace
+// and the drawing re-measures, but your adjustment rides along instead of being wiped.
+bindSlider("sCrisp","hullCrisp","vCrisp",2);
+bindSlider("sWid","widMM","vWid",null,()=>{ if(traced.natWid>0)S.widK=S.widMM/traced.natWid; });
+bindSlider("sHgt","hgtMM","vHgt",null,()=>{ if(traced.natHgt>0)S.hgtK=S.hgtMM/traced.natHgt; });
 bindSlider("sNose","nose","vNose");bindSlider("sCowl","cowl","vCowl");
 bindSlider("sRoof","roof","vRoof");bindSlider("sRoofPos","roofPos","vRoofPos",2);
 bindSlider("sTail","tail","vTail");bindSlider("sSill","sill","vSill");
 bindSlider("sNW","nw","vNW");bindSlider("sMW","mw","vMW");bindSlider("sWP","wp","vWP",2);
 bindSlider("sTW","tw","vTW");bindSlider("sRound","round","vRound",2);
-bindSlider("sWall","wall","vWall",1);bindSlider("sSt","st","vSt");bindSlider("sSeg","seg","vSeg");
+bindSlider("sWall","wall","vWall",1,()=>{ if(!S.wallPerFace){S.wallTop=S.wallSide=S.wallBottom=S.wall;syncWallUI();} featRender(); });
+bindSlider("sWallTop","wallTop","vWallTop",1,()=>featRender());
+bindSlider("sWallSide","wallSide","vWallSide",1,()=>featRender());
+bindSlider("sWallBot","wallBottom","vWallBot",1,()=>featRender());
+function syncWallUI(){
+  const set=(id,v)=>{const e=document.getElementById(id);if(e)e.value=v;};
+  const lab=(id,v)=>{const e=document.getElementById(id);if(e)e.textContent=Number(v).toFixed(1);};
+  set("sWallTop",S.wallTop);set("sWallSide",S.wallSide);set("sWallBot",S.wallBottom);
+  lab("vWallTop",S.wallTop);lab("vWallSide",S.wallSide);lab("vWallBot",S.wallBottom);
+  const box=document.getElementById("wallFaces"); if(box)box.style.display=S.wallPerFace?"":"none";
+}
+document.getElementById("wallPerFace").addEventListener("change",e=>{
+  S.wallPerFace=e.target.checked;
+  if(!S.wallPerFace)S.wallTop=S.wallSide=S.wallBottom=S.wall;
+  syncWallUI(); featRender(); requestRebuild();
+});bindSlider("sSt","st","vSt");bindSlider("sSeg","seg","vSeg");
 document.getElementById("sOp").addEventListener("input",e=>{S.opacity=e.target.value/100;vOp.textContent=e.target.value;drawTrace();});
 document.getElementById("sepBottom").addEventListener("change",e=>{S.sepBottom=e.target.checked;requestRebuild();});
 
@@ -1889,7 +2576,12 @@ jsonFile.onchange=e=>{const f=e.target.files[0];if(!f)return;const r=new FileRea
   r.onload=()=>{try{const p=JSON.parse(r.result);applyProfile(p);switchTab("three");toast(`Resumed “${p.name||f.name}” — pick up right where you left off.`);}catch(err){toast("Couldn't read that JSON.");}};r.readAsText(f);e.target.value="";};
 function applyProfile(p){
   if(p.length)S.len=p.length;if(p.stations)S.st=p.stations;if(p.arcSegments)S.seg=p.arcSegments;
-  if(p.roofFlatness)S.round=p.roofFlatness;if(p.wallThickness)S.wall=p.wallThickness;
+  if(p.roofFlatness)S.round=p.roofFlatness;
+  if(p.wallThickness)S.wall=p.wallThickness;
+  S.wallTop=p.wallTop??S.wall; S.wallSide=p.wallSide??S.wall; S.wallBottom=p.wallBottom??S.wall;
+  if(p.wallPerFace!=null)S.wallPerFace=!!p.wallPerFace;
+  if(typeof syncWallUI==="function")syncWallUI();
+  if(p.hullHollow!=null)S.hullHollow=!!p.hullHollow;
   traced.top=p.topProfile&&p.topProfile.length?p.topProfile:null;
   traced.bottom=p.bottomProfile&&p.bottomProfile.length?p.bottomProfile:null;
   traced.width=p.widthProfile&&p.widthProfile.length?p.widthProfile:null;
@@ -1902,12 +2594,15 @@ function applyProfile(p){
     document.querySelectorAll("#modeSeg button").forEach(x=>x.classList.toggle("on",x.dataset.m===S.mode));}
   if(p.sepBottom!=null){S.sepBottom=!!p.sepBottom;const cb=document.getElementById("sepBottom");if(cb)cb.checked=S.sepBottom;}
   if(typeof SC!=="undefined")SC.off=(p.sculpt&&p.sculpt.length)?Float32Array.from(p.sculpt):null;
+  features=Array.isArray(p.features)?JSON.parse(JSON.stringify(p.features)):[];
+  if(typeof featEnsureMasks==="function")featEnsureMasks();
+  if(typeof featRender==="function")featRender();
   if(p.shape==="loft"||p.shape==="revolve")S.shape=p.shape; if(p.revShape)S.revShape=p.revShape; if(p.revSize)S.revSize=p.revSize;
-  if(p.widMM)S.widMM=p.widMM; if(p.hgtMM)S.hgtMM=p.hgtMM;
+  if(p.widMM)S.widMM=p.widMM; if(p.hgtMM)S.hgtMM=p.hgtMM; if(p.hullCrisp!=null)S.hullCrisp=p.hullCrisp;
   // restore full editable tracing state: points, scale, and reference images
-  for(const v of ["side","top","front","rear"]){ if(!V[v])continue; V[v].A=[];V[v].B=[];V[v].img=null;V[v].imgRaw=null;V[v].inv=null; }
+  for(const v of ["side","top","bottom","front","rear"]){ if(!V[v])continue; V[v].A=[];V[v].B=[];V[v].img=null;V[v].imgRaw=null;V[v].inv=null; }
   if(p.trace){
-    for(const v of ["side","top","front","rear"]){
+    for(const v of ["side","top","bottom","front","rear"]){
       const T=p.trace[v]; if(!T||!V[v])continue;
       V[v].A=(T.A||[]).map(pt=>({x:pt.x,y:pt.y}));
       V[v].B=(T.B||[]).map(pt=>({x:pt.x,y:pt.y}));
@@ -1917,7 +2612,7 @@ function applyProfile(p){
     }
     // Re-derive silhouette/width/sections from the RAW points with the current math,
     // so profiles saved by older derivations load correctly (trace is authoritative).
-    if(["side","top","front","rear"].some(v=>V[v]&&V[v].A.length>=3))commitTrace();
+    if(["side","top","bottom","front","rear"].some(v=>V[v]&&V[v].A.length>=3))commitTrace();
   }
   if(p.name){projName.value=p.name;} if(p.category){projCat.value=p.category;}
   if(traced.top||traced.bottom){
@@ -1960,6 +2655,16 @@ function applyWiredConfig(){
   // The repo write-back needs a real GitHub token, which must never be baked into a public
   // page. It is an editor tool, so it stays folded away unless someone goes looking.
   const box=document.getElementById("ghWrite"); if(box)box.open=false;
+  refreshPublishUI();
+}
+// The publish button appears when the backend can do it for everyone (token server-side),
+// or when this browser is the owner's and holds a token. Otherwise it stays hidden rather
+// than promising something it can't do.
+function refreshPublishUI(){
+  const btn=document.getElementById("ghPublish"); if(!btn)return;
+  const route=publishRoute(!!(typeof beBase==="function"&&beBase()), !!(typeof ghTok==="function"&&ghTok()));
+  btn.style.display=route?"":"none";
+  btn.title=route==="backend"?"Goes through the backend — no token needed":"Uses the token saved in this browser";
 }
 async function probeBackend(){
   const el=document.getElementById("beState");const base=beBase();
@@ -1995,19 +2700,21 @@ document.getElementById("saveLib").onclick=async ()=>{
 };
 
 document.getElementById("buildServer").onclick=async ()=>{
-  const prof=currentProfile();const name=slug(projName.value||"body");const base=beBase();
-  if(!base){toast("Set the Backend URL first (default http://localhost:8000).");return;}
-  toast("Building on server… <span class='mono'>CadQuery loft + shell</span>");
+  const prof=fullProfile(), name=slug(projName.value||"body"), base=beBase();
+  if(!base){toast("Exact build needs the backend running — see SETUP.md. Everything else here works without it.");return;}
+  const holes=(features||[]).filter(f=>f.through&&f.depth<0).length;
+  toast(`Building exactly… <span class="mono">OpenCascade${holes?` · ${holes} real opening(s)`:""}</span>`);
   try{
-    const r=await fetch(base+"/generate?fmt=step&cut_wheels=false",{method:"POST",
+    const r=await fetch(base+"/solid?fmt=step",{method:"POST",
       headers:{"Content-Type":"application/json"},body:JSON.stringify(prof)});
-    if(r.status===503){toast("Server up, but CAD env not installed. <span class='mono'>conda env create -f environment.yml</span>");return;}
+    if(r.status===503){toast("The backend is up but running the light image, which has no CAD kernel. Rebuild it with <span class='mono'>Dockerfile.full</span> for exact output.");return;}
+    if(r.status===400){toast("Exact build: "+((await r.json()).detail||"those outlines don't make a solid"));return;}
     if(!r.ok)throw new Error("HTTP "+r.status+" "+(await r.text()).slice(0,120));
-    const blob=await r.blob();
-    download(blob,name+".step");
-    toast("Server build done ✓ <span class='mono'>"+name+".step</span> downloaded (editable in any CAD).");
+    const cut=r.headers.get("X-LEE3D-Through-Cuts")||"0";
+    download(await r.blob(), name+".step");
+    toast(`Exact build done ✓ <span class="mono">${name}.step</span>${+cut?` · ${cut} real opening(s) cut`:""} — opens in any CAD package.`);
   }catch(e){
-    toast(`Backend unreachable (${String(e.message).slice(0,80)}). Is LEE3D-Backend-A running + CORS set?`);
+    toast("Exact build failed: "+e.message);
   }
 };
 
@@ -2177,7 +2884,7 @@ function renderCrops(){
     div.style.left=a.x+"px";div.style.top=a.y+"px";div.style.width=(c.x-a.x)+"px";div.style.height=(c.y-a.y)+"px";
     div.style.borderColor=ROLE_COLOR[b.role]||"#71839A";
     div.innerHTML=`<div class="cb-bar" style="background:${ROLE_COLOR[b.role]||"#71839A"}">
-        <select class="cb-role">${["side","top","front","rear","ignore"].map(r=>`<option value="${r}" ${r===b.role?"selected":""}>${r}</option>`).join("")}</select>
+        <select class="cb-role">${["side","top","bottom","front","rear","ignore"].map(r=>`<option value="${r}" ${r===b.role?"selected":""}>${r}</option>`).join("")}</select>
         <span class="cb-del">×</span></div>
       <span class="h nw"></span><span class="h ne"></span><span class="h sw"></span><span class="h se"></span>`;
     layer.appendChild(div);
@@ -2330,7 +3037,7 @@ document.getElementById("iBuild").onclick=()=>{
     }
     for(const bx of pg.boxes){
       const role=bx.role;
-      if(["side","top","front","rear"].includes(role)){
+      if(["side","top","bottom","front","rear"].includes(role)){
         const {canvas,cf,topPts,botPts}=cropToViewTrace(bx);
         if(topPts.length<2)continue;
         const view=V[role];
@@ -2861,8 +3568,8 @@ CLOUD.load();
    Displaces outer+inner vertices together along the outer normal, so wall
    thickness and topology are preserved (the shell stays watertight).
    ========================================================================= */
-const SC={on:false, mode:"add", radius:14, strength:1.4, off:null, io:0,
-  baseOuter:null, baseInner:null, baseNrm:null};
+const SC={on:false, mode:"add", radius:14, strength:1.4, sym:true, off:null, io:0,
+  baseOuter:null, baseInner:null, baseNrm:null, ring:null};
 const scRay=new THREE.Raycaster();
 
 function computeOuterNormals(outer,N,M){
@@ -2893,6 +3600,31 @@ function applySculptLive(){
     pos.setXYZ(io+k, bi[0]+n[0]*o, bi[1]+n[1]*o, bi[2]+n[2]*o);}
   pos.needsUpdate=true; bodyMesh.geometry.computeVertexNormals(); bodyMesh.geometry.computeBoundingBox(); requestRender();
 }
+// the ring that follows your cursor across the surface — you can see the brush before
+// you commit to a stroke, which is the difference between painting and guessing
+function scEnsureRing(){
+  if(SC.ring||typeof scene==="undefined"||!scene)return;
+  const g=new THREE.RingGeometry(0.9,1,48);
+  const m=new THREE.MeshBasicMaterial({color:0xFF7A2F,side:THREE.DoubleSide,transparent:true,opacity:0.95,depthTest:false});
+  SC.ring=new THREE.Mesh(g,m); SC.ring.renderOrder=999; SC.ring.visible=false; scene.add(SC.ring);
+}
+function scHitAt(e){
+  if(!bodyMesh)return null;
+  const rect=glCanvas.getBoundingClientRect();
+  scRay.setFromCamera({x:((e.clientX-rect.left)/rect.width)*2-1, y:-((e.clientY-rect.top)/rect.height)*2+1}, camera);
+  return scRay.intersectObject(bodyMesh,false)[0]||null;
+}
+function scShowRing(hit){
+  scEnsureRing(); if(!SC.ring)return;
+  if(!hit||!SC.on){ if(SC.ring.visible){SC.ring.visible=false;requestRender();} return; }
+  SC.ring.visible=true;
+  SC.ring.position.copy(hit.point);
+  const n=hit.face?hit.face.normal.clone().transformDirection(bodyMesh.matrixWorld):new THREE.Vector3(0,1,0);
+  SC.ring.lookAt(hit.point.clone().add(n));
+  SC.ring.scale.setScalar(SC.radius);
+  SC.ring.material.color.setHex(SC.mode==="trim"?0x46B7D9:SC.mode==="smooth"?0xE8C547:0xFF7A2F);
+  requestRender();
+}
 function sculptDab(e){
   if(!bodyMesh||!SC.baseOuter)return false;
   const rect=glCanvas.getBoundingClientRect();
@@ -2911,8 +3643,17 @@ function sculptDab(e){
         SC.off[k]+=(avg-SC.off[k])*Math.min(1,SC.strength*0.4)*fall;}}
   } else {
     const str=SC.strength*(SC.mode==="trim"?-1:1);
-    for(let k=0;k<io;k++){const P=SC.baseOuter[k];const dx=P[0]-lp.x,dy=P[1]-lp.y,dz=P[2]-lp.z,d2=dx*dx+dy*dy+dz*dz;
-      if(d2<r2){const fall=1-Math.sqrt(d2)/r;SC.off[k]+=str*fall*fall;}}
+    // symmetry mirrors the BRUSH across the centreline, so both sides get an identical
+    // stroke and no vertex can be hit twice
+    const tips=[lp]; if(SC.sym)tips.push({x:lp.x,y:-lp.y,z:lp.z});
+    for(let k=0;k<io;k++){
+      const P=SC.baseOuter[k]; let best=0;
+      for(const c of tips){
+        const dx=P[0]-c.x,dy=P[1]-c.y,dz=P[2]-c.z,d2=dx*dx+dy*dy+dz*dz;
+        if(d2<r2){const fall=1-Math.sqrt(d2)/r, e2=str*fall*fall; if(Math.abs(e2)>Math.abs(best))best=e2;}
+      }
+      if(best)SC.off[k]+=best;
+    }
   }
   applySculptLive(); return true;
 }
@@ -2927,7 +3668,8 @@ function setSculpt(on){
   const st=document.getElementById("sSt"), sg=document.getElementById("sSeg");
   if(st)st.disabled=on; if(sg)sg.disabled=on;           // lock mesh resolution while sculpting
   const ov=document.getElementById("dims");
-  if(on){sculptCache();toast("Sculpt on — left-drag to paint, right-drag to orbit.");}
+  if(on){sculptCache();toast("Paint mode — drag on the model. The ring is your brush; <b>[</b>/<b>]</b> resize it.");}
+  else if(SC.ring){SC.ring.visible=false;requestRender();}
 }
 
 /* sculpt UI wiring */
@@ -2936,7 +3678,17 @@ document.querySelectorAll("#scMode button").forEach(b=>b.onclick=()=>{
   document.querySelectorAll("#scMode button").forEach(x=>x.classList.remove("on"));b.classList.add("on");SC.mode=b.dataset.m;});
 document.getElementById("scR").addEventListener("input",e=>{SC.radius=+e.target.value;document.getElementById("vScR").textContent=e.target.value;});
 document.getElementById("scS").addEventListener("input",e=>{SC.strength=+e.target.value;document.getElementById("vScS").textContent=(+e.target.value).toFixed(1);});
+document.getElementById("scSym").addEventListener("change",e=>{SC.sym=e.target.checked;});
 document.getElementById("scClear").onclick=clearSculpt;
+// [ and ] resize the brush, the way every paint tool does
+window.addEventListener("keydown",e=>{
+  if(!SC.on||e.target.tagName==="INPUT"||e.target.tagName==="TEXTAREA")return;
+  if(e.key!=="["&&e.key!=="]")return;
+  SC.radius=Math.max(3,Math.min(80, SC.radius*(e.key==="["?0.85:1.18)));
+  const el=document.getElementById("scR"); if(el)el.value=Math.round(SC.radius);
+  const v=document.getElementById("vScR"); if(v)v.textContent=Math.round(SC.radius);
+  if(SC.ring&&SC.ring.visible){SC.ring.scale.setScalar(SC.radius);requestRender();}
+});
 
 /* =========================================================================
    GITHUB LIBRARY — read *.profile.json / *.assembly.json from a public repo
@@ -2990,7 +3742,39 @@ function ghTok(){return (document.getElementById("ghToken").value||"").trim();}
 function ghRememberSync(){const on=document.getElementById("ghRemember").checked;
   try{ if(on)localStorage.setItem("lee3d.ghtoken",ghTok()); else localStorage.removeItem("lee3d.ghtoken"); }catch(_){}}
 document.getElementById("ghRemember").addEventListener("change",ghRememberSync);
-document.getElementById("ghToken").addEventListener("input",()=>{if(document.getElementById("ghRemember").checked)ghRememberSync();});
+document.getElementById("ghToken").addEventListener("input",()=>{if(document.getElementById("ghRemember").checked)ghRememberSync();refreshPublishUI();});
+document.getElementById("backendUrl").addEventListener("input",()=>refreshPublishUI());
+// Publishing to the shared repo needs a GitHub WRITE token. That can never live in this
+// page — a static site's source is readable by anyone, so it would hand the whole repo to
+// the internet (and GitHub's secret scanning revokes exposed tokens anyway). The backend
+// already holds one server-side, so we go through it: then nobody needs to paste anything.
+// Where a publish can go, in order of preference. The backend is preferred because the
+// token lives on the server there, so everyone can publish with nothing to set up.
+function publishRoute(hasBackend,hasToken){ return hasBackend?"backend":(hasToken?"token":null); }
+async function publishViaBackend(){
+  const base=(typeof beBase==="function")?beBase():""; if(!base)return false;
+  const doc=fullProfile(), name=slug(doc.name||"object"), cat=slug(doc.category||"misc");
+  const path=`json/${cat}/${name}.profile.json`;
+  ghState("publishing…","var(--ink-dim)");
+  const r=await fetch(base+"/library/commit",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({path,content_base64:b64utf8(JSON.stringify(doc,null,2)),message:`LEE3D: ${name}`})});
+  if(!r.ok)throw new Error("HTTP "+r.status+" "+(await r.text()).slice(0,120));
+  const j=await r.json().catch(()=>({}));
+  toast(`Published “${name}” to the shared library ✓ <span class="mono">${j.path||path}</span>`);
+  ghState("published ✓","var(--good)");
+  uniLibItems._repo=null; ghRefresh(true); if(typeof wsRenderLib==="function")wsRenderLib();
+  return true;
+}
+async function publishToLibrary(){
+  const route=publishRoute(!!(typeof beBase==="function"&&beBase()), !!(typeof ghTok==="function"&&ghTok()));
+  if(route==="backend"){
+    try{ await publishViaBackend(); }
+    catch(e){ ghState("publish failed","var(--warn)"); toast("Publish failed: "+e.message); }
+    return;
+  }
+  if(route==="token") return ghCommitCurrent();          // the repo owner's own browser
+  toast("Publishing to the shared library needs the backend running — then it works for everyone with nothing to set up. (Your model is still safe: <b>Save</b> keeps it on this device and in the cloud.)");
+}
 async function ghCommitCurrent(){
   const token=ghTok(); if(!token){toast("Paste a GitHub token with Contents: write first.");return;}
   GHLIB.repo=(document.getElementById("ghRepo").value||"BEARME-A/LEE3D-Lib").trim();
@@ -3013,6 +3797,7 @@ async function ghCommitCurrent(){
   }catch(e){ghState("write error","var(--warn)");toast("Repo save failed: "+e.message);}
 }
 document.getElementById("ghCommit").onclick=ghCommitCurrent;
+document.getElementById("ghPublish").onclick=publishToLibrary;
 GHLIB.load(); document.getElementById("ghRepo").value=GHLIB.repo;
 // lazily fetch the first time the Library section is opened (keeps GitHub API calls minimal)
 (function(){const det=document.getElementById("ghRefresh").closest("details");
@@ -3031,6 +3816,9 @@ if(!window.THREE){
   refreshCategories();
   applyWiredConfig();
   syncSize();          // size sliders start in the right state (disabled until traced)
+  syncWallUI();
+  refreshCrispUI();
+  featRender();
   window.addEventListener("resize",()=>{
     if(!document.getElementById("viewTrace").classList.contains("hide"))fitTrace();
     if(!document.getElementById("viewImport").classList.contains("hide")&&IMP.img){layoutSheet();renderCrops();}
