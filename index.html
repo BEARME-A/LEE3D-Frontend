@@ -71,6 +71,10 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
     padding:6px 10px;border-radius:6px;font-size:13px;width:190px;
   }
   .proj-name:focus{outline:none;border-color:var(--accent)}
+  /* widths live here, not inline, so the phone layout can actually change them */
+  #projCat{width:150px}
+  #viewSeg{margin:0;width:340px;flex:0 0 auto}
+  #featTool{margin:0;width:250px;flex:0 0 auto}
   .spacer{flex:1}
   .readout{display:flex;gap:16px;align-items:center}
   .stat{display:flex;flex-direction:column;line-height:1.15}
@@ -184,6 +188,7 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
   .trace-bar{display:flex;gap:8px;align-items:center;padding:9px 12px;border-bottom:1px solid var(--line);
     background:var(--panel-2);flex-wrap:wrap}
   .trace-bar .btn{width:auto;padding:6px 10px;font-size:11.5px}
+  .trace-bar.wrap{flex-wrap:wrap}   /* roomy screens can wrap; a phone scrolls instead */
   #canvasHost{flex:1;position:relative;overflow:hidden;background:
      repeating-linear-gradient(0deg,#0a0e13,#0a0e13 1px,transparent 1px,transparent 24px),
      repeating-linear-gradient(90deg,#0a0e13,#0a0e13 1px,transparent 1px,transparent 24px),#0c1119;}
@@ -225,7 +230,7 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
     header h1.disp{font-size:15px}
     header .sub{display:none}
     .logo{width:22px;height:22px}
-    .proj-name{width:104px;font-size:12px;padding:5px 7px}
+    .proj-name{width:104px;min-width:0;flex:0 1 auto;font-size:12px;padding:5px 7px}
     #projCat{width:88px}
     .readout{gap:8px}
     .readout .stat span{display:none}          /* keep the numbers, drop the captions */
@@ -249,8 +254,13 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
     .tabs.subtabs{padding:4px 8px 0}
     .tabs.subtabs .tab{padding:6px 10px}
 
+    /* no grid on a phone: under a wide sheet it's half a screen of lines saying nothing */
+    #sheetHost{background:#0c1119}
+    #canvasHost{background:#0c1119}
+    #sheetWrap{margin:6px auto}
+
     /* toolbars scroll sideways rather than stacking into a wall of rows */
-    .trace-bar{flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;
+    .trace-bar,.trace-bar.wrap{flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;
       -webkit-overflow-scrolling:touch;scrollbar-width:none;padding:7px 8px;gap:6px}
     .trace-bar::-webkit-scrollbar{display:none}
     .trace-bar > *{flex:0 0 auto}
@@ -382,7 +392,7 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
     </div>
   </div>
   <input id="projName" class="proj-name mono" value="untitled-object" spellcheck="false" />
-  <input id="projCat" class="proj-name mono" list="catList" value="Car frame" placeholder="category…" spellcheck="false" title="Category — pick an existing one or type a new one" style="width:150px" />
+  <input id="projCat" class="proj-name mono" list="catList" value="Car frame" placeholder="category…" spellcheck="false" title="Category — pick an existing one or type a new one" />
   <datalist id="catList"></datalist>
   <div class="spacer"></div>
   <div class="readout">
@@ -597,7 +607,7 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
     <!-- Blueprint import -->
     <div class="view" id="viewImport">
       <div class="trace-wrap">
-        <div class="trace-bar" style="flex-wrap:wrap">
+        <div class="trace-bar wrap">
           <button class="btn" id="iLoad">⤓ Load sheet</button>
           <input type="file" id="sheetFile" accept="image/*,.svg" hidden multiple>
           <div class="seg" id="unitSeg" style="margin:0;width:172px;flex:0 0 auto">
@@ -658,7 +668,7 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
     <div class="view hide" id="viewTrace">
       <div class="trace-wrap">
         <div class="trace-bar">
-          <div class="seg" id="viewSeg" style="margin:0;width:340px;flex:0 0 auto">
+          <div class="seg" id="viewSeg">
             <button data-v="side" class="on">Side</button>
             <button data-v="top">Top</button>
             <button data-v="bottom">Bottom</button>
@@ -668,7 +678,7 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
           <button class="btn" id="bCal">⊹ Set scale</button>
           <button class="btn primary" id="bAuto">✨ Auto-trace</button>
           <span style="width:1px;height:18px;background:var(--line-2);margin:0 2px"></span>
-          <div class="seg" id="featTool" style="margin:0;width:250px;flex:0 0 auto">
+          <div class="seg" id="featTool">
             <button data-t="poly" class="on">Shape</button>
             <button data-t="box">Box</button>
             <button data-t="text">Text</button>
