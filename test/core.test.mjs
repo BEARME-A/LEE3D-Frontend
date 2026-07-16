@@ -1067,6 +1067,61 @@ t("ship: the deploy publishes index.html", () => {
   ok(/upload-pages-artifact/.test(y) && /path:\s*_site/.test(y), "deploy.yml doesn't upload _site");
 });
 
+// =====================  13. MOBILE  =====================
+// Collin drives this from a phone and his neighbour's machine barely runs it. The layout
+// has to fold, and — more importantly — every tool has to stay REACHABLE. Panning used to
+// need a right-click, which a phone does not have, so it simply could not be done.
+const CSS = html.slice(html.indexOf("<style>"), html.indexOf("</style>"));
+
+t("mobile: there's a small-screen layout at all", () => {
+  ok(/@media\s*\(max-width:\s*860px\)/.test(CSS), "no phone breakpoint");
+  ok(/@media\s*\(max-width:\s*420px\)/.test(CSS), "no narrow-phone breakpoint");
+});
+t("mobile: the sidebar stops stealing a column and becomes a drawer", () => {
+  ok(/main\{grid-template-columns:1fr\}/.test(CSS.replace(/\s+/g, "")) ||
+     /main\{grid-template-columns:1fr;/.test(CSS.replace(/\s+/g, "")),
+     "main must collapse to one column on a phone");
+  ok(IDS.has("railBtn"), "no way to open the drawer");
+  ok(IDS.has("railScrim"), "no backdrop to close it");
+  ok(script.includes("function railOpen("), "the drawer has no logic");
+});
+t("mobile: the drawer gets out of the way when you pick a tab", () => {
+  ok(script.includes("railAutoClose"), "picking a tab should close the drawer on a phone");
+  ok(script.includes('matchMedia("(max-width:860px)")'), "…and only on a phone");
+});
+t("mobile: toolbars scroll sideways instead of becoming a wall of buttons", () => {
+  const flat = CSS.replace(/\s+/g, "");
+  ok(flat.includes("overflow-x:auto"), "toolbars must scroll on a narrow screen");
+  ok(/\.btn\{min-height:3\dpx/.test(flat), "touch targets need a minimum height");
+});
+t("mobile: panning is reachable without a right-click", () => {
+  // this is the part that isn't cosmetic: a phone has no right button and no wheel
+  ok(script.includes("pts.size>=2"), "no two-finger handling — pan/zoom would be impossible");
+  ok(script.includes("pinch"), "no pinch zoom");
+  ok(script.includes("pointercancel"), "touch needs pointercancel or fingers get stuck down");
+});
+t("mobile: two-finger gestures pan and zoom independently", () => {
+  const mid = pts => ({ x:(pts[0].x+pts[1].x)/2, y:(pts[0].y+pts[1].y)/2,
+                        d:Math.hypot(pts[0].x-pts[1].x, pts[0].y-pts[1].y) });
+  // slide both fingers: pans, must not zoom
+  let a = mid([{x:100,y:200},{x:200,y:200}]);
+  let b = mid([{x:140,y:200},{x:240,y:200}]);
+  near(b.x - a.x, 40, 1e-9, "sliding should pan by the centre's movement:");
+  near(a.d / b.d, 1, 1e-9, "sliding must not change the zoom:");
+  // spread: zooms, must not pan
+  let c = mid([{x:50,y:200},{x:250,y:200}]);
+  near(c.x - a.x, 0, 1e-9, "spreading must not pan:");
+  ok(a.d / c.d < 1, "spreading should zoom in");
+});
+t("mobile: the feature panel becomes a bottom sheet a thumb can reach", () => {
+  const m = CSS.slice(CSS.indexOf("@media (max-width: 860px)"));
+  ok(/#featPanel\{[^}]*bottom:0/.test(m.replace(/\s+/g, "")), "the inspector should dock to the bottom");
+  ok(/\.ws-panel\{[^}]*bottom:0/.test(m.replace(/\s+/g, "")), "so should the workshop panel");
+});
+t("mobile: the viewport meta is set, or none of this applies", () => {
+  ok(/name="viewport"[^>]*width=device-width/.test(html), "without this a phone renders it at desktop width");
+});
+
 // --- report ---
 console.log("\nLEE3D core suite — functions read live from index.html\n");
 if (MISSING.length) console.log("  (not present yet: " + MISSING.join(", ") + ")\n");
