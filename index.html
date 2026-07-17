@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>LEE3D — Orthographic 3D Studio</title>
+<title>LEE3D — Toy Workshop</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Saira+Semi+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -205,6 +205,13 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
   #featLayer .fbox .se{right:-5px;bottom:-5px;cursor:nwse-resize}
   #featLayer .fbox .flabel{position:absolute;left:0;top:-17px;font-size:9px;letter-spacing:.05em;text-transform:uppercase;
     color:var(--ink-dim);white-space:nowrap;background:rgba(11,15,20,.82);padding:1px 4px;border-radius:3px}
+  /* the shape's own points: drag one to bend it, click a line to add one */
+  #featLayer .fpt{position:absolute;width:11px;height:11px;margin:-5.5px 0 0 -5.5px;border-radius:50%;
+    background:var(--accent);border:1.5px solid #0b0f14;pointer-events:auto;cursor:grab;z-index:2}
+  #featLayer .fpt:active{cursor:grabbing;transform:scale(1.25)}
+  #featLayer .fmid{position:absolute;width:9px;height:9px;margin:-4.5px 0 0 -4.5px;border-radius:50%;
+    background:rgba(11,15,20,.7);border:1.5px dashed currentColor;opacity:.55;pointer-events:auto;cursor:copy;z-index:1}
+  #featLayer .fmid:hover{opacity:1;background:var(--accent);border-style:solid}
   /* the inspector floats over the drawing so you can still see what you're changing */
   #featPanel{position:absolute;left:14px;top:14px;width:214px;z-index:20;background:rgba(11,15,20,.96);
     border:1px solid var(--accent);border-radius:10px;backdrop-filter:blur(8px);box-shadow:0 8px 28px rgba(0,0,0,.5)}
@@ -385,7 +392,7 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
     <div class="logo"></div>
     <div>
       <h1 class="disp">LEE3D</h1>
-      <div class="sub">Orthographic 2D → 3D</div>
+      <div class="sub">Drawings → parts → toys</div>
     </div>
   </div>
   <input id="projName" class="proj-name mono" value="untitled-object" spellcheck="false" />
@@ -468,18 +475,19 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
       <summary><span class="idx">4</span><span class="ttl">Shape style <span style="opacity:.55;font-weight:400">· smooth or exact</span></span><span class="chev">▶</span></summary>
       <div class="sec-body">
         <div class="seg" id="modeSeg" style="margin:0 0 4px;width:100%">
-          <button data-m="loft" class="on">Smooth</button>
-          <button data-m="projection">Follow my drawing</button>
+          <button data-m="loft">Smooth</button>
+          <button data-m="projection" class="on">Follow my drawing</button>
         </div>
         <div class="hint" id="modeHint"><b>Smooth</b> &mdash; a flowing, rounded body. Best for cars, boats, anything streamlined. Features here are dents and bumps.<br><b>Follow my drawing</b> &mdash; carves out exactly what your outlines say, corners and all. Use it for angular things, and it's the only mode that can <b>cut a window clean through</b>.</div>
-        <div class="field" id="crispField"><label>Edge crispness <span class="val"><span id="vCrisp">0.90</span></span></label><input type="range" id="sCrisp" min="0" max="1" value="0.9" step="0.05"></div>
+        <div class="field" id="crispField"><label>Edge crispness <span class="val"><span id="vCrisp">0.50</span></span></label><input type="range" id="sCrisp" min="0" max="1" value="0.5" step="0.05"></div>
         <div class="hint">Only used by <b>Follow my drawing</b>. High = hard, machined corners. Low = softened.</div>
       </div>
     </details>
     <details class="sec">
       <summary><span class="idx">5</span><span class="ttl">Features <span style="opacity:.55;font-weight:400">· <span id="featCount">none yet</span></span></span><span class="chev">▶</span></summary>
       <div class="sec-body">
-        <div class="hint">Detail lives on the drawing, not in here. Open <b>Reference &amp; Trace</b>: pick a tool in the toolbar, draw the shape, then a small panel opens <b>over the view</b> with that feature's own depth, wording and cut-through — so you can see what you're changing while you change it. Drag a feature's box to move it, or its corners to resize.</div>
+        <div class="hint">Detail and <b>joins</b> live on the drawing, not in here. Open <b>Reference &amp; Trace</b>: pick a tool in the toolbar, draw the shape, then a small panel opens <b>over the view</b> with that feature's own settings — so you can see what you're changing while you change it. Drag its box to move it, a corner to resize, an orange point to bend it.<br><br>
+        <b>Join</b> is how parts become a toy: click where a <b>peg</b> or a <b>socket</b> goes and give it a size. The same size on two parts is made to fit once printed — the socket is cut wider by the printer's clearance so it doesn't seize solid.</div>
       </div>
     </details>
 
@@ -673,19 +681,27 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
             <button data-v="rear">Rear</button>
           </div>
           <button class="btn" id="bCal">⊹ Set scale</button>
-          <button class="btn primary" id="bAuto">Auto-trace</button>
+          <button class="btn primary" id="bAuto">✨ Auto-trace</button>
           <span style="width:1px;height:18px;background:var(--line-2);margin:0 2px"></span>
           <div class="seg" id="featTool">
             <button data-t="poly" class="on">Shape</button>
             <button data-t="box">Box</button>
             <button data-t="text">Text</button>
+            <button data-t="join">Join</button>
             <button data-t="svg">From drawing</button>
           </div>
-          <button class="btn primary" id="featNew">Add Feature</button>
+          <div id="featJoinRow" style="display:none;align-items:center;gap:6px">
+            <div class="seg" style="margin:0;width:130px;flex:0 0 auto">
+              <button id="jPeg" class="on" data-j="peg">Peg</button>
+              <button id="jSock" data-j="socket">Socket</button>
+            </div>
+            <input id="jSize" class="proj-name mono" style="width:60px;font-size:11px" value="5" title="nominal size in mm — the peg and its socket must share this">
+          </div>
+          <button class="btn primary" id="featNew">+ Feature</button>
           <button class="btn ghost" id="featDone" style="display:none">✓ Finish</button>
           <button class="btn ghost" id="featCancel" style="display:none">✕ Cancel</button>
           <input id="featText" class="proj-name mono" style="width:110px;font-size:11px;display:none" placeholder="wording…" value="LEE3D">
-          <button class="btn ghost" id="featSvgAll" style="display:none">Take all features</button>
+          <button class="btn ghost" id="featSvgAll" style="display:none">⚡ take all</button>
           <button class="btn ghost" id="bRot" title="Rotate this view 90° — use it if the object is drawn sideways">⟳ 90°</button>
           <button class="btn ghost" id="pickImg">🖼 drawing</button>
           <input type="file" id="imgFile" accept="image/*,.svg" hidden>
@@ -695,7 +711,7 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
           </span>
           <button class="btn ghost" id="bUndo">↶ undo</button>
           <button class="btn ghost" id="bClear">⌫ clear view</button>
-          <button class="btn" id="bSave">Save</button>
+          <button class="btn" id="bSave">💾 Save</button>
           <button class="btn primary" id="b3D" style="width:auto">→ 3D Preview</button>
           <span class="hint" id="traceStatus" style="margin:0 0 0 4px"></span>
         </div>
@@ -1184,7 +1200,30 @@ function makeVisualHull(p){
     return {pts,kind,depth:f.depth,through:!!f.through&&f.depth<0,
             soft:Math.max(0.35,(f.soft==null?0.1:f.soft)*soft0)};
   }).filter(Boolean);
-  const sdFeat=(f,x,y,z)=> f.kind==="xz"?sdPoly(f.pts,x,z) : f.kind==="xy"?sdPoly(f.pts,x,y) : sdPoly(f.pts,y,z);
+  /* Each outline only depends on TWO of the three coordinates — the side view never cares
+     about y, the top view never cares about z. So this field is SEPARABLE: work the three
+     2D distances out once into small tables, and every one of the ~54,000 field samples
+     becomes two lookups and a max instead of walking ~270 polygon edges. Identical answer,
+     roughly sixty times less work. Before this, one slider drag asked for ~100 million
+     distance computations and took the tab down with it. */
+  const TB=p.hullFast?1:2;                      // finer tables only matter once you stop moving
+  const mkTable=(poly,wSpan,hSpan,nu,nv)=>{
+    const d=new Float32Array((nu+1)*(nv+1)), R=nv+1;
+    for(let i=0;i<=nu;i++){const x=i/nu*wSpan;
+      for(let j=0;j<=nv;j++)d[i*R+j]=sdPoly(poly,x,j/nv*hSpan);}
+    return {nu,nv,w:wSpan,h:hSpan,R,d};
+  };
+  const look=(T,x,y)=>{
+    let fu=x/T.w*T.nu, fv=y/T.h*T.nv;
+    fu=fu<0?0:(fu>T.nu?T.nu:fu); fv=fv<0?0:(fv>T.nv?T.nv:fv);
+    const i=fu>=T.nu?T.nu-1:fu|0, j=fv>=T.nv?T.nv-1:fv|0;
+    const tu=fu-i, tv=fv-j, R=T.R, o=i*R+j;
+    const a=T.d[o], b=T.d[o+R], c=T.d[o+1], e=T.d[o+R+1];
+    const top=a+(b-a)*tu, bot=c+(e-c)*tu;
+    return top+(bot-top)*tv;
+  };
+  let Tside,Ttop,Tfront;                        // filled once the grid size is known
+  const sdFeat=(f,x,y,z)=> f.kind==="xz"?look(f.T,x,z) : f.kind==="xy"?look(f.T,x,y) : look(f.T,y,z);
 
   // inside all three outlines = the largest of the three distances, then features applied
   // Hollowing a distance field means keeping only the band between the outside and `wall`
@@ -1195,7 +1234,7 @@ function makeVisualHull(p){
   // sets wall and infill from a solid far better than a modelled shell would.
   const wall=Math.max(0.2,p.wallThickness??1.8);
   const F=(x,y,z)=>{
-    let d=Math.max(sdPoly(sideP,x,z), sdPoly(topP,x,y), sdPoly(frontP,y,z));
+    let d=Math.max(look(Tside,x,z), look(Ttop,x,y), look(Tfront,y,z));
     for(let q=0;q<feats.length;q++){
       const f=feats[q], s=sdFeat(f,x,y,z);
       if(f.through){ d=Math.max(d,-s); continue; }              // a real opening, straight through
@@ -1206,12 +1245,21 @@ function makeVisualHull(p){
     if(doHollow) d=Math.max(d, -(d+wall));   // keep only the shell -> a frame, not a lump
     return d;
   };
-  const res=Math.max(24,Math.min(80,Math.round(p.hullRes||Math.max(p.stations||48,40))));
+  const res=Math.max(20,Math.min(80,Math.round(p.hullRes||Math.max(p.stations||48,40))));
   const nx=res, ny=Math.max(10,Math.round(res*W/L)), nz=Math.max(10,Math.round(res*H/L));
   const NX=nx+1,NY=ny+1,NZ=nz+1, idx=(i,j,k)=>(i*NY+j)*NZ+k;
   const hx=L/nx, hy=W/ny, hz=H/nz;
   const cell=Math.max(hx,hy,hz);
   const doHollow=(p.hullHollow===true) && wall>=cell*2;   // only when the grid can see the frame
+  // now the grid is known, the three 2D distance tables can be built
+  Tside =mkTable(sideP ,L,H,nx*TB,nz*TB);
+  Ttop  =mkTable(topP  ,L,W,nx*TB,ny*TB);
+  Tfront=mkTable(frontP,W,H,ny*TB,nz*TB);
+  feats.forEach(f=>{
+    f.T = f.kind==="xz" ? mkTable(f.pts,L,H,nx*TB,nz*TB)
+        : f.kind==="xy" ? mkTable(f.pts,L,W,nx*TB,ny*TB)
+        :                 mkTable(f.pts,W,H,ny*TB,nz*TB);
+  });
   const px=i=>i*hx, py=j=>j*hy-W/2+W/2, pz=k=>k*hz;   // grid -> mm (y centred later)
   const field=new Float32Array(NX*NY*NZ);
   const BIG=Math.max(L,W,H);
@@ -1320,7 +1368,7 @@ const PRESETS={
   sedan :{len:230,nose:30,cowl:44,roof:62,roofPos:.52,tail:46,sill:9, nw:22,mw:46,wp:.5 ,tw:40,round:1.8},
   suv   :{len:210,nose:38,cowl:56,roof:84,roofPos:.5 ,tail:74,sill:14,nw:26,mw:52,wp:.5 ,tw:48,round:2.2},
 };
-const S={...PRESETS.hotrod, wall:1.8, st:72, seg:56, opacity:.55, mode:"loft", sepBottom:true, shape:"loft", revShape:"sphere", revSize:50, widMM:0, hgtMM:0, widK:1, hgtK:1, hullCrisp:0.9,
+const S={...PRESETS.hotrod, wall:1.8, st:72, seg:56, opacity:.55, mode:"projection", sepBottom:true, shape:"loft", revShape:"sphere", revSize:50, widMM:0, hgtMM:0, widK:1, hgtK:1, hullCrisp:0.5,
   wallTop:1.8, wallSide:1.8, wallBottom:1.8, wallPerFace:false, hullHollow:false};
 // NOTE: revolve primitives (sphere/cylinder/dome/cone) are retired from the UI — this tool
 // is for IMPORTED shapes. makeRevolve() stays so old saved files still load.
@@ -1382,6 +1430,23 @@ function sizedProfiles(){
   }
   return {topP,botP,widP,widBotP};
 }
+// While a slider is actually moving you want to SEE the change, not wait for it. So the
+// any-shape solid is built coarse mid-drag and rebuilt properly the moment you let go.
+// Nothing about the result changes — only how long you stare at it.
+let qFast=false;
+// A fixed "coarse" number is a guess: this machine, a laptop and a phone are worlds apart.
+// So aim at a frame budget and let the detail find its own level within a few frames.
+let hullDragRes=44;
+const HULL_BUDGET_MS=11;
+function hullTune(ms){
+  if(!qFast)return;
+  if(ms>HULL_BUDGET_MS*1.35 && hullDragRes>20)hullDragRes-=4;        // struggling: back off
+  else if(ms<HULL_BUDGET_MS*0.55 && hullDragRes<60)hullDragRes+=4;   // room to spare: sharpen
+}
+document.addEventListener("pointerdown",e=>{ if(e.target&&e.target.type==="range")qFast=true; },true);
+["pointerup","pointercancel"].forEach(ev=>document.addEventListener(ev,()=>{
+  if(qFast){qFast=false;requestRebuild();} },true));
+document.addEventListener("keyup",e=>{ if(qFast&&e.target&&e.target.type==="range"){qFast=false;requestRebuild();} },true);
 function currentProfile(){
   const SZ=sizedProfiles();
   return {
@@ -1394,6 +1459,7 @@ function currentProfile(){
     sections:(traced.sections&&traced.sections.length?traced.sections:null),
     mode:S.mode, frontHull:(S.mode==="projection"?traced.frontHull:null), sepBottom:S.sepBottom,
     sidePoly:traced.sidePoly, topPoly:traced.topPoly, frontPoly:traced.frontPoly, hullCrisp:S.hullCrisp,
+    hullRes:(qFast?hullDragRes:null), hullFast:qFast,   // self-tuning mid-drag, full on release
     sculpt:(SC.off && SC.off.length)?Array.from(SC.off):null,
     features:features.length?features.map(f=>{const o={...f}; if(o.kind==="text")delete o.mask; return o;}):null,
     shape:S.shape, revShape:S.revShape, revSize:S.revSize, widMM:S.widMM, hgtMM:S.hgtMM,
@@ -1498,7 +1564,8 @@ function rebuild(){
   rTris.textContent=tri.toLocaleString();
   rVol.textContent=(volume/1000).toFixed(1)+" cm³";
   const uf=UNIT_MM[displayUnit], ud=(displayUnit==="mm"||displayUnit==="px")?0:1;
-  dims.textContent=`bbox  L ${(dx/uf).toFixed(ud)} × W ${(dy/uf).toFixed(ud)} × H ${(dz/uf).toFixed(ud)} ${displayUnit}  ·  ${(performance.now()-t0).toFixed(0)} ms`;
+  const buildMs=performance.now()-t0; hullTune(buildMs);
+  dims.textContent=`bbox  L ${(dx/uf).toFixed(ud)} × W ${(dy/uf).toFixed(ud)} × H ${(dz/uf).toFixed(ud)} ${displayUnit}  ·  ${buildMs.toFixed(0)} ms`;
   const stamp=document.getElementById("stamp");
   if(man.watertight){stamp.classList.remove("warn");
     stamp.querySelector(".t").textContent="SOLID SHAPE";
@@ -1666,7 +1733,8 @@ function fitTrace(){
 }
 function img2canvas(p){return {x:fit.ox+p.x*fit.s, y:fit.oy+p.y*fit.s};}
 function canvas2img(cx,cy){return {x:(cx-fit.ox)/fit.s, y:(cy-fit.oy)/fit.s};}
-function drawTrace(){ if(typeof featRenderGizmos==="function")setTimeout(featRenderGizmos,0);
+let featDragging=false;   // rebuilding every gizmo mid-drag is what made this crawl
+function drawTrace(){ if(typeof featRenderGizmos==="function" && !featDragging)setTimeout(featRenderGizmos,0);
   const v=cv();
   const w=traceCanvas.width/devicePixelRatio,h=traceCanvas.height/devicePixelRatio;
   tctx.clearRect(0,0,w,h);
@@ -1734,6 +1802,25 @@ traceCanvas.addEventListener("pointerdown",e=>{
   if(traceMode==="cal"){calPts.push(canvas2img(cx,cy));drawTrace();if(calPts.length===2)openModal();return;}
   const v=cv();
   if(typeof featDeselect==="function" && featSel>=0 && !featDraft)featDeselect();
+  if(featTool==="join"){
+    const B=featBounds(activeView);
+    if(!B){toast("Trace the body outline on this view first — a join is placed against it.");return;}
+    const p=canvas2img(cx,cy);
+    const u=(p.x-B.minX)/B.sx, v=(B.maxY-p.y)/B.sy;
+    const kind=document.querySelector("#featJoinRow .seg button.on").dataset.j;
+    const nominal=Math.max(0.5,parseFloat(document.getElementById("jSize").value)||5);
+    const dia=connDiameter(kind,nominal,CONN.clearance);
+    const depth=kind==="peg"?Math.max(2,nominal*0.8):-Math.max(2,nominal*0.8);
+    features.push({kind:"poly",join:kind,nominal,view:activeView,
+      poly:connPoly(u,v,dia,B),depth,soft:0.02,
+      name:`${kind} Ø${nominal}`});
+    featSelect(features.length-1); requestRebuild(); drawTrace();
+    const w=connWarn(kind,nominal,depth,CONN.nozzle);
+    toast(kind==="peg"
+      ? `Peg Ø${nominal}mm placed — a socket at the same size will fit it.${w?" ⚠ "+w:""}`
+      : `Socket for a Ø${nominal}mm peg — cut Ø${dia.toFixed(1)} so it actually goes in.${w?" ⚠ "+w:""}`);
+    return;
+  }
   if(featTool==="svg" && V[activeView] && V[activeView].img){
     const p=canvas2img(cx,cy), poly=svgDetailAt(activeView,p);
     if(!poly){toast("Nothing from the drawing under there — the yellow outlines are what you can take.");return;}
@@ -1995,7 +2082,12 @@ function featBounds(view){
   const A=(V[view]&&V[view].A)||[]; if(A.length<3)return null;
   const xs=A.map(p=>p.x),ys=A.map(p=>p.y);
   const minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);
-  return {minX,minY,sx:Math.max(1,maxX-minX),sy:Math.max(1,maxY-minY),maxY};
+  const b={minX,minY,sx:Math.max(1,maxX-minX),sy:Math.max(1,maxY-minY),maxY};
+  // how many millimetres this view's frame spans, so a 5mm peg can be 5mm
+  const L=S.len||150, W=(S.widMM||traced.natWid||60), H=(S.hgtMM||traced.natHgt||60);
+  if(view==="side"){b.wMM=L;b.hMM=H;} else if(view==="top"||view==="bottom"){b.wMM=L;b.hMM=W;}
+  else {b.wMM=W;b.hMM=H;}
+  return b;
 }
 // store the region in the SAME 0..1 frame as that view's body outline, so it lands
 // exactly where you drew it once it's projected onto the model
@@ -2065,7 +2157,7 @@ function featRenderGizmos(){
       e.stopPropagation(); e.preventDefault();
       featSelect(i);
       const h=e.target.classList.contains("fh")?[...e.target.classList].find(c=>["nw","ne","sw","se"].includes(c)):null;
-      drag={h, sx:e.clientX, sy:e.clientY, r:{...r}};
+      drag={h, sx:e.clientX, sy:e.clientY, r:{...r}}; featDragging=true;
       try{el.setPointerCapture(e.pointerId);}catch(_){}
     });
     el.addEventListener("pointermove",e=>{
@@ -2083,9 +2175,54 @@ function featRenderGizmos(){
       el.style.left=x+"px"; el.style.top=y+"px"; el.style.width=w+"px"; el.style.height=h+"px";
       drawTrace(); requestRebuild();
     });
-    const stop=()=>{ if(drag){drag=null; featRenderGizmos();} };
+    const stop=()=>{ if(drag){drag=null; featDragging=false; featRenderGizmos();} };
     el.addEventListener("pointerup",stop);
     el.addEventListener("pointercancel",stop);
+
+    // The selected shape shows its own points. A box is only a starting point — drag a
+    // corner to bend it, click a line to put a new point on it, right-click a point to
+    // take it away. Same idea as the tracer, just on one feature.
+    if(i===featSel && f.poly && f.poly.length>=3){
+      const B=featBounds(activeView);
+      const toS=q=>img2canvas({x:B.minX+q[0]*B.sx, y:B.maxY-q[1]*B.sy});
+      const toN=(cx,cy)=>{const a=canvas2img(cx,cy); return [(a.x-B.minX)/B.sx,(B.maxY-a.y)/B.sy];};
+      const canvasXY=e=>{const p=tcXY(e); return [p.x,p.y];};   // same conversion as tracing
+
+      f.poly.forEach((q,k)=>{                         // midpoints: click to add a point
+        const q2=f.poly[(k+1)%f.poly.length];
+        const mp=[(q[0]+q2[0])/2,(q[1]+q2[1])/2], c=toS(mp);
+        const md=document.createElement("div"); md.className="fmid";
+        md.style.cssText=`left:${c.x}px;top:${c.y}px;color:${f.depth<0?"#46B7D9":"#5BD6A0"}`;
+        md.title="add a point here";
+        md.addEventListener("pointerdown",e=>{e.stopPropagation();e.preventDefault();
+          f.poly.splice(k+1,0,mp); featRenderGizmos(); drawTrace(); requestRebuild();});
+        layer.appendChild(md);
+      });
+      f.poly.forEach((q,k)=>{                         // the points themselves: drag to bend
+        const c=toS(q);
+        const pt=document.createElement("div"); pt.className="fpt";
+        pt.style.cssText=`left:${c.x}px;top:${c.y}px`;
+        pt.title="drag to bend · right-click to remove";
+        let moving=false;
+        pt.addEventListener("pointerdown",e=>{e.stopPropagation();e.preventDefault();
+          if(e.button===2)return; moving=true; featDragging=true;
+          try{pt.setPointerCapture(e.pointerId);}catch(_){}});
+        pt.addEventListener("pointermove",e=>{
+          if(!moving)return; e.stopPropagation();
+          const [cx,cy]=canvasXY(e); const nq=toN(cx,cy);
+          f.poly[k]=[Math.max(-0.4,Math.min(1.4,nq[0])), Math.max(-0.4,Math.min(1.4,nq[1]))];
+          const s2=toS(f.poly[k]); pt.style.left=s2.x+"px"; pt.style.top=s2.y+"px";
+          drawTrace(); requestRebuild();
+        });
+        const done=()=>{ if(moving){moving=false; featDragging=false; featRenderGizmos();} };
+        pt.addEventListener("pointerup",done);
+        pt.addEventListener("pointercancel",done);
+        pt.addEventListener("contextmenu",e=>{e.preventDefault();e.stopPropagation();
+          if(f.poly.length<=3){toast("A shape needs at least 3 points.");return;}
+          f.poly.splice(k,1); featRenderGizmos(); drawTrace(); requestRebuild();});
+        layer.appendChild(pt);
+      });
+    }
   });
 }
 
@@ -2117,6 +2254,7 @@ function featPanelRender(){
     <label id="fpThruRow" style="display:${f.depth<0?"flex":"none"};align-items:center;gap:6px;font-size:10.5px;cursor:pointer;margin:2px 0 7px">
       <input type="checkbox" id="fpThru"${f.through?" checked":""}> Cut clean through</label>
     <div class="hint" id="fpNote" style="margin:0 0 7px"></div>
+    <div class="hint" style="margin:0 0 7px;opacity:.7">Drag the box to move it, a corner to resize. Drag an <b style="color:var(--accent)">orange point</b> to bend the shape, click a <b>dashed dot</b> on a line to add a point, right-click a point to remove it.</div>
     <button class="btn ghost" id="fpDel" style="width:100%">⌫ Delete this feature</button>`;
   const $=id=>document.getElementById(id);
   $("fpName").value=f.name||""; $("fpName").oninput=e=>{f.name=e.target.value;document.getElementById("fpTitle").textContent=f.name||"feature";featRenderGizmos();};
@@ -2205,13 +2343,77 @@ function svgDetailAt(view,pt){
   }
   return best;
 }
+// Sampling a line every N steps gives you points wherever the loop happened to land: 64 of
+// them, most on straight runs where they mean nothing, all piled on top of each other the
+// moment you try to grab one. Douglas-Peucker instead keeps the points that CARRY the
+// shape — the corners — and drops the rest. A window goes from 64 unusable dots to a dozen
+// you can actually pull about, and it hugs the drawing more closely for it.
+function simplifyPoly(pts,tol){
+  if(!pts||pts.length<4)return pts;
+  const seg2=(p,a,b)=>{
+    const dx=b[0]-a[0], dy=b[1]-a[1], L2=dx*dx+dy*dy;
+    let t=L2?((p[0]-a[0])*dx+(p[1]-a[1])*dy)/L2:0; t=t<0?0:t>1?1:t;
+    const qx=a[0]+dx*t-p[0], qy=a[1]+dy*t-p[1];
+    return qx*qx+qy*qy;
+  };
+  const keep=new Array(pts.length).fill(false);
+  keep[0]=keep[pts.length-1]=true;
+  const stack=[[0,pts.length-1]], t2=tol*tol;
+  while(stack.length){
+    const [i,j]=stack.pop(); if(j<=i+1)continue;
+    let best=-1,bd=0;
+    for(let k=i+1;k<j;k++){const d=seg2(pts[k],pts[i],pts[j]); if(d>bd){bd=d;best=k;}}
+    if(bd>t2 && best>0){keep[best]=true; stack.push([i,best],[best,j]);}
+  }
+  const out=pts.filter((_,i)=>keep[i]);
+  return out.length>=3?out:pts;
+}
 function featAddSvgPoly(view,poly,quiet){
-  const norm=featNormalize(view,resamplePoly(poly,64));
-  if(!norm)return false;
+  const dense=featNormalize(view,resamplePoly(poly,140));
+  if(!dense)return false;
+  // tolerance follows the feature's own size, so a small badge isn't flattened and a big
+  // window isn't left with fifty points
+  const us=dense.map(q=>q[0]), vs=dense.map(q=>q[1]);
+  const span=Math.max(Math.max(...us)-Math.min(...us), Math.max(...vs)-Math.min(...vs));
+  let norm=simplifyPoly(dense, Math.max(0.002, span*0.018));
+  if(norm.length>34)norm=simplifyPoly(dense, Math.max(0.004, span*0.035));   // still busy? relax it
   features.push({kind:"poly",view,poly:norm,depth:-2.5,soft:0.08,name:"detail "+(features.length+1)});
   if(!quiet){featSelect(features.length-1);requestRebuild();
-    toast("Taken straight from your drawing — its panel opened over the view.");}
+    toast(`Taken straight from your drawing — <span class="mono">${features[features.length-1].poly.length} points</span> you can drag to reshape it.`);}
   return true;
+}
+/* =========================================================================
+   CONNECTORS — how parts become a toy.
+   A toy is parts that join: a peg into a socket, a wheel onto an axle. Two
+   things make that work in practice, and both are easy to get wrong by hand:
+     * the socket must be BIGGER than its peg, or the print seizes solid. The
+       gap needed is a printer fact (~0.2mm a side), not a modelling choice.
+     * both halves must be the same nominal size, or they simply don't mate.
+   So a connector is declared by its NOMINAL size, and the clearance is applied
+   for you: peg -> exactly nominal, socket -> nominal + 2x clearance.
+   ========================================================================= */
+const CONN={clearance:0.2, nozzle:0.4};      // mm; a sane FDM starting point
+// a circle in the view's 0..1 frame, sized in mm
+function connPoly(cx,cv,dMM,B,seg){
+  seg=seg||24;
+  const ru=(dMM/2)/Math.max(1e-6,B.wMM), rv=(dMM/2)/Math.max(1e-6,B.hMM);
+  const out=[];
+  for(let i=0;i<seg;i++){const a=i/seg*2*Math.PI; out.push([cx+Math.cos(a)*ru, cv+Math.sin(a)*rv]);}
+  return out;
+}
+// what a connector's outline should measure, once the printer is accounted for
+function connDiameter(kind,nominal,clearance){
+  const c=(clearance==null?CONN.clearance:clearance);
+  return kind==="socket" ? nominal+2*c : nominal;   // a hole is cut oversize; a peg is true
+}
+// is this thing actually printable, or is it a sliver that will snap off?
+function connWarn(kind,nominal,depth,nozzle){
+  const nz=nozzle==null?CONN.nozzle:nozzle;
+  if(kind==="peg" && nominal < nz*4)
+    return `A ${nominal.toFixed(1)}mm peg is under four nozzle widths — it will snap. Try ${(nz*5).toFixed(1)}mm or more.`;
+  if(Math.abs(depth) < nz*2)
+    return `${Math.abs(depth).toFixed(1)}mm deep is thinner than two layers — it won't really be there.`;
+  return null;
 }
 function featStart(){
   if(!(V[activeView]&&V[activeView].A.length>=3)){toast("Trace the body outline on this view first — features are placed against it.");return;}
@@ -2542,11 +2744,15 @@ document.querySelectorAll("#featTool button").forEach(b=>b.onclick=()=>{
   b.classList.add("on"); featTool=b.dataset.t;
   document.getElementById("featText").style.display=(featTool==="text")?"":"none";
   document.getElementById("featSvgAll").style.display=(featTool==="svg")?"":"none";
-  document.getElementById("featNew").style.display=(featTool==="svg")?"none":"";
+  document.getElementById("featJoinRow").style.display=(featTool==="join")?"flex":"none";
+  document.getElementById("featNew").style.display=(featTool==="svg"||featTool==="join")?"none":"";
+  if(featTool==="join")toast("Click where the join goes. A <b>peg</b> and a <b>socket</b> of the same size are made to fit once printed.");
   if(featDraft)featCancelDraft();
   if(featTool==="svg"){
     const have=(typeof svgDetails==="function")?svgDetails(activeView).length:0;
     const kind=(V[activeView]&&V[activeView].svgPolys&&V[activeView].svgPolys.length)?"vector line":"shape";
+    const all=document.getElementById("featSvgAll");
+    if(all)all.textContent=have?`⚡ take all ${have}`:"⚡ take all";
     toast(have?`${have} ${kind}(s) found in this drawing — click one to take it.`
               :"No shapes found in this view's drawing. Load a drawing, or use Shape/Box/Text.");
   }
@@ -2555,7 +2761,6 @@ document.querySelectorAll("#featTool button").forEach(b=>b.onclick=()=>{
 document.getElementById("featSvgAll").onclick=()=>{
   const list=svgDetails(activeView);
   if(!list.length){toast("No SVG lines on this view to take.");return;}
-  if(list.length>24 && !confirm(`Take all ${list.length} lines as features? That's a lot — you can delete any you don't want.`))return;
   let added=0; list.forEach(p=>{ if(featAddSvgPoly(activeView,p,true))added++; });
   featRender(); requestRebuild(); drawTrace();
   toast(`Took <b>${added}</b> line(s) straight from the drawing — tune each one's depth in the list.`);
@@ -2572,6 +2777,9 @@ document.getElementById("fpClose").onclick=()=>featDeselect();
     p.style.left=Math.max(0,d.l+e.clientX-d.x)+"px"; p.style.top=Math.max(0,d.t+e.clientY-d.y)+"px";});
   const stop=()=>d=null; bar.addEventListener("pointerup",stop); bar.addEventListener("pointercancel",stop);
 })();
+document.querySelectorAll("#featJoinRow .seg button").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll("#featJoinRow .seg button").forEach(x=>x.classList.remove("on"));
+  b.classList.add("on");});
 document.getElementById("featNew").onclick=featStart;
 document.getElementById("featDone").onclick=featFinish;
 document.getElementById("featCancel").onclick=featCancelDraft;
@@ -2692,7 +2900,7 @@ mInput.addEventListener("keydown",e=>{if(e.key==="Enter")document.getElementById
    ========================================================================= */
 const projName=document.getElementById("projName");
 const projCat=document.getElementById("projCat");
-const DEFAULT_CATS=["Car frame","Body","Wheels","Chassis","Axles","Assemblies","Misc"];
+const DEFAULT_CATS=["Bodies","Wheels","Axles","Arms & legs","Accessories","Toys","Misc"];
 function knownCategories(){
   const set=new Set(DEFAULT_CATS);
   try{(LIB.items||[]).forEach(it=>{const c=(it.category||(it.data&&it.data.category)||"").trim();if(c)set.add(c);});}catch(_){}
@@ -3397,7 +3605,29 @@ document.getElementById("secDel").onclick=()=>{
 const LIB={
   items:[],
   load(){try{this.items=JSON.parse(localStorage.getItem("lee3d.lib")||"[]");}catch(_){this.items=[];}},
-  persist(){try{localStorage.setItem("lee3d.lib",JSON.stringify(this.items));}catch(_){/* memory-only fallback */}},
+  // localStorage is about 5MB and a model with four traced views is ~1MB of drawings, so
+  // it fills after a handful. Rather than silently failing to save, drop the reference
+  // IMAGES from the local copies (the geometry, and every preview, still work without
+  // them) and say so. The full copy — images and all — lives in the cloud.
+  persist(){
+    const write=v=>localStorage.setItem("lee3d.lib",JSON.stringify(v));
+    try{ write(this.items); return true; }
+    catch(e){
+      try{
+        const lean=this.items.map(it=>{
+          const c=JSON.parse(JSON.stringify(it));
+          if(c.data&&c.data.trace)for(const k in c.data.trace)if(c.data.trace[k])c.data.trace[k].img=null;
+          return c;
+        });
+        write(lean); this.items=lean;
+        toast("This device's storage is full, so the saved <b>drawings</b> were dropped from the local copies — the models and previews are fine. The full copies are in the cloud.");
+        return true;
+      }catch(_){
+        toast("This device's storage is full. Your work is still in the cloud — clear a few local models to save here again.");
+        return false;
+      }
+    }
+  },
   add(name,kind,data,category){const cat=category||(data&&data.category)||"uncategorized";
     const rec={name,kind,category:cat,data,ts:Date.now()};
     const i=this.items.findIndex(it=>it.name===name && it.category===cat);
