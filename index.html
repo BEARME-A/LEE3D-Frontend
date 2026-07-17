@@ -238,7 +238,12 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
     .stamp .d{display:none}
     #railBtn{display:inline-block}
 
-    main{grid-template-columns:1fr;height:calc(100% - 46px)}
+    /* one row, all of it. The old layout gave the stage 46vh and left a dead band under
+       it; the drawing and the model should have the entire screen. */
+    main{grid-template-columns:1fr;grid-template-rows:1fr;height:auto;flex:1;min-height:0}
+    body{display:flex;flex-direction:column;height:100dvh;overflow:hidden}
+    header{flex:0 0 auto}
+    .stage{min-height:0}
     /* the rail slides over the top instead of stealing a column */
     main > .rail{position:fixed;left:0;top:0;bottom:0;width:min(88vw,330px);z-index:60;
       transform:translateX(-102%);transition:transform .22s ease;box-shadow:0 0 40px rgba(0,0,0,.6);
@@ -319,14 +324,6 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
   .modal input:focus{outline:none;border-color:var(--accent)}
   .modal .row{display:flex;gap:8px;margin-top:16px}
 
-  @media (max-width:880px){
-    main{grid-template-columns:1fr;grid-template-rows:46vh 1fr}
-    .rail{order:2;border-right:none;border-top:1px solid var(--line)}
-    .stage{order:1}
-    header{gap:10px;flex-wrap:wrap;height:auto;padding:10px 12px}
-    .readout{display:none}
-    .proj-name{width:130px}
-  }
   /* ---------- blueprint import ---------- */
   #sheetHost{flex:1;position:relative;overflow:auto;display:block;
     background:repeating-linear-gradient(0deg,#0a0e13,#0a0e13 1px,transparent 1px,transparent 24px),
