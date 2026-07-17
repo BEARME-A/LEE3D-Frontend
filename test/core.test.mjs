@@ -1120,6 +1120,26 @@ t("css: layout that must change on a phone isn't nailed down inline", () => {
      "the toolbar's flex-wrap is pinned inline; the phone layout can't override it");
   ok(html.includes('class="trace-bar wrap"'), "use a class for wrapping so it stays overridable");
 });
+t("css: there is exactly ONE phone layout, not two fighting each other", () => {
+  // A second, older phone layout was still in this file — further down, and at a WIDER
+  // breakpoint (880px vs 860px). Later + same specificity means it won every conflict, so
+  // the new layout was overridden by a layout nobody remembered writing. It capped the
+  // stage at 46vh, which is why half the screen was dead space.
+  const css = html.slice(html.indexOf("<style>"), html.indexOf("</style>"));
+  const bps = [...css.matchAll(/@media\s*\(\s*max-width:\s*(\d+)px\s*\)/g)].map(m => +m[1]);
+  const dupes = bps.filter((v, i) => bps.indexOf(v) !== i);
+  ok(dupes.length === 0, "duplicate breakpoints: " + dupes.join(", "));
+  // they must get narrower as you read down, or a wider one overrides a narrower one
+  const sorted = [...bps].sort((a, b) => b - a);
+  ok(JSON.stringify(bps) === JSON.stringify(sorted),
+     `breakpoints must run widest-first, got ${bps.join(" then ")} — a later, wider query silently wins`);
+});
+t("css: the stage is never capped to part of the screen on a phone", () => {
+  const css = html.slice(html.indexOf("<style>"), html.indexOf("</style>"));
+  const rules = css.replace(/\/\*[\s\S]*?\*\//g, "");           // ignore comments
+  ok(!/grid-template-rows:\s*\d+vh/.test(rules.replace(/\s+/g, "")),
+     "a vh-capped row leaves dead space under the drawing; let it fill");
+});
 t("css: the mobile rules target the real toolbar", () => {
   const css = html.slice(html.indexOf("<style>"), html.indexOf("</style>"));
   const mq = css.slice(css.indexOf("@media (max-width: 860px)"));
