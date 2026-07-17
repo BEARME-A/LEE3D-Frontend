@@ -48,7 +48,8 @@ const NAMES = ["outlineEnvelope", "anchorPxPerMm", "makeRevolve", "pointInPoly",
   "libCanonical", "sampleProfile", "resampleSection", "morphSections", "makeBody", "autoOutline",
   "publishRoute", "distToPoly", "viewUV", "applyFeatures", "pickSilhouette", "sampleMask", "ptInPolyPts", "polyAreaPts",
   "rasterRegions", "otsuThreshold", "lumOf", "regionOutline", "sdPoly",
-  "wallSpec", "wallAt", "minWall"];
+  "wallSpec", "wallAt", "minWall",
+  "connDiameter", "connWarn", "connPoly", "simplifyPoly"];
 const found = [];
 const src = PRELUDE + NAMES.map(n => {
   try { const s = grab(n); found.push(n); return s; }
@@ -1207,6 +1208,214 @@ t("mobile: the feature panel becomes a bottom sheet a thumb can reach", () => {
 });
 t("mobile: the viewport meta is set, or none of this applies", () => {
   ok(/name="viewport"[^>]*width=device-width/.test(html), "without this a phone renders it at desktop width");
+});
+
+// =====================  14. FEATURE EDITING  =====================
+// A feature shouldn't be stuck as a rectangle, and the workflow shouldn't ask "are you
+// sure?" on one view and not the next.
+t("editing: taking the drawing's lines never asks a surprise question", () => {
+  // it used to confirm only past 24 shapes, so one view prompted and the next didn't —
+  // which reads as random. The count belongs on the button, not in a dialog.
+  ok(!/confirm\([^)]*lines as features/.test(script), "the threshold confirm is back");
+  ok(script.includes("⚡ take all ${have}") || script.includes("take all ${have}"),
+     "the button should say how many it will take");
+});
+t("editing: a feature's own points can be moved, added and removed", () => {
+  ok(script.includes('className="fpt"') || script.includes('pt.className="fpt"'), "no point handles");
+  ok(script.includes('md.className="fmid"'), "no way to add a point to a line");
+  ok(script.includes("f.poly.splice(k+1,0,mp)"), "clicking a line must insert a point there");
+  ok(/f\.poly\.length<=3/.test(script), "a shape must keep at least 3 points");
+});
+t("editing: bending a point uses the same maths as tracing one", () => {
+  // these two disagreeing would put every dragged point in the wrong place
+  ok(script.includes("const canvasXY=e=>{const p=tcXY(e); return [p.x,p.y];}"),
+     "point dragging must reuse tcXY, not roll its own device-pixel maths");
+});
+t("editing: dragging doesn't rebuild every gizmo on every frame", () => {
+  ok(script.includes("featDragging"), "no drag guard — this is what made a phone crawl");
+  ok(/if\(typeof featRenderGizmos==="function" && !featDragging\)/.test(script),
+     "drawTrace must not rebuild the gizmo DOM mid-drag");
+});
+t("editing: a dragged point is held near its own view", () => {
+  ok(/Math\.max\(-0\.4,Math\.min\(1\.4/.test(script), "a point should not be draggable to infinity");
+});
+
+// =====================  15. TOY JOINS  =====================
+// A toy is parts that join. Two ways that goes wrong, and neither is a modelling opinion:
+// a socket cut to the peg's exact size seizes solid once printed, and a peg thinner than a
+// few nozzle widths snaps off in a child's hand.
+t("join: a socket is always bigger than the peg it takes", () => {
+  for (const nominal of [3, 5, 8, 12]) {
+    const peg = API.connDiameter("peg", nominal, 0.2);
+    const sock = API.connDiameter("socket", nominal, 0.2);
+    eq(peg, nominal, "a peg is cut true to its size:");
+    ok(sock > peg, `a Ø${nominal} socket (${sock}) must be wider than its peg (${peg})`);
+    near(sock - peg, 0.4, 1e-9, "the gap is clearance on each side:");
+  }
+});
+t("join: the same nominal size always mates, whatever it is", () => {
+  // this is the whole contract: an artist says "5mm" on two different parts and they fit
+  for (const nominal of [2, 4, 6, 10, 20]) {
+    const fit = API.connDiameter("socket", nominal, 0.2) - API.connDiameter("peg", nominal, 0.2);
+    ok(fit > 0 && fit < 1, `Ø${nominal} should mate with a sensible gap, got ${fit}`);
+  }
+});
+t("join: a tighter printer means a tighter fit, not a broken one", () => {
+  const loose = API.connDiameter("socket", 5, 0.35), tight = API.connDiameter("socket", 5, 0.1);
+  ok(loose > tight, "more clearance must mean a bigger hole");
+  ok(tight > API.connDiameter("peg", 5, 0.1), "even a tight fit must still leave a gap");
+});
+t("join: a peg too thin to survive is called out", () => {
+  ok(API.connWarn("peg", 1, 4, 0.4), "a 1mm peg on a 0.4mm nozzle should warn");
+  ok(!API.connWarn("peg", 5, 4, 0.4), "a 5mm peg is fine and shouldn't nag");
+  ok(API.connWarn("peg", 5, 0.5, 0.4), "half a millimetre deep is under two layers — warn");
+});
+t("join: a connector is a real circle at the size asked for", () => {
+  const B = { wMM: 100, hMM: 50 };
+  const p = API.connPoly(0.5, 0.5, 10, B, 32);       // a 10mm circle on a 100x50mm view
+  eq(p.length, 32);
+  const us = p.map(q => q[0]), vs = p.map(q => q[1]);
+  near((Math.max(...us) - Math.min(...us)) * B.wMM, 10, 0.2, "10mm across:");
+  near((Math.max(...vs) - Math.min(...vs)) * B.hMM, 10, 0.2, "…and 10mm tall, not an oval:");
+});
+t("join: a peg builds watertight, and its socket does too", () => {
+  const base = { length:190, stations:44, arcSegments:36, roofFlatness:1.3, wallThickness:3,
+    topProfile:[[0,10],[0.5,60],[1,20]], bottomProfile:[[0,2],[1,2]],
+    widthProfile:[[0,10],[0.5,40],[1,16]], mode:"loft" };
+  const B = { wMM: 190, hMM: 60 };
+  for (const [kind, depth] of [["peg", 4], ["socket", -3]]) {
+    const dia = API.connDiameter(kind, 5, 0.2);
+    const g = API.makeBody({ ...base,
+      features: [{ kind:"poly", join:kind, view:"side", depth, soft:0.02, poly:API.connPoly(0.5,0.6,dia,B,24) }] });
+    const r = manifold(g.indices);
+    ok(r.boundary === 0 && r.nonMani === 0, `${kind}: ${r.boundary} open edges`);
+  }
+});
+
+// =====================  16. IT HAS TO KEEP UP  =====================
+// "Follow my drawing" used to ask for ~100 million distance computations on every slider
+// move and took the tab down with it. The field is separable — each outline only depends
+// on two of the three coordinates — so three small 2D tables replace walking the polygon
+// on every one of ~54,000 samples.
+t("speed: the hull's field is tabled, not recomputed per sample", () => {
+  const src = (() => { const i = script.indexOf("function makeVisualHull(");
+    return script.slice(i, script.indexOf("\nfunction ", i + 10)); })();
+  ok(src.includes("mkTable"), "no distance tables — this is the crash");
+  ok(!/const F=\(x,y,z\)=>\{[^}]*sdPoly\(sideP/.test(src),
+     "F() must not walk the outlines on every sample");
+  ok(src.includes("look(Tside") && src.includes("look(Ttop") && src.includes("look(Tfront"),
+     "the field should be three lookups and a max");
+});
+t("speed: a slider drag builds coarse, then sharpens when you let go", () => {
+  ok(script.includes("qFast"), "no coarse-while-dragging mode");
+  ok(/hullRes:\(qFast\?[A-Za-z0-9_]+:null\)/.test(script), "the drag should drop the hull's resolution");
+  ok(/if\(qFast\)\{qFast=false;requestRebuild\(\);\}/.test(script), "…and rebuild properly on release");
+});
+t("speed: the drag detail tunes itself instead of guessing a number", () => {
+  // this box, a laptop and a phone are worlds apart — a hardcoded "coarse" is a guess that
+  // is wrong for someone. Aim at a frame budget and let it settle.
+  ok(script.includes("function hullTune("), "no self-tuning");
+  ok(script.includes("HULL_BUDGET_MS"), "no frame budget to aim at");
+  ok(/hullDragRes-=4/.test(script) && /hullDragRes\+=4/.test(script), "it must go both ways");
+  ok(/hullDragRes>20/.test(script), "it must not tune itself into mush");
+  ok(/hullDragRes<60/.test(script), "…nor past the full build");
+  ok(script.includes("hullTune(buildMs)"), "it must be fed the real measured build time");
+});
+t("speed: the tuner settles on a slow machine and a fast one alike", () => {
+  // mirror of hullTune()
+  const BUDGET = 11;
+  const settle = msFor => {
+    let res = 44;
+    for (let i = 0; i < 30; i++) {
+      const ms = msFor(res);
+      if (ms > BUDGET * 1.35 && res > 20) res -= 4;
+      else if (ms < BUDGET * 0.55 && res < 60) res += 4;
+    }
+    return res;
+  };
+  const fast = settle(r => r * 0.11);        // a quick machine: ~5ms at res 44
+  const slow = settle(r => r * 0.55);        // a phone: ~24ms at res 44
+  ok(fast > slow, `a quicker machine should end up sharper (${fast} vs ${slow})`);
+  ok(slow >= 20, "it must not collapse below the floor");
+  ok(fast <= 60, "nor climb past the ceiling");
+  ok(msIsUnder(fast, r => r * 0.11, BUDGET * 1.4) && msIsUnder(slow, r => r * 0.55, BUDGET * 1.4),
+     "both should land inside the budget");
+  function msIsUnder(res, f, cap) { return f(res) <= cap; }
+});
+t("speed: a heavier outline costs almost nothing extra", () => {
+  // the polygon is only walked while building the tables, so a 500-point SVG outline
+  // shouldn't cost 5x what a 90-point traced one does
+  const t0 = Date.now();
+  const car = (n, rx, ry) => Array.from({ length: n }, (_, i) => {
+    const a = i / n * 2 * Math.PI; return [0.5 + rx * Math.cos(a), 0.5 + ry * Math.sin(a)]; });
+  const mk = pts => API.makeBody({ mode:"projection", length:190, stations:40, hullCrisp:0.9,
+    sidePoly:car(pts,0.45,0.4), topPoly:car(pts,0.45,0.38), frontPoly:car(pts,0.4,0.42),
+    topProfile:[[0,60]], widthProfile:[[0,25]] });
+  mk(90); const tA = Date.now(); mk(90); const light = Date.now() - tA;
+  mk(500); const tB = Date.now(); mk(500); const heavy = Date.now() - tB;
+  ok(heavy < light * 3 + 60, `a 500-point outline took ${heavy}ms vs ${light}ms for 90 — the polygon is being walked per sample`);
+});
+t("storage: a full device drops the drawings, not the models", () => {
+  // localStorage is ~5MB and a model with four traced views is ~1MB of images, so it fills
+  // after a handful. It must degrade honestly rather than silently failing to save.
+  ok(/c\.data\.trace\[k\]\.img=null/.test(script), "no fallback that sheds the images");
+  ok(script.includes("storage is full"), "a full device should say so, not fail quietly");
+  ok(!/catch\(_\)\{\/\* memory-only fallback \*\/\}/.test(script), "the silent swallow is back");
+});
+
+// =====================  17. AUTO FEATURES MUST BE EDITABLE  =====================
+// Taking a line from the drawing used to hand back 64 evenly-spaced points — 128 handles
+// piled on each other, which is not editing, it's a smear. Keep the points that carry the
+// shape, drop the ones that don't.
+t("simplify: straight runs inside a shape collapse, and it never drops below a shape", () => {
+  // features are CLOSED outlines, so 3 points is the floor — a 2-point "shape" is nothing.
+  // A long flat side should still shed its middle points.
+  const slab = [];
+  for (let i = 0; i < 30; i++) slab.push([i / 30, 0.2]);       // a long straight bottom
+  slab.push([1, 0.8], [0, 0.8]);                                // and a lid to close it
+  const out = API.simplifyPoly(slab, 0.01);
+  ok(out.length >= 3, "it must stay a shape");
+  ok(out.length <= 6, `30 points along one flat side should collapse, kept ${out.length}`);
+  // nothing can talk it below three
+  eq(API.simplifyPoly([[0,0],[0.5,0],[1,0],[0.5,0.001]], 0.9).length >= 3, true);
+});
+t("simplify: corners survive", () => {
+  // a square traced with 10 points a side: the 4 corners are the only points that matter
+  const sq = [];
+  for (let i = 0; i < 10; i++) sq.push([i / 10, 0]);
+  for (let i = 0; i < 10; i++) sq.push([1, i / 10]);
+  for (let i = 0; i < 10; i++) sq.push([1 - i / 10, 1]);
+  for (let i = 0; i < 10; i++) sq.push([0, 1 - i / 10]);
+  const out = API.simplifyPoly(sq, 0.01);
+  ok(out.length <= 6, `a square should keep ~4 corners, kept ${out.length}`);
+  ok(out.length >= 4, "…but not fewer than its corners");
+  for (const c of [[0,0],[1,0],[1,1],[0,1]])
+    ok(out.some(p => Math.hypot(p[0]-c[0], p[1]-c[1]) < 0.06), `corner ${c} was lost`);
+});
+t("simplify: a curve keeps enough points to still be a curve", () => {
+  const circle = Array.from({ length: 120 }, (_, i) => {
+    const a = i / 120 * 2 * Math.PI; return [0.5 + 0.4 * Math.cos(a), 0.5 + 0.4 * Math.sin(a)]; });
+  const out = API.simplifyPoly(circle, 0.006);
+  ok(out.length >= 8, `a circle needs enough points to read as round, got ${out.length}`);
+  ok(out.length < 60, `…but not 120 of them, got ${out.length}`);
+  ok(API.polyArea(out.map(p => ({x:p[0], y:p[1]}))) / API.polyArea(circle.map(p => ({x:p[0], y:p[1]}))) > 0.95,
+     "the shape drifted too far");
+});
+t("simplify: the result is grabbable, not a smear", () => {
+  // a realistic window taken from a drawing
+  const win = Array.from({ length: 140 }, (_, i) => {
+    const t = i / 140 * 2 * Math.PI;
+    return [0.5 + 0.14 * Math.cos(t), 0.6 + 0.08 * Math.sin(t)]; });
+  const us = win.map(q => q[0]), vs = win.map(q => q[1]);
+  const span = Math.max(Math.max(...us) - Math.min(...us), Math.max(...vs) - Math.min(...vs));
+  const out = API.simplifyPoly(win, Math.max(0.002, span * 0.018));
+  ok(out.length >= 3, "it must stay a shape");
+  ok(out.length <= 34, `a feature you can actually grab needs a sensible point count, got ${out.length}`);
+});
+t("simplify: it never destroys a shape it can't reduce", () => {
+  const tri = [[0,0],[1,0],[0.5,1]];
+  eq(API.simplifyPoly(tri, 0.5).length, 3, "a triangle can't go below 3 points:");
+  eq(API.simplifyPoly([[0,0],[1,1]], 0.1).length, 2, "too few points should pass straight through:");
 });
 
 // --- report ---
