@@ -556,7 +556,8 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
     <details class="sec">
       <summary><span class="idx">☁</span><span class="ttl">Cloud saves</span><span class="chev">▶</span></summary>
       <div class="sec-body">
-        <div class="hint">Save projects (full trace + model) to a Supabase (Postgres) database so they persist and sync — no backend server to run. Best <b>hard-wired via GitHub repo secrets</b> (see <code>SUPABASE.md</code>) so no keys live in the app. To try locally, paste your URL + anon key below. <a href="#" id="sbHelp" style="color:var(--accent);text-decoration:none">▸ show setup SQL</a></div>
+        <div class="hint" id="wireState" style="margin-bottom:6px"></div>
+        <div class="hint">Saves the full model — trace, drawings and all — so it follows you across devices. It should be wired in at deploy so nobody ever types a key; see <code>SETUP.md</code>. <a href="#" id="sbHelp" style="color:var(--accent);text-decoration:none">▸ show setup SQL</a></div>
         <input id="sbUrl" class="proj-name mono" placeholder="https://xxxx.supabase.co" spellcheck="false" style="width:100%;margin-bottom:5px;font-size:11px">
         <input id="sbKey" class="proj-name mono" placeholder="anon public key" spellcheck="false" style="width:100%;font-size:11px">
         <div class="btn-row" style="margin-top:6px">
@@ -680,6 +681,12 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
             <button data-v="front">Front</button>
             <button data-v="rear">Rear</button>
           </div>
+          <span id="vSizeRow" style="display:flex;align-items:center;gap:4px;font-size:10.5px;color:var(--ink-dim)">
+            <span id="vSizeLbl">across</span>
+            <input id="vSizeW" class="proj-name mono" style="width:56px;font-size:11px;padding:4px 5px" placeholder="mm" title="How wide this view really is, in mm">
+            <span>×</span>
+            <input id="vSizeH" class="proj-name mono" style="width:56px;font-size:11px;padding:4px 5px" placeholder="mm" title="How tall this view really is, in mm">
+          </span>
           <button class="btn" id="bCal">⊹ Set scale</button>
           <button class="btn primary" id="bAuto">✨ Auto-trace</button>
           <span style="width:1px;height:18px;background:var(--line-2);margin:0 2px"></span>
@@ -1226,13 +1233,10 @@ function makeVisualHull(p){
   const sdFeat=(f,x,y,z)=> f.kind==="xz"?look(f.T,x,z) : f.kind==="xy"?look(f.T,x,y) : look(f.T,y,z);
 
   // inside all three outlines = the largest of the three distances, then features applied
-  // Hollowing a distance field means keeping only the band between the outside and `wall`
-  // deep — one line of arithmetic. The catch is real: the grid has to be able to SEE that
-  // band. A 1.8mm frame on a ~4mm grid flips outside->inside->outside inside a single cell
-  // and tears the surface. So it is only done when the frame is thick enough to resolve;
-  // otherwise this stays a solid, which is what you want for printing anyway — the slicer
-  // sets wall and infill from a solid far better than a modelled shell would.
+  // The frame is hollowed AFTER the surface exists (see the end of this function), not by
+  // carving the field — that would need a grid fine enough to resolve a 1.8mm wall.
   const wall=Math.max(0.2,p.wallThickness??1.8);
+  const hollow=p.hullHollow!==false;              // a toy frame is a shell, not a lump
   const F=(x,y,z)=>{
     let d=Math.max(look(Tside,x,z), look(Ttop,x,y), look(Tfront,y,z));
     for(let q=0;q<feats.length;q++){
@@ -1242,7 +1246,6 @@ function makeVisualHull(p){
       const dep=(f.depth<0)?Math.max(f.depth,-wall):f.depth;    // an indent stays inside the frame
       d += (-dep)*cover;                 // depth<0 pushes the surface in, >0 pushes it out
     }
-    if(doHollow) d=Math.max(d, -(d+wall));   // keep only the shell -> a frame, not a lump
     return d;
   };
   const res=Math.max(20,Math.min(80,Math.round(p.hullRes||Math.max(p.stations||48,40))));
@@ -1250,7 +1253,6 @@ function makeVisualHull(p){
   const NX=nx+1,NY=ny+1,NZ=nz+1, idx=(i,j,k)=>(i*NY+j)*NZ+k;
   const hx=L/nx, hy=W/ny, hz=H/nz;
   const cell=Math.max(hx,hy,hz);
-  const doHollow=(p.hullHollow===true) && wall>=cell*2;   // only when the grid can see the frame
   // now the grid is known, the three 2D distance tables can be built
   Tside =mkTable(sideP ,L,H,nx*TB,nz*TB);
   Ttop  =mkTable(topP  ,L,W,nx*TB,ny*TB);
@@ -1318,16 +1320,49 @@ function makeVisualHull(p){
     if(!isFinite(vx)||!isFinite(vy)||!isFinite(vz)){vx=mx;vy=my;vz=mz;}
     cellV[cIdx(i,j,k)]=V.length; V.push([vx, vy-W/2, vz]);
   }
-  const indices=[]; const quad=(a,b,c,d,flip)=>{if(a<0||b<0||c<0||d<0)return; if(flip)indices.push(a,b,c,a,c,d); else indices.push(a,d,c,a,c,b);};
+  let indices=[]; const quad=(a,b,c,d,flip)=>{if(a<0||b<0||c<0||d<0)return; if(flip)indices.push(a,b,c,a,c,d); else indices.push(a,d,c,a,c,b);};
   for(let i=0;i<NX;i++)for(let j=0;j<NY;j++)for(let k=0;k<NZ;k++){const p0=inside(i,j,k)?1:0;
     if(i<nx && j>0&&j<ny&&k>0&&k<nz){const p1=inside(i+1,j,k)?1:0; if(p0!==p1)quad(cellV[cIdx(i,j-1,k-1)],cellV[cIdx(i,j,k-1)],cellV[cIdx(i,j,k)],cellV[cIdx(i,j-1,k)],p1>p0);}
     if(j<ny && i>0&&i<nx&&k>0&&k<nz){const p1=inside(i,j+1,k)?1:0; if(p0!==p1)quad(cellV[cIdx(i-1,j,k-1)],cellV[cIdx(i,j,k-1)],cellV[cIdx(i,j,k)],cellV[cIdx(i-1,j,k)],p1<p0);}
     if(k<nz && i>0&&i<nx&&j>0&&j<ny){const p1=inside(i,j,k+1)?1:0; if(p0!==p1)quad(cellV[cIdx(i-1,j-1,k)],cellV[cIdx(i,j-1,k)],cellV[cIdx(i,j,k)],cellV[cIdx(i-1,j,k)],p1>p0);}
   }
-  const positions=new Float32Array(V.length*3); V.forEach((v,q)=>{positions[q*3]=v[0];positions[q*3+1]=v[1];positions[q*3+2]=v[2];});
-  let vol=0; for(let q=0;q<indices.length;q+=3){const A=indices[q]*3,B=indices[q+1]*3,C=indices[q+2]*3;
-    vol+=(positions[A]*(positions[B+1]*positions[C+2]-positions[B+2]*positions[C+1])-positions[A+1]*(positions[B]*positions[C+2]-positions[B+2]*positions[C])+positions[A+2]*(positions[B]*positions[C+1]-positions[B+1]*positions[C]))/6;}
+  let positions=new Float32Array(V.length*3); V.forEach((v,q)=>{positions[q*3]=v[0];positions[q*3+1]=v[1];positions[q*3+2]=v[2];});
+  const facing=idx=>{let s2=0; for(let q=0;q<idx.length;q+=3){const A=idx[q]*3,B=idx[q+1]*3,C=idx[q+2]*3;
+    s2+=(positions[A]*(positions[B+1]*positions[C+2]-positions[B+2]*positions[C+1])-positions[A+1]*(positions[B]*positions[C+2]-positions[B+2]*positions[C])+positions[A+2]*(positions[B]*positions[C+1]-positions[B+1]*positions[C]))/6;}
+    return s2;};
+  let vol=facing(indices);
   if(vol<0){for(let q=0;q<indices.length;q+=3){const t=indices[q+1];indices[q+1]=indices[q+2];indices[q+2]=t;}vol=-vol;}
+
+  /* HOLLOW IT.
+     Trying to carve the void out of the distance field needs a grid fine enough to SEE a
+     1.8mm wall — on a 200mm car that's a 1.3M-cell grid and seconds per rebuild, which is
+     why this mode used to hand back a filled lump. But it doesn't need the field at all:
+     the surface we just built is already closed, so a copy of it pushed inward along its
+     own normals, wound the other way, IS the inside. No rim to stitch — a closed surface
+     has no edges. Any wall thickness, at any detail, for the cost of one more copy. */
+  if(hollow && wall>0){
+    const vc=V.length, nrm=new Float32Array(vc*3);
+    for(let q=0;q<indices.length;q+=3){
+      const a=indices[q],b=indices[q+1],c=indices[q+2];
+      const ax=positions[a*3],ay=positions[a*3+1],az=positions[a*3+2];
+      const ux=positions[b*3]-ax, uy=positions[b*3+1]-ay, uz=positions[b*3+2]-az;
+      const vx=positions[c*3]-ax, vy=positions[c*3+1]-ay, vz=positions[c*3+2]-az;
+      const fx=uy*vz-uz*vy, fy=uz*vx-ux*vz, fz=ux*vy-uy*vx;
+      for(const k of [a,b,c]){nrm[k*3]+=fx;nrm[k*3+1]+=fy;nrm[k*3+2]+=fz;}
+    }
+    const pos2=new Float32Array(vc*6); pos2.set(positions,0);
+    for(let k=0;k<vc;k++){
+      let nx2=nrm[k*3],ny2=nrm[k*3+1],nz2=nrm[k*3+2];
+      const l=Math.hypot(nx2,ny2,nz2)||1; nx2/=l;ny2/=l;nz2/=l;
+      pos2[(vc+k)*3]  =positions[k*3]  -nx2*wall;      // inward, so the outside keeps its size
+      pos2[(vc+k)*3+1]=positions[k*3+1]-ny2*wall;
+      pos2[(vc+k)*3+2]=positions[k*3+2]-nz2*wall;
+    }
+    const idx2=Array.from(indices);
+    for(let q=0;q<indices.length;q+=3)idx2.push(vc+indices[q], vc+indices[q+2], vc+indices[q+1]);  // wound inward
+    positions=pos2; indices=idx2;
+    vol=Math.abs(facing(indices));                     // now the SHELL's material, not the lump
+  }
   return {positions,indices,volume:Math.abs(vol)};
 }
 function checkManifold(indices){
@@ -1369,7 +1404,7 @@ const PRESETS={
   suv   :{len:210,nose:38,cowl:56,roof:84,roofPos:.5 ,tail:74,sill:14,nw:26,mw:52,wp:.5 ,tw:48,round:2.2},
 };
 const S={...PRESETS.hotrod, wall:1.8, st:72, seg:56, opacity:.55, mode:"projection", sepBottom:true, shape:"loft", revShape:"sphere", revSize:50, widMM:0, hgtMM:0, widK:1, hgtK:1, hullCrisp:0.5,
-  wallTop:1.8, wallSide:1.8, wallBottom:1.8, wallPerFace:false, hullHollow:false};
+  wallTop:1.8, wallSide:1.8, wallBottom:1.8, wallPerFace:false, hullHollow:true};
 // NOTE: revolve primitives (sphere/cylinder/dome/cone) are retired from the UI — this tool
 // is for IMPORTED shapes. makeRevolve() stays so old saved files still load.
 let traced={top:null,bottom:null,width:null,widthBot:null,section:null,sections:null,frontHull:null,rearHull:null,sidePoly:null,topPoly:null,frontPoly:null,bottomPoly:null,natWid:null,natHgt:null};
@@ -1571,7 +1606,7 @@ function rebuild(){
     stamp.querySelector(".t").textContent="SOLID SHAPE";
     stamp.querySelector(".d").textContent="sealed ✓ watertight ✓";}
   else{stamp.classList.add("warn");
-    stamp.querySelector(".t").textContent="HAS GAPS";
+    stamp.querySelector(".t").textContent="HAS GAPS";stamp.title=`${man.boundary} open edges. Usually a feature finer than the mesh can resolve — raise Detail in Advanced, or make the feature bigger.`;
     stamp.querySelector(".d").textContent=man.boundary+" open edges — the shape is not sealed";}
   updateViewDots();
 }
@@ -2148,8 +2183,12 @@ function featRenderGizmos(){
     const el=document.createElement("div");
     el.className="fbox"+(f.depth>=0?" out":"")+(i===featSel?" sel":"");
     el.style.cssText=`left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px;color:${f.depth<0?"#46B7D9":"#5BD6A0"}`;
-    el.innerHTML=`<span class="flabel">${(f.name||"feature")}${f.through?" · through":""}</span>
-      <span class="fh nw"></span><span class="fh ne"></span><span class="fh sw"></span><span class="fh se"></span>`;
+    // only the selected one gets a name tag and handles. A hundred features each shouting
+    // their name is not information, it's a wall — you couldn't see the drawing underneath.
+    el.innerHTML = (i===featSel)
+      ? `<span class="flabel">${(f.name||"feature")}${f.through?" · through":""}</span>
+         <span class="fh nw"></span><span class="fh ne"></span><span class="fh sw"></span><span class="fh se"></span>`
+      : "";
     layer.appendChild(el);
 
     let drag=null;
@@ -2460,6 +2499,40 @@ function featCancelDraft(){
   document.getElementById("featCancel").style.display="none";
   setTraceStatus();drawTrace();
 }
+/* Typing the size beats clicking two points and a dialog: you already know the thing is
+   201mm long. Each view says how big the object is ACROSS and TALL in its own frame, in mm,
+   and the scale falls out of that. Across and tall can differ, which is how a drawing that
+   isn't quite square still comes out right — and it's what stops a 201mm car reading 182mm
+   wide because one view was calibrated against another. */
+function viewSizeMeans(view){
+  return view==="side"   ? {w:"length", h:"height"}
+       : view==="top"||view==="bottom" ? {w:"length", h:"width"}
+       :                    {w:"width",  h:"height"};
+}
+function syncViewSize(){
+  const v=V[activeView]; if(!v)return;
+  const m=viewSizeMeans(activeView);
+  const lbl=document.getElementById("vSizeLbl"); if(lbl)lbl.textContent=`${m.w} × ${m.h}`;
+  const w=document.getElementById("vSizeW"), h=document.getElementById("vSizeH");
+  if(w)w.value=v.sizeW?Math.round(v.sizeW*10)/10:"";
+  if(h)h.value=v.sizeH?Math.round(v.sizeH*10)/10:"";
+}
+function applyViewSize(){
+  const v=V[activeView]; if(!v)return;
+  const w=parseFloat(document.getElementById("vSizeW").value);
+  const h=parseFloat(document.getElementById("vSizeH").value);
+  v.sizeW=(isFinite(w)&&w>0)?w:null;
+  v.sizeH=(isFinite(h)&&h>0)?h:null;
+  // a real size across the view IS a scale: pixels spanned / millimetres spanned
+  if(v.sizeW && v.A && v.A.length>=2){
+    const xs=v.A.map(p=>p.x), span=Math.max(1,Math.max(...xs)-Math.min(...xs));
+    v.scale=span/v.sizeW;
+  }
+  commitTrace(); setTraceStatus();
+  const m=viewSizeMeans(activeView);
+  toast(v.sizeW?`This ${activeView} view is <b>${v.sizeW}mm</b> ${m.w}${v.sizeH?` × <b>${v.sizeH}mm</b> ${m.h}`:""} — everything else is measured from that.`
+               :"Cleared this view's size.");
+}
 function commitTrace(){
   const DEF=(typeof DEFAULT_LEN!=="undefined"?DEFAULT_LEN:200);
   let lenMM=null, widMM=null, hgtMM=null;
@@ -2475,6 +2548,11 @@ function commitTrace(){
     traced.bottom=env.bot.map(p=>[clamp((p.x-env.minX)/env.span,0,1),(datum-p.y)/pxmm]);
     lenMM=Math.max(5,Math.round(env.span/pxmm));
     hgtMM=Math.max(1, Math.max(...traced.top.map(q=>q[1])) - Math.min(...traced.bottom.map(q=>q[1])));
+    if(sv.sizeH>0 && hgtMM>0){                       // you typed the real height: honour it
+      const k=sv.sizeH/hgtMM;
+      traced.top=traced.top.map(q=>[q[0],q[1]*k]); traced.bottom=traced.bottom.map(q=>[q[0],q[1]*k]);
+      hgtMM=sv.sizeH;
+    }
     traced.natHgt=hgtMM; S.hgtMM=Math.max(1,Math.round(hgtMM*(S.hgtK||1)));
     S.len=lenMM; syncLen(); markSil(true);
   } else if(sv.scale && sv.A.length>=2){
@@ -2493,6 +2571,10 @@ function commitTrace(){
     const pxmm=anchorPxPerMm(env.span, lenMM, tv.scale, DEF);  // anchored to the side view
     traced.width=env.top.map((p,i)=>[clamp((p.x-env.minX)/env.span,0,1),Math.max(0.4,(env.bot[i].y-p.y)/pxmm/2)]);
     widMM=2*Math.max(...traced.width.map(q=>q[1]),0.4);
+    if(tv.sizeH>0 && widMM>0){                       // the top view's "height" IS the width
+      const k=tv.sizeH/widMM;
+      traced.width=traced.width.map(q=>[q[0],q[1]*k]); widMM=tv.sizeH;
+    }
     traced.natWid=widMM; S.widMM=Math.max(1,Math.round(widMM*(S.widK||1)));
     if(!lenMM){lenMM=Math.max(5,Math.round(env.span/pxmm));S.len=lenMM;}
     markWidth(true); syncLen();
@@ -2761,9 +2843,18 @@ document.querySelectorAll("#featTool button").forEach(b=>b.onclick=()=>{
 document.getElementById("featSvgAll").onclick=()=>{
   const list=svgDetails(activeView);
   if(!list.length){toast("No SVG lines on this view to take.");return;}
-  let added=0; list.forEach(p=>{ if(featAddSvgPoly(activeView,p,true))added++; });
+  // Every feature is re-evaluated at every point of the model, so taking a whole drawing's
+  // worth turns a 100ms rebuild into a second. And a hundred boxes over the drawing is not
+  // something anyone can edit. Take the biggest ones — the shapes that read — and let the
+  // rest be picked by hand if they're wanted.
+  const CAP=12;
+  const tooMany=list.length>CAP;
+  const take=tooMany?list.slice().sort((a,b)=>polyAreaPts(b)-polyAreaPts(a)).slice(0,CAP):list;
+  let added=0; take.forEach(p=>{ if(featAddSvgPoly(activeView,p,true))added++; });
   featRender(); requestRebuild(); drawTrace();
-  toast(`Took <b>${added}</b> line(s) straight from the drawing — tune each one's depth in the list.`);
+  toast(tooMany
+    ? `Took the <b>${added}</b> biggest shapes of ${list.length}. Every feature costs time on every rebuild, and a hundred boxes can't be edited — click any others you want individually.`
+    : `Took <b>${added}</b> shape(s) straight from your drawing.`);
 };
 document.getElementById("railBtn").onclick=railToggle;
 document.getElementById("railScrim").onclick=()=>railOpen(false);
@@ -2783,6 +2874,11 @@ document.querySelectorAll("#featJoinRow .seg button").forEach(b=>b.onclick=()=>{
 document.getElementById("featNew").onclick=featStart;
 document.getElementById("featDone").onclick=featFinish;
 document.getElementById("featCancel").onclick=featCancelDraft;
+["vSizeW","vSizeH"].forEach(id=>{
+  const el=document.getElementById(id);
+  el.addEventListener("change",applyViewSize);
+  el.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();applyViewSize();el.blur();}});
+});
 document.getElementById("bRot").onclick=()=>{
   const v=cv();
   if(!v.img&&!(v.A&&v.A.length)){toast("Nothing in this view to rotate yet.");return;}
@@ -2815,6 +2911,7 @@ function updateEdgeLabels(){
 document.querySelectorAll("#viewSeg button").forEach(b=>b.onclick=()=>{
   document.querySelectorAll("#viewSeg button").forEach(x=>x.classList.remove("on"));b.classList.add("on");
   activeView=b.dataset.v;traceMode="trace";calPts=[];
+  if(typeof syncViewSize==="function")setTimeout(syncViewSize,0);
   document.getElementById("bCal").classList.remove("active");
   document.getElementById("imgOpField").style.display=cv().img?"inline-flex":"none";
   updateEdgeLabels();fitTrace();setTraceStatus();
@@ -3139,6 +3236,22 @@ function applyWiredConfig(){
   // page. It is an editor tool, so it stays folded away unless someone goes looking.
   const box=document.getElementById("ghWrite"); if(box)box.open=false;
   refreshPublishUI();
+  wiringReport();
+}
+// Exactly why each connection is or isn't wired, in words, in the app. Beats reading a
+// workflow log to find out a secret name was mistyped.
+function wiringReport(){
+  const el=document.getElementById("wireState"); if(!el)return;
+  const sb=!!(window.LEE3D_CFG("supabaseUrl")&&window.LEE3D_CFG("supabaseKey"));
+  const be=!!window.LEE3D_CFG("backendUrl");
+  const repo=!!window.LEE3D_CFG("libRepo");
+  const row=(ok,name,fix)=>`<div style="margin:2px 0">${ok?'<b style="color:var(--good)">✓ wired</b>':'<b style="color:var(--warn)">— not wired</b>'} · <b>${name}</b>${ok?"":` <span style="opacity:.7">${fix}</span>`}</div>`;
+  el.innerHTML =
+    row(sb,"Cloud saves", "→ add repo <b>Secrets</b> <code>SUPABASE_URL</code> + <code>SUPABASE_ANON_KEY</code>, then push")+
+    row(be,"Publish + exact build", "→ add repo <b>Variable</b> <code>BACKEND_URL</code> = your Render URL")+
+    row(repo,"Shared library", "→ add repo <b>Variable</b> <code>LIB_REPO</code> (defaults to BEARME-A/LEE3D-Lib)")+
+    ((sb&&be)?'<div style="margin-top:4px;opacity:.75">Nothing to paste — this is all wired at deploy.</div>'
+             :'<div style="margin-top:4px;opacity:.75">Secrets and Variables are different tabs under <b>Settings → Secrets and variables → Actions</b>. A value typed below works, but only in this browser.</div>');
 }
 // The publish button appears when the backend can do it for everyone (token server-side),
 // or when this browser is the owner's and holds a token. Otherwise it stays hidden rather
@@ -4317,7 +4430,7 @@ if(!window.THREE){
     '3D library failed to load.<br>Check your network, then reload — the rest of the tool still works.</div>';
 }else{
   initThree();rebuild();frameModel();
-  updateEdgeLabels();setTraceStatus();updateImpStatus();refreshSecUI();probeBackend();
+  updateEdgeLabels();setTraceStatus();updateImpStatus();refreshSecUI();probeBackend();syncViewSize();
   refreshCategories();
   applyWiredConfig();
   syncSize();          // size sliders start in the right state (disabled until traced)
