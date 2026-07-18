@@ -204,7 +204,9 @@ t("hull: L-bracket (a shape the loft CANNOT make) is watertight", () => {
 t("hull: respects the silhouette — a notched side view removes material", () => {
   const box = [[0.05,0.05],[0.95,0.05],[0.95,0.95],[0.05,0.95]];
   const notched = [[0.05,0.05],[0.95,0.05],[0.95,0.95],[0.55,0.95],[0.55,0.5],[0.45,0.5],[0.45,0.95],[0.05,0.95]];
-  const mk = side => API.makeBody({ mode: "projection", length: 100, stations: 32,
+  // solid on purpose: this asks whether a notch removes MATERIAL, which only means
+  // anything for a lump — on a shell a notch adds surface, so it adds material.
+  const mk = side => API.makeBody({ mode: "projection", hullHollow: false, length: 100, stations: 32,
     sidePoly: side, topPoly: box, frontPoly: box, topProfile: [[0,60]], widthProfile: [[0,30]] });
   const full = mk(box), cut = mk(notched);
   watertight(cut, "hull notched");
@@ -805,7 +807,7 @@ t("measure: length is anchored from the side/top views, width from top or front"
 // cell always rounds a corner off. Dual contouring solves for the point that satisfies
 // every crossing plane, so a corner lands ON the corner.
 const SQ = [[0.1,0.1],[0.9,0.1],[0.9,0.9],[0.1,0.9]];          // a hard-edged box
-const cube = crisp => API.makeBody({ mode:"projection", length:100, stations:36, hullCrisp:crisp,
+const cube = crisp => API.makeBody({ mode:"projection", hullHollow:false, length:100, stations:36, hullCrisp:crisp,
   sidePoly:SQ, topPoly:SQ, frontPoly:SQ, topProfile:[[0,60]], widthProfile:[[0,30]] });
 
 t("sharp: signed distance is negative inside, positive outside, zero on the edge", () => {
@@ -847,7 +849,7 @@ t("sharp: a round trace still comes out round (crispness doesn't wreck curves)",
   const circle = Array.from({ length: 40 }, (_, i) => {
     const a = i / 40 * 2 * Math.PI; return [0.5 + 0.45 * Math.cos(a), 0.5 + 0.45 * Math.sin(a)];
   });
-  const g = API.makeBody({ mode:"projection", length:100, stations:36, hullCrisp:0.9,
+  const g = API.makeBody({ mode:"projection", hullHollow:false, length:100, stations:36, hullCrisp:0.9,
     sidePoly:circle, topPoly:circle, frontPoly:circle, topProfile:[[0,100]], widthProfile:[[0,50]] });
   const r = manifold(g.indices);
   ok(r.boundary === 0 && r.nonMani === 0, `${r.boundary} open edges on a sphere`);
@@ -862,7 +864,7 @@ t("sharp: a round trace still comes out round (crispness doesn't wreck curves)",
 // browser, with nothing to install. A hole means the shape gains a tunnel: same closed
 // surface, but no longer a simple ball — which is exactly what Euler's formula detects.
 const HULL_BOX = [[0.08,0.08],[0.92,0.08],[0.92,0.92],[0.08,0.92]];
-const hullWith = feats => API.makeBody({ mode:"projection", length:120, stations:40, hullCrisp:0.9,
+const hullWith = feats => API.makeBody({ mode:"projection", hullHollow:false, length:120, stations:40, hullCrisp:0.9,
   sidePoly:HULL_BOX, topPoly:HULL_BOX, frontPoly:HULL_BOX,
   topProfile:[[0,60]], widthProfile:[[0,25]], features:feats });
 // V - E + F for a closed surface: 2 = a ball, 0 = one tunnel through it
@@ -994,7 +996,7 @@ t("thickness: a deeper frame allows a deeper scoop", () => {
 t("thickness: a cut-through is NOT capped — that's the point of it", () => {
   const P = [[0.35,0.35],[0.65,0.35],[0.65,0.65],[0.35,0.65]];
   const box = [[0.08,0.08],[0.92,0.08],[0.92,0.92],[0.08,0.92]];
-  const g = API.makeBody({ mode:"projection", length:120, stations:40, hullCrisp:0.9, wallThickness:1.8,
+  const g = API.makeBody({ mode:"projection", hullHollow:false, length:120, stations:40, hullCrisp:0.9, wallThickness:1.8,
     sidePoly:box, topPoly:box, frontPoly:box, topProfile:[[0,60]], widthProfile:[[0,25]],
     features:[{ kind:"poly", view:"side", depth:-4, through:true, soft:0.02, poly:P }] });
   const r = manifold(g.indices);
@@ -1348,7 +1350,7 @@ t("speed: a heavier outline costs almost nothing extra", () => {
   const t0 = Date.now();
   const car = (n, rx, ry) => Array.from({ length: n }, (_, i) => {
     const a = i / n * 2 * Math.PI; return [0.5 + rx * Math.cos(a), 0.5 + ry * Math.sin(a)]; });
-  const mk = pts => API.makeBody({ mode:"projection", length:190, stations:40, hullCrisp:0.9,
+  const mk = pts => API.makeBody({ mode:"projection", hullHollow:false, length:190, stations:40, hullCrisp:0.9,
     sidePoly:car(pts,0.45,0.4), topPoly:car(pts,0.45,0.38), frontPoly:car(pts,0.4,0.42),
     topProfile:[[0,60]], widthProfile:[[0,25]] });
   mk(90); const tA = Date.now(); mk(90); const light = Date.now() - tA;
@@ -1416,6 +1418,92 @@ t("simplify: it never destroys a shape it can't reduce", () => {
   const tri = [[0,0],[1,0],[0.5,1]];
   eq(API.simplifyPoly(tri, 0.5).length, 3, "a triangle can't go below 3 points:");
   eq(API.simplifyPoly([[0,0],[1,1]], 0.1).length, 2, "too few points should pass straight through:");
+});
+
+// =====================  18. TYPE THE REAL SIZE  =====================
+// You already know the car is 201mm long. Clicking two points and a dialog to tell the app
+// that is silly, and it's how one view ends up disagreeing with another — a 201mm car
+// reading 182mm wide because its width was inferred rather than stated.
+t("size: a typed width across a view IS its scale", () => {
+  // 402 traced pixels across something you say is 201mm -> 2 px per mm
+  const spanPx = 402, sizeW = 201;
+  near(spanPx / sizeW, 2, 1e-9, "px per mm:");
+  // and the length then reads back exactly what you typed
+  near(spanPx / (spanPx / sizeW), 201, 1e-9, "the length must be what you said it was:");
+});
+t("size: each view means something different by across and tall", () => {
+  const means = v => v === "side" ? { w: "length", h: "height" }
+                   : (v === "top" || v === "bottom") ? { w: "length", h: "width" }
+                   : { w: "width", h: "height" };
+  eq(means("side").h, "height");
+  eq(means("top").h, "width", "looking down, the vertical extent IS the object's width:");
+  eq(means("front").w, "width", "head-on, across IS the width:");
+  eq(means("bottom").w, "length");
+});
+t("size: a typed height rescales the traced profile to match", () => {
+  // traced heights come out as whatever the pixels said; typing the real one scales them
+  const traced = [[0, 10], [0.5, 42], [1, 20]];
+  const measured = 42, typed = 84;
+  const k = typed / measured;
+  const out = traced.map(q => [q[0], q[1] * k]);
+  near(Math.max(...out.map(q => q[1])), 84, 1e-9, "the peak must become the height you typed:");
+  // and the shape is untouched — only the scale
+  near(out[0][1] / out[1][1], traced[0][1] / traced[1][1], 1e-9, "the profile's shape drifted:");
+});
+t("size: a nonsense entry is ignored rather than wrecking the model", () => {
+  for (const bad of [0, -5, NaN, undefined]) {
+    const ok2 = (isFinite(bad) && bad > 0) ? bad : null;
+    eq(ok2, null, `${bad} should not be accepted as a size:`);
+  }
+});
+
+// =====================  19. THE FRAME IS A SHELL  =====================
+// A toy frame is hollow — that's the whole point of a thickness slider. "Follow my drawing"
+// used to hand back a filled lump, because carving the void out of the distance field needs
+// a grid fine enough to see a 1.8mm wall (a 1.3M-cell grid on a car). It doesn't need the
+// field: the surface is already closed, so a copy pushed inward along its own normals IS
+// the inside, and a closed surface has no rim to stitch.
+const SHELL = { mode:"projection", length:201, stations:56, hullCrisp:0.5,
+  sidePoly:[[0.06,0.06],[0.94,0.06],[0.94,0.94],[0.06,0.94]],
+  topPoly:[[0.06,0.06],[0.94,0.06],[0.94,0.94],[0.06,0.94]],
+  frontPoly:[[0.06,0.06],[0.94,0.06],[0.94,0.94],[0.06,0.94]],
+  topProfile:[[0,84]], widthProfile:[[0,45]] };
+
+t("shell: the frame is hollow, not a filled lump", () => {
+  const lump = API.makeBody({ ...SHELL, hullHollow:false });
+  const shell = API.makeBody({ ...SHELL, hullHollow:true, wallThickness:1.8 });
+  ok(shell.volume < lump.volume * 0.3,
+     `a 1.8mm shell should be a fraction of the lump, got ${(shell.volume/lump.volume*100).toFixed(0)}%`);
+  ok(shell.volume > 0, "…but it must still be made of something");
+});
+t("shell: hollow is the default for the drawing-following mode", () => {
+  const def = API.makeBody({ ...SHELL });                 // no hullHollow given
+  const lump = API.makeBody({ ...SHELL, hullHollow:false });
+  ok(def.volume < lump.volume * 0.5, "a toy frame should arrive hollow without being asked");
+});
+t("shell: it stays watertight at every wall thickness", () => {
+  for (const w of [0.6, 1.0, 1.8, 3, 5]) {
+    const g = API.makeBody({ ...SHELL, hullHollow:true, wallThickness:w });
+    const r = manifold(g.indices);
+    ok(r.boundary === 0 && r.nonMani === 0, `${w}mm: ${r.boundary} open edges, ${r.nonMani} non-manifold`);
+  }
+});
+t("shell: a thicker wall means more material, and it tracks the slider", () => {
+  const v = w => API.makeBody({ ...SHELL, hullHollow:true, wallThickness:w }).volume;
+  const a = v(1), b = v(2), c = v(4);
+  ok(b > a && c > b, `volume must rise with thickness: ${a.toFixed(0)}, ${b.toFixed(0)}, ${c.toFixed(0)}`);
+  // roughly surface area x wall, so doubling the wall roughly doubles the material
+  ok(b / a > 1.6 && b / a < 2.4, `2mm should be ~2x the material of 1mm, got ${(b/a).toFixed(2)}x`);
+});
+t("shell: hollowing doesn't change the outside", () => {
+  const bbox = g => { let x0=1e9,x1=-1e9,z0=1e9,z1=-1e9;
+    for (let i=0;i<g.positions.length;i+=3){ x0=Math.min(x0,g.positions[i]); x1=Math.max(x1,g.positions[i]);
+      z0=Math.min(z0,g.positions[i+2]); z1=Math.max(z1,g.positions[i+2]); }
+    return [x1-x0, z1-z0]; };
+  const [lw, lh] = bbox(API.makeBody({ ...SHELL, hullHollow:false }));
+  const [sw, sh] = bbox(API.makeBody({ ...SHELL, hullHollow:true, wallThickness:3 }));
+  near(sw, lw, 0.5, "the outside length must not shrink when you hollow it:");
+  near(sh, lh, 0.5, "nor the height:");
 });
 
 // --- report ---
