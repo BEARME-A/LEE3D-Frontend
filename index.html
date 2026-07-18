@@ -1513,6 +1513,14 @@ let renderer,scene,camera,bodyMesh,wireMesh,bottomMesh,grid,refGroup;
 let target=new THREE.Vector3(0,0,0);
 let cam={az:-0.7,pol:1.15,rad:300};
 let wireOn=false, refOn=false;
+// Default framing — the view "Recenter" lands on. The 3D pane is tall and narrow and the
+// only controls are orbit + zoom (no pan), so this has to compose a good shot on its own.
+//   FRAME_FILL — how tightly the model fills the frame. 1.0 ≈ fills it with a hair of
+//                margin; LOWER zooms IN (bigger model), HIGHER pulls back (more margin).
+//   FRAME_LIFT — raises the model in the frame, as a fraction of its own height. The camera
+//                aims a touch below the model's middle so more of it shows up top. 0 = dead
+//                centre; higher = model sits higher; NEGATIVE = model sits lower.
+const FRAME_FILL=1.1, FRAME_LIFT=0.16;
 
 function initThree(){
   renderer=new THREE.WebGLRenderer({canvas:glCanvas,antialias:true,alpha:true,powerPreference:"high-performance"});
@@ -1623,17 +1631,35 @@ function updateCam(){
   const z=target.z+cam.rad*Math.sin(cam.pol)*Math.sin(cam.az);
   camera.position.set(x,y,z);camera.lookAt(target);requestRender();
 }
-function frameModel(){
-  if(bodyMesh){
-    const b=new THREE.Box3().setFromObject(bodyMesh);
-    if(isFinite(b.min.x)){
-      const c=b.getCenter(new THREE.Vector3()), sz=b.getSize(new THREE.Vector3());
-      target.copy(c);                                   // look at the model, not the origin
-      cam.rad=Math.max(sz.x,sz.y,sz.z)*2.1||S.len*1.7;
-      cam.az=-0.7;cam.pol=1.05;updateCam();return;
-    }
+// Distance at which `box` just fills the current viewport at the current orbit angle.
+// Works for ANY aspect (the pane is portrait) by measuring the box's real spread across
+// the camera's right/up axes and fitting each against the matching field of view, rather
+// than guessing from the largest dimension. The *1.06 leaves room for the near corners,
+// which loom larger under perspective.
+function frameFitRadius(box){
+  const dir=new THREE.Vector3(-Math.sin(cam.pol)*Math.cos(cam.az),-Math.cos(cam.pol),-Math.sin(cam.pol)*Math.sin(cam.az)).normalize();
+  const right=new THREE.Vector3().crossVectors(dir,new THREE.Vector3(0,1,0)).normalize();
+  const up=new THREE.Vector3().crossVectors(right,dir).normalize();
+  const c=box.getCenter(new THREE.Vector3()), v=new THREE.Vector3();
+  let halfW=1e-3, halfH=1e-3;
+  for(let i=0;i<8;i++){
+    v.set(i&1?box.max.x:box.min.x, i&2?box.max.y:box.min.y, i&4?box.max.z:box.min.z).sub(c);
+    halfW=Math.max(halfW,Math.abs(v.dot(right)));
+    halfH=Math.max(halfH,Math.abs(v.dot(up)));
   }
-  target.set(0,0,0);cam.rad=S.len*1.7;cam.az=-0.7;cam.pol=1.12;updateCam();
+  const vfov=camera.fov*Math.PI/180, hfov=2*Math.atan(Math.tan(vfov/2)*(camera.aspect||1));
+  return Math.max(halfH/Math.tan(vfov/2), halfW/Math.tan(hfov/2))*1.06;
+}
+function frameModel(){
+  const fallback=()=>{target.set(0,0,0);cam.rad=S.len*1.7;cam.az=-0.7;cam.pol=1.12;updateCam();};
+  if(!bodyMesh){fallback();return;}
+  const b=new THREE.Box3().setFromObject(bodyMesh);
+  if(!isFinite(b.min.x)){fallback();return;}
+  cam.az=-0.7; cam.pol=1.05;                            // fixed 3/4 angle
+  target.copy(b.getCenter(new THREE.Vector3()));        // pivot ON the model so orbit never flings it off
+  target.y-=(b.max.y-b.min.y)*FRAME_LIFT;               // aim a little low -> model rides higher in the frame
+  cam.rad=frameFitRadius(b)*FRAME_FILL;                 // fill the frame for the actual (portrait) pane
+  updateCam();
 }
 let raf, dirtyUntil=0;
 // Render ONLY when something changed (idle = zero GPU work). Any change opens a short
