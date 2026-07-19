@@ -1702,6 +1702,20 @@ function rebuild(){
   bodyMesh.rotation.set(-Math.PI/2,0,0);
   wireMesh.rotation.set(-Math.PI/2,0,0);
 
+  // Sit the model ON the axis. After the -90° tilt, world = (modelX, modelZ, -modelY), so
+  // centre it in length & width and rest model-Z's floor on the ground plane (world Y=0). This
+  // runs in every mode (smooth, follow-my-drawing, revolve), and the camera pivot is pinned to
+  // the model's vertical middle so orbit and zoom always turn around it — nothing drifts off.
+  { const gb=geo.boundingBox;
+    const offX=-(gb.min.x+gb.max.x)/2, offGround=-gb.min.z, offZ=(gb.min.y+gb.max.y)/2;
+    bodyMesh.position.set(offX,offGround,offZ);
+    wireMesh.position.set(offX,offGround,offZ);
+    if(bottomMesh)bottomMesh.position.set(offX,offGround,offZ);
+    refGroup.position.set(offX,offGround,offZ);
+    const worldH=gb.max.z-gb.min.z;
+    target.set(0, worldH*(0.5-FRAME_LIFT), 0); updateCam();
+  }
+
   // readouts
   const tri=indices.length/3;
   const man=checkManifold(indices);
@@ -2142,37 +2156,75 @@ function regionOutline(mark,W,H,id,K){
   const loop=[...top,...bot.slice().reverse()];
   return loop.filter((p,i,a)=>i===0||p.x!==a[i-1].x||p.y!==a[i-1].y);
 }
+// grow a binary mask by r pixels — closes hairline gaps in scanned / anti-aliased line-work
+// so a nearly-closed shape still fences its region in instead of leaking to the background.
+function dilateMask(src,W,H,r){
+  let a=src;
+  for(let pass=0;pass<r;pass++){ const b=new Uint8Array(a.length);
+    for(let y=0;y<H;y++)for(let x=0;x<W;x++){const i=y*W+x;
+      if(a[i]||(x>0&&a[i-1])||(x<W-1&&a[i+1])||(y>0&&a[i-W])||(y<H-1&&a[i+W]))b[i]=1;}
+    a=b; }
+  return a;
+}
+// bbox overlap ratio of two outlines, for de-duping (a colour blob that's also ink-enclosed)
+function outlineBBox(poly){let a=1e9,b=1e9,c=-1e9,d=-1e9;for(const q of poly){if(q.x<a)a=q.x;if(q.y<b)b=q.y;if(q.x>c)c=q.x;if(q.y>d)d=q.y;}return[a,b,c,d];}
+function labelBlobs(mask,W,H,minPx,maxOut){
+  const N=W*H, m=new Int32Array(N); let id=0; const sizes=[];
+  for(let i=0;i<N;i++){ if(!mask[i]||m[i])continue; id++; let count=0; const st=[i]; m[i]=id;
+    while(st.length){const j=st.pop(),x=j%W,y=(j/W)|0;count++;
+      if(x>0&&mask[j-1]&&!m[j-1]){m[j-1]=id;st.push(j-1);}
+      if(x<W-1&&mask[j+1]&&!m[j+1]){m[j+1]=id;st.push(j+1);}
+      if(y>0&&mask[j-W]&&!m[j-W]){m[j-W]=id;st.push(j-W);}
+      if(y<H-1&&mask[j+W]&&!m[j+W]){m[j+W]=id;st.push(j+W);}}
+    sizes.push({id,count}); }
+  const out=[];
+  sizes.filter(r=>r.count>=minPx).sort((a,b)=>b.count-a.count).slice(0,maxOut)
+       .forEach(r=>{const o=regionOutline(m,W,H,r.id,40); if(o)out.push(o);});
+  return out;
+}
+// Every shape a raster drawing contains. Two complementary readings, matching how people
+// actually mark features: (A) SCAN THE LINE-WORK — the regions its ink fences in (windows,
+// wheels, scoops), with the ink dilated so a hairline gap doesn't let a shape leak away;
+// (B) DIFFERENT COLOURS — a red light or a blue panel is a shape even where its outline is
+// faint, so vividly-coloured blobs (chroma off the grey axis) are picked up too.
 function rasterRegions(imgData,maxOut){
-  const W=imgData.width,H=imgData.height, lum=lumOf(imgData), thr=otsuThreshold(lum);
-  const N=W*H, mark=new Int32Array(N);            // 0 = unclaimed paper, -1 = ink, -2 = outside
-  for(let i=0;i<N;i++)if(lum[i]<=thr)mark[i]=-1;
-  // flood the outside paper away from the border
+  const W=imgData.width,H=imgData.height, N=W*H, data=imgData.data;
+  maxOut=maxOut||64;
+  const lum=lumOf(imgData), thr=otsuThreshold(lum);
+  const minPx=Math.max(20,Math.round(N*3e-5));
+
+  // (A) ink-enclosed regions, on a gap-closed fence
+  const ink=new Uint8Array(N); for(let i=0;i<N;i++)if(lum[i]<=thr)ink[i]=1;
+  const rad=Math.max(1,Math.round(Math.max(W,H)/700));
+  const fence=dilateMask(ink,W,H,rad);
+  const mark=new Int32Array(N); for(let i=0;i<N;i++)if(fence[i])mark[i]=-1;
   const stack=[];
   for(let x=0;x<W;x++){ if(mark[x]===0){mark[x]=-2;stack.push(x);} const b=(H-1)*W+x; if(mark[b]===0){mark[b]=-2;stack.push(b);} }
-  for(let y=0;y<H;y++){ const l=y*W, r=y*W+W-1; if(mark[l]===0){mark[l]=-2;stack.push(l);} if(mark[r]===0){mark[r]=-2;stack.push(r);} }
-  while(stack.length){ const i=stack.pop(), x=i%W, y=(i/W)|0;
-    if(x>0   && mark[i-1]===0){mark[i-1]=-2;stack.push(i-1);}
-    if(x<W-1 && mark[i+1]===0){mark[i+1]=-2;stack.push(i+1);}
-    if(y>0   && mark[i-W]===0){mark[i-W]=-2;stack.push(i-W);}
-    if(y<H-1 && mark[i+W]===0){mark[i+W]=-2;stack.push(i+W);}
-  }
-  // whatever paper is left is fenced in by ink -> label each pocket
-  const minPx=Math.max(24,Math.round(N*4e-5)); let id=0; const sizes=[];
-  for(let i=0;i<N;i++){
-    if(mark[i]!==0)continue;
-    id++; let count=0; const st=[i]; mark[i]=id;
-    while(st.length){ const j=st.pop(), x=j%W, y=(j/W)|0; count++;
-      if(x>0   && mark[j-1]===0){mark[j-1]=id;st.push(j-1);}
-      if(x<W-1 && mark[j+1]===0){mark[j+1]=id;st.push(j+1);}
-      if(y>0   && mark[j-W]===0){mark[j-W]=id;st.push(j-W);}
-      if(y<H-1 && mark[j+W]===0){mark[j+W]=id;st.push(j+W);}
-    }
-    sizes.push({id,count});
-  }
-  const keep=sizes.filter(r=>r.count>=minPx).sort((a,b)=>b.count-a.count).slice(0,maxOut||40);
-  const out=[];
-  for(const r of keep){ const o=regionOutline(mark,W,H,r.id,40); if(o)out.push(o); }
-  return out;
+  for(let y=0;y<H;y++){ const l=y*W,r=y*W+W-1; if(mark[l]===0){mark[l]=-2;stack.push(l);} if(mark[r]===0){mark[r]=-2;stack.push(r);} }
+  while(stack.length){const i=stack.pop(),x=i%W,y=(i/W)|0;
+    if(x>0&&mark[i-1]===0){mark[i-1]=-2;stack.push(i-1);}
+    if(x<W-1&&mark[i+1]===0){mark[i+1]=-2;stack.push(i+1);}
+    if(y>0&&mark[i-W]===0){mark[i-W]=-2;stack.push(i-W);}
+    if(y<H-1&&mark[i+W]===0){mark[i+W]=-2;stack.push(i+W);}}
+  const enclosed=labelBlobs(mark.map(v=>v===0?1:0),W,H,minPx,maxOut);
+
+  // (B) vividly-coloured regions (chroma). Higher size floor keeps JPEG edge-fringe out.
+  const col=new Uint8Array(N);
+  for(let i=0,p=0;i<N;i++,p+=4){const R=data[p],G=data[p+1],B=data[p+2];
+    if((Math.max(R,G,B)-Math.min(R,G,B))>=50 && Math.max(R,G,B)>=60) col[i]=1;}
+  const coloured=labelBlobs(col,W,H,Math.max(minPx,Math.round(N*7e-5)),maxOut);
+
+  // merge, de-dupe only near-IDENTICAL outlines (the same shape found by both readings), by
+  // IoU — a small feature nested inside a big one has low IoU, so it is correctly kept.
+  const all=[...enclosed,...coloured].sort((p,q)=>polyAreaPts(q)-polyAreaPts(p));
+  const kept=[];
+  for(const poly of all){ const bb=outlineBBox(poly); let dup=false;
+    for(const k of kept){ const ox=Math.max(0,Math.min(bb[2],k.bb[2])-Math.max(bb[0],k.bb[0])),
+        oy=Math.max(0,Math.min(bb[3],k.bb[3])-Math.max(bb[1],k.bb[1])), inter=ox*oy,
+        a1=(bb[2]-bb[0])*(bb[3]-bb[1]), a2=(k.bb[2]-k.bb[0])*(k.bb[3]-k.bb[1]), uni=a1+a2-inter;
+      if(uni>0 && inter/uni>0.7){dup=true;break;} }
+    if(!dup)kept.push({poly,bb}); }
+  return kept.slice(0,maxOut).map(k=>k.poly);
 }
 function autoOutline(imgData,K){
   K=K||48;
@@ -2506,7 +2558,7 @@ function viewShapes(view){
     const im=v.img, w=im.naturalWidth||im.width, h=im.naturalHeight||im.height;
     const c=document.createElement("canvas"); c.width=w; c.height=h;
     c.getContext("2d",{willReadFrequently:true}).drawImage(im,0,0,w,h);
-    v._shapes=rasterRegions(c.getContext("2d").getImageData(0,0,w,h),40);
+    v._shapes=rasterRegions(c.getContext("2d").getImageData(0,0,w,h),64);
     v._shapesFor=v.img; v.svgArea=v.svgArea||w*h;
   }catch(_){ v._shapes=[]; v._shapesFor=v.img; }
   return v._shapes;
