@@ -201,8 +201,27 @@ t("hull: L-bracket (a shape the loft CANNOT make) is watertight", () => {
   watertight(g, "hull L-bracket");
   ok(g.volume > 0, "no volume");
 });
-t("hull: respects the silhouette — a notched side view removes material", () => {
-  const box = [[0.05,0.05],[0.95,0.05],[0.95,0.95],[0.05,0.95]];
+t("hull: dense features + through-cuts stay watertight (saddle-cell repair)", () => {
+  // This load used to leave open or over-shared edges at saddle cells — the "N OPEN EDGES"
+  // badge on heavily detailed traces. sealMesh must drive every such mesh to fully closed.
+  const carSide=[[0.02,0.12],[0.10,0.30],[0.30,0.34],[0.40,0.55],[0.62,0.58],[0.72,0.36],[0.95,0.30],[0.98,0.14],[0.80,0.10],[0.20,0.10]];
+  const carTop=[[0.03,0.30],[0.20,0.16],[0.80,0.16],[0.97,0.32],[0.97,0.68],[0.80,0.84],[0.20,0.84],[0.03,0.70]];
+  const carFront=[[0.10,0.05],[0.90,0.05],[0.98,0.45],[0.85,0.92],[0.15,0.92],[0.02,0.45]];
+  const feats=[]; let i=0;
+  for(let r=0;r<6;r++)for(let c=0;c<10;c++){
+    const cx=0.10+(c+0.5)/10*0.80, cy=0.14+(r+0.5)/6*0.40, w=0.80/10*0.32, h=0.40/6*0.30;
+    const through=(i%7===0);
+    feats.push({poly:[[cx-w,cy-h],[cx+w,cy-h],[cx+w,cy+h],[cx-w,cy+h]],view:"side",
+      depth:through?-30:-(1.5+i%4), through, soft:0.03}); i++;
+  }
+  for(const [stations,crisp] of [[64,0.9],[54,0.5],[46,0.2]]){
+    const g=API.makeBody({mode:"projection", length:166, stations, hullCrisp:crisp,
+      sidePoly:carSide, topPoly:carTop, frontPoly:carFront, features:feats,
+      topProfile:[[0,89]], widthProfile:[[0,58]], wallThickness:1.8});
+    watertight(g, `dense hull st=${stations} crisp=${crisp}`);
+  }
+});
+t("hull: respects the silhouette — a notched side view removes material", () => {  const box = [[0.05,0.05],[0.95,0.05],[0.95,0.95],[0.05,0.95]];
   const notched = [[0.05,0.05],[0.95,0.05],[0.95,0.95],[0.55,0.95],[0.55,0.5],[0.45,0.5],[0.45,0.95],[0.05,0.95]];
   // solid on purpose: this asks whether a notch removes MATERIAL, which only means
   // anything for a lump — on a shell a notch adds surface, so it adds material.
