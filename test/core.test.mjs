@@ -47,7 +47,7 @@ const NAMES = ["outlineEnvelope", "anchorPxPerMm", "makeRevolve", "pointInPoly",
   "makeVisualHull", "checkManifold", "polyArea", "resamplePoly", "svgPhysicalWidthMM",
   "libCanonical", "sampleProfile", "resampleSection", "morphSections", "makeBody", "autoOutline",
   "publishRoute", "distToPoly", "viewUV", "applyFeatures", "pickSilhouette", "sampleMask", "ptInPolyPts", "polyAreaPts",
-  "rasterRegions", "otsuThreshold", "lumOf", "regionOutline", "sdPoly",
+  "rasterRegions", "otsuThreshold", "lumOf", "regionOutline", "dilateMask", "labelBlobs", "outlineBBox", "sdPoly",
   "wallSpec", "wallAt", "minWall",
   "connDiameter", "connWarn", "connPoly", "simplifyPoly"];
 const found = [];
