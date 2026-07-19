@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>LEE3D — Toy Workshop</title>
+<title>LEE3D</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Saira+Semi+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -26,13 +26,14 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
 </script>
 <style>
   :root{
-    --bg:#0B0F14; --panel:#111824; --panel-2:#0E141D; --rail:#0C121B;
-    --line:rgba(120,160,200,.14); --line-2:rgba(120,160,200,.08);
-    --ink:#C9D6E5; --ink-dim:#71839A; --ink-faint:#48586B;
-    --accent:#FF7A2F;            /* hot-end filament amber */
-    --accent-soft:rgba(255,122,47,.16);
+    --bg:#0B121B; --panel:#121D2B; --panel-2:#0F1823; --rail:#0D1622;
+    --line:rgba(80,190,228,.18); --line-2:rgba(80,190,228,.07);
+    --ink:#DCE9F6; --ink-dim:#8CA6C0; --ink-faint:#586E86;
+    --accent:#39CFEA;            /* holographic HUD cyan */
+    --accent-soft:rgba(57,207,234,.14);
     --blue:#46B7D9;              /* blueprint measurement cyan */
-    --good:#5BD6A0; --warn:#E5B45B; --bad:#E5705B;
+    --good:#3FDCB4; --warn:#F5B342; --bad:#FF6A5A;
+    --glow:rgba(57,207,234,.45);
     --r:8px;
   }
   *{box-sizing:border-box}
@@ -40,11 +41,12 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
   body{
     background:var(--bg); color:var(--ink);
     font-family:Inter,system-ui,-apple-system,sans-serif; font-size:14px;
-    /* faint blueprint grid */
+    /* holographic grid + a soft projection glow up top, for depth without clutter */
     background-image:
+      radial-gradient(120% 80% at 50% -8%, rgba(57,207,234,.10), transparent 60%),
       linear-gradient(var(--line-2) 1px,transparent 1px),
       linear-gradient(90deg,var(--line-2) 1px,transparent 1px);
-    background-size:26px 26px; background-position:-1px -1px;
+    background-size:100% 100%, 26px 26px, 26px 26px; background-position:0 0,-1px -1px,-1px -1px;
     overflow:hidden;
   }
   .mono{font-family:"JetBrains Mono",ui-monospace,monospace}
@@ -54,16 +56,17 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
   header{
     height:54px; display:flex; align-items:center; gap:18px;
     padding:0 16px; border-bottom:1px solid var(--line);
-    background:linear-gradient(180deg,#0E151E,#0B1018);
+    background:linear-gradient(180deg,#0F1B29,#0B121C);
     position:relative; z-index:20;
   }
   .brand{display:flex;align-items:center;gap:10px}
   .logo{
     width:26px;height:26px;border:1.5px solid var(--accent);border-radius:5px;
     display:grid;place-items:center;position:relative;flex:0 0 auto;
+    box-shadow:0 0 10px var(--glow), inset 0 0 7px rgba(57,207,234,.28);
   }
-  .logo::before{content:"";position:absolute;inset:5px;border:1.5px solid var(--accent);border-radius:50%;opacity:.55}
-  .logo::after{content:"";position:absolute;width:3px;height:3px;background:var(--accent);border-radius:50%}
+  .logo::before{content:"";position:absolute;inset:5px;border:1.5px solid var(--accent);border-radius:50%;opacity:.6}
+  .logo::after{content:"";position:absolute;width:3px;height:3px;background:var(--accent);border-radius:50%;box-shadow:0 0 5px var(--accent)}
   .brand h1{font-size:17px;font-weight:700;margin:0;line-height:1}
   .brand .sub{font-size:10.5px;color:var(--ink-dim);letter-spacing:.18em;text-transform:uppercase;margin-top:3px}
   .proj-name{
@@ -82,12 +85,12 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
   .stat span{font-size:9.5px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.13em}
   /* drafting approval stamp */
   .stamp{
-    border:2px solid var(--good);color:var(--good);border-radius:7px;
+    border:1.5px solid var(--good);color:var(--good);border-radius:7px;
     padding:5px 11px;display:flex;flex-direction:column;align-items:center;
-    line-height:1.05;transform:rotate(-3deg);min-width:104px;
-    box-shadow:inset 0 0 0 1px rgba(91,214,160,.25);
+    line-height:1.05;min-width:104px;
+    box-shadow:inset 0 0 8px rgba(63,220,180,.18), 0 0 12px rgba(63,220,180,.22);
   }
-  .stamp.warn{border-color:var(--warn);color:var(--warn);box-shadow:inset 0 0 0 1px rgba(229,180,91,.25)}
+  .stamp.warn{border-color:var(--warn);color:var(--warn);box-shadow:inset 0 0 8px rgba(245,179,66,.16), 0 0 12px rgba(245,179,66,.2)}
   .stamp .t{font-weight:700;font-size:12.5px;letter-spacing:.12em}
   .stamp .d{font-size:8.5px;letter-spacing:.16em;opacity:.85;text-transform:uppercase}
 
@@ -125,21 +128,21 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
   }
   input[type=range]::-webkit-slider-thumb{
     -webkit-appearance:none;width:14px;height:14px;border-radius:50%;
-    background:var(--accent);cursor:pointer;border:2px solid #1a1208;
+    background:var(--accent);cursor:pointer;border:2px solid #05131c;box-shadow:0 0 6px var(--glow);
     box-shadow:0 0 0 1px var(--accent)
   }
-  input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:var(--accent);cursor:pointer;border:2px solid #1a1208}
+  input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:var(--accent);cursor:pointer;border:2px solid #05131c;box-shadow:0 0 6px var(--glow)}
 
   .btn{
     font-family:inherit;font-size:12.5px;font-weight:500;cursor:pointer;
-    background:#141d29;color:var(--ink);border:1px solid var(--line);
+    background:#141F2D;color:var(--ink);border:1px solid var(--line);
     border-radius:6px;padding:8px 11px;display:inline-flex;align-items:center;gap:7px;
     transition:border-color .15s,background .15s;width:100%;justify-content:center;
   }
-  .btn:hover{border-color:#2a3a4f;background:#16202e}
+  .btn:hover{border-color:rgba(57,207,234,.4);background:#17212f}
   .btn.active{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
-  .btn.primary{background:var(--accent);color:#160c03;border-color:var(--accent);font-weight:600}
-  .btn.primary:hover{background:#ff8b48}
+  .btn.primary{background:var(--accent);color:#04141c;border-color:var(--accent);font-weight:600;box-shadow:0 0 0 1px var(--accent-soft),0 2px 14px rgba(57,207,234,.22)}
+  .btn.primary:hover{background:#5CDCF0;box-shadow:0 0 0 1px var(--accent),0 2px 18px rgba(57,207,234,.34)}
   .btn.ghost{background:transparent}
   .btn-row{display:flex;gap:8px;margin:10px 0}
   .btn-row .btn{width:auto;flex:1}
@@ -396,12 +399,12 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
 <body>
 
 <header>
-  <button id="railBtn" class="btn ghost" title="Settings" aria-label="Settings">☰</button>
+  <button id="railBtn" class="btn ghost" title="Settings" aria-label="Settings">≡</button>
   <div class="brand">
     <div class="logo"></div>
     <div>
       <h1 class="disp">LEE3D</h1>
-      <div class="sub">Drawings → parts → toys</div>
+      <div class="sub">Studio</div>
     </div>
   </div>
   <input id="projName" class="proj-name mono" value="untitled-object" spellcheck="false" />
@@ -490,19 +493,19 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
         </div>
         <div class="hint" id="modeHint"><b>Smooth</b> &mdash; a flowing, rounded body. Best for cars, boats, anything streamlined. Features here are dents and bumps.<br><b>Follow my drawing</b> &mdash; carves out exactly what your outlines say, corners and all. Use it for angular things, and it's the only mode that can <b>cut a window clean through</b>.</div>
         <div class="field" id="crispField"><label>Edge crispness <span class="val"><span id="vCrisp">0.50</span></span></label><input type="range" id="sCrisp" min="0" max="1" value="0.5" step="0.05"></div>
-        <div class="hint">Only used by <b>Follow my drawing</b>. High = hard, machined corners. Low = softened.</div>
+        <div class="hint">Only used by <b>Follow my drawing</b>. <b>0</b> = the smooth rounded body (same as Smooth mode); <b>1</b> = exactly your traced outline, corners and all. In between it shifts from smooth toward your lines.</div>
       </div>
     </details>
     <details class="sec">
       <summary><span class="idx">5</span><span class="ttl">Features <span style="opacity:.55;font-weight:400">· <span id="featCount">none yet</span></span></span><span class="chev">▶</span></summary>
       <div class="sec-body">
         <div class="hint">Detail and <b>joins</b> live on the drawing, not in here. Open <b>Reference &amp; Trace</b>: pick a tool in the toolbar, draw the shape, then a small panel opens <b>over the view</b> with that feature's own settings — so you can see what you're changing while you change it. Drag its box to move it, a corner to resize, an orange point to bend it.<br><br>
-        <b>Join</b> is how parts become a toy: click where a <b>peg</b> or a <b>socket</b> goes and give it a size. The same size on two parts is made to fit once printed — the socket is cut wider by the printer's clearance so it doesn't seize solid.</div>
+        <b>Join</b> connects parts: click where a <b>peg</b> or a <b>socket</b> goes and give it a size. The same size on two parts is made to fit once printed — the socket is cut wider by the printer's clearance so it doesn't seize solid.</div>
       </div>
     </details>
 
     <details class="sec">
-      <summary><span class="idx">⚙</span><span class="ttl">Advanced <span style="opacity:.55;font-weight:400">· detail &amp; thickness</span></span><span class="chev">▶</span></summary>
+      <summary><span class="idx">◇</span><span class="ttl">Advanced <span style="opacity:.55;font-weight:400">· detail &amp; thickness</span></span><span class="chev">▶</span></summary>
       <div class="sec-body">
         <div class="hint">Only touch these if you want to. Higher detail = smoother but slower.</div>
         <div class="field"><label>Frame thickness <span class="val"><span id="vWall">1.8</span> mm</span></label><input type="range" id="sWall" min="0.4" max="12" value="1.8" step="0.1"></div>
@@ -540,14 +543,14 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
     <details class="sec" open>
       <summary><span class="idx">7</span><span class="ttl">Save &amp; export</span><span class="chev">▶</span></summary>
       <div class="sec-body">
-        <button class="btn primary" id="bSaveAll" style="width:100%;font-size:13px;padding:9px">💾 Save this model</button>
+        <button class="btn primary" id="bSaveAll" style="width:100%;font-size:13px;padding:9px">Save this model</button>
         <div class="hint" id="saveWhere" style="margin-top:5px">Keeps it on this device and in the shared cloud, and it appears in the <b>Workshop</b>. Saving again with the same name updates it instead of making a copy.</div>
         <div style="border-top:1px solid var(--line-2);margin:11px 0 8px;padding-top:2px"></div>
-        <button class="btn primary" id="dlStl">⬇ Shell STL (hollow)</button>
-        <button class="btn" id="dlBottom" style="margin-top:6px">⬇ Bottom plate STL</button>
+        <button class="btn primary" id="dlStl">↓ Shell STL (hollow)</button>
+        <button class="btn" id="dlBottom" style="margin-top:6px">↓ Bottom plate STL</button>
         <div class="btn-row">
-          <button class="btn" id="dlJson">⬇ Profile JSON</button>
-          <button class="btn" id="upJson">⬆ Import JSON</button>
+          <button class="btn" id="dlJson">↓ Profile JSON</button>
+          <button class="btn" id="upJson">↑ Import JSON</button>
         </div>
         <input type="file" id="jsonFile" accept="application/json,.json" hidden>
         <div style="border-top:1px solid var(--line-2);margin:12px 0 4px;padding-top:12px"></div>
@@ -555,16 +558,16 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
           <label>Backend URL <span class="val mono" id="beState">offline</span></label>
           <input id="backendUrl" class="proj-name mono" style="width:100%" value="" placeholder="https://your-backend.onrender.com" spellcheck="false">
         </div>
-        <button class="btn" id="saveLib">⌬ Save profile to library</button>
+        <button class="btn" id="saveLib">Save profile to library</button>
         <div class="btn-row">
-          <button class="btn primary" id="buildServer">◈ Build exact (STEP)</button>
+          <button class="btn primary" id="buildServer">Build exact (STEP)</button>
         </div>
         <div class="hint">Everything on this page works without a backend, <b>including real cut-through openings</b> (use <b>Follow my drawing</b>). <b>Build exact</b> is an optional extra: it rebuilds the same outlines with a CAD kernel (OpenCascade) with no grid at all — corners exact at any zoom — and hands back a <b>STEP</b> file you can keep editing in any CAD package.</div>
       </div>
     </details>
 
     <details class="sec">
-      <summary><span class="idx">☁</span><span class="ttl">Cloud saves</span><span class="chev">▶</span></summary>
+      <summary><span class="idx">◇</span><span class="ttl">Cloud saves</span><span class="chev">▶</span></summary>
       <div class="sec-body">
         <div class="hint" id="wireState" style="margin-bottom:6px"></div>
         <div class="hint">Saves the full model — trace, drawings and all — so it follows you across devices. It should be wired in at deploy so nobody ever types a key; see <code>SETUP.md</code>. <a href="#" id="sbHelp" style="color:var(--accent);text-decoration:none">▸ show setup SQL</a></div>
@@ -576,31 +579,31 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
         </div>
         <pre id="sbSql" style="display:none;white-space:pre-wrap;font-size:10px;line-height:1.5;background:#0c1119;border:1px solid var(--line-2);border-radius:6px;padding:8px;margin:8px 0 0;color:var(--ink-dim);overflow:auto"></pre>
         <div style="border-top:1px solid var(--line-2);margin:10px 0 8px;padding-top:8px"></div>
-        <button class="btn primary" id="sbSave" style="width:100%">☁ Save project to cloud</button>
+        <button class="btn primary" id="sbSave" style="width:100%">Save project to cloud</button>
         <button class="btn" id="sbRefresh" style="width:100%;margin-top:5px">⟳ Browse cloud projects</button>
         <div id="sbList" class="ws-list" style="margin-top:6px"></div>
       </div>
     </details>
 
     <details class="sec">
-      <summary><span class="idx">📚</span><span class="ttl">Shared library</span><span class="chev">▶</span></summary>
+      <summary><span class="idx">◇</span><span class="ttl">Shared library</span><span class="chev">▶</span></summary>
       <div class="sec-body">
         <div class="hint">Models shared by everyone on the project. They also show up as pictures in the <b>Workshop</b> tab — click one to use it. <b>Publish</b> adds yours to the shared set (it goes through the backend, so there is nothing to set up).</div>
         <div class="btn-row" style="margin-top:6px">
           <button class="btn" id="ghRefresh">⟳ Refresh</button>
           <span class="hint" id="ghState" style="margin:0 0 0 2px">—</span>
         </div>
-        <button class="btn" id="ghPublish" style="width:100%;margin-top:6px">⬆ Publish this model to the shared library</button>
+        <button class="btn" id="ghPublish" style="width:100%;margin-top:6px">Publish to shared library</button>
         <div id="ghList" class="ws-list" style="margin-top:6px"></div>
         <details id="ghWrite" style="margin-top:10px;border-top:1px solid var(--line-2);padding-top:8px">
-          <summary style="cursor:pointer;font-size:11px;color:var(--ink-dim);list-style:none">⚙ Publishing tools <span style="opacity:.6">· for the repo owner</span></summary>
+          <summary style="cursor:pointer;font-size:11px;color:var(--ink-dim);list-style:none">Publishing tools <span style="opacity:.6">· for the repo owner</span></summary>
           <div style="margin-top:7px">
             <label id="ghRepoLbl" style="font-size:11px;color:var(--ink-dim)">Repo (owner/name)</label>
             <input id="ghRepo" class="proj-name mono" value="BEARME-A/LEE3D-Lib" spellcheck="false" style="width:100%;font-size:11px" title="owner/repo (public)">
             <input id="ghToken" type="password" class="proj-name mono" placeholder="GitHub token (Contents: write)" autocomplete="off" spellcheck="false" style="width:100%;font-size:11px;margin-top:5px">
             <label style="display:flex;gap:6px;align-items:center;font-size:11px;margin:5px 0;cursor:pointer"><input type="checkbox" id="ghRemember"> Remember token in this browser</label>
-            <button class="btn primary" id="ghCommit" style="width:100%">⬆ Publish current model to the repo</button>
-            <div class="hint" style="margin-top:6px">⚠ A write token is a real secret (unlike the Supabase key), so it is never baked into the site — it lives only in this browser. Use a <b>fine-grained token limited to LEE3D-Lib</b> with <b>Contents: Read and write</b>. Everyone else should just use <b>Save</b>, which goes to the cloud.</div>
+            <button class="btn primary" id="ghCommit" style="width:100%">Publish current model to the repo</button>
+            <div class="hint" style="margin-top:6px">A write token is a real secret (unlike the Supabase key), so it is never baked into the site — it lives only in this browser. Use a <b>fine-grained token limited to LEE3D-Lib</b> with <b>Contents: Read and write</b>. Everyone else should just use <b>Save</b>, which goes to the cloud.</div>
           </div>
         </details>
       </div>
@@ -633,7 +636,7 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
             <button data-u="px">px</button>
           </div>
           <button class="btn" id="iScale">⊹ Set scale</button>
-          <button class="btn" id="iDetect">▣ Auto-detect views</button>
+          <button class="btn" id="iDetect">Auto-detect views</button>
           <button class="btn" id="iAdd">＋ Add box</button>
           <button class="btn primary" id="iBuild" style="width:auto">▶ Send views to Reference &amp; Trace</button>
           <span class="hint" id="iStatus" style="margin:0 0 0 4px"></span>
@@ -698,7 +701,7 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
             <input id="vSizeH" class="proj-name mono" style="width:56px;font-size:11px;padding:4px 5px" placeholder="mm" title="How tall this view really is, in mm">
           </span>
           <button class="btn" id="bCal">⊹ Set scale</button>
-          <button class="btn primary" id="bAuto">✨ Auto-trace</button>
+          <button class="btn primary" id="bAuto">Auto-trace</button>
           <span style="width:1px;height:18px;background:var(--line-2);margin:0 2px"></span>
           <div class="seg" id="featTool">
             <button data-t="poly" class="on">Shape</button>
@@ -716,19 +719,19 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
           </div>
           <button class="btn primary" id="featNew">+ Feature</button>
           <button class="btn ghost" id="featDone" style="display:none">✓ Finish</button>
-          <button class="btn ghost" id="featCancel" style="display:none">✕ Cancel</button>
+          <button class="btn ghost" id="featCancel" style="display:none">Cancel</button>
           <input id="featText" class="proj-name mono" style="width:110px;font-size:11px;display:none" placeholder="wording…" value="LEE3D">
-          <button class="btn ghost" id="featSvgAll" style="display:none">⚡ take all</button>
+          <button class="btn ghost" id="featSvgAll" style="display:none">Take all</button>
           <button class="btn ghost" id="bRot" title="Rotate this view 90° — use it if the object is drawn sideways">⟳ 90°</button>
-          <button class="btn ghost" id="pickImg">🖼 drawing</button>
+          <button class="btn ghost" id="pickImg">Drawing</button>
           <input type="file" id="imgFile" accept="image/*,.svg" hidden>
           <span id="imgOpField" style="display:none;align-items:center;gap:6px;font-size:11px;color:var(--ink-dim)">
             <span>fade</span><input type="range" id="sOp" min="10" max="100" value="55" style="width:70px"><span id="vOp" class="mono">55</span>
             <button class="btn ghost" id="refInv" title="Flip the drawing's light/dark if the auto-contrast guessed wrong" style="padding:3px 7px">◐</button>
           </span>
-          <button class="btn ghost" id="bUndo">↶ undo</button>
+          <button class="btn ghost" id="bUndo">Undo</button>
           <button class="btn ghost" id="bClear">⌫ clear view</button>
-          <button class="btn" id="bSave">💾 Save</button>
+          <button class="btn" id="bSave">Save</button>
           <button class="btn primary" id="b3D" style="width:auto">→ 3D Preview</button>
           <span class="hint" id="traceStatus" style="margin:0 0 0 4px"></span>
         </div>
@@ -755,7 +758,7 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
           <div class="ws-lbl">Library</div>
           <div class="btn-row">
             <button class="btn" id="wsAddCur">＋ Add current model</button>
-            <button class="btn" id="wsImport">📂 Import</button>
+            <button class="btn" id="wsImport">Import</button>
           </div>
           <button class="btn" id="wsAddBox" style="margin-top:5px;width:100%">＋ Add a box (build &amp; colour by hand)</button>
           <button class="btn ghost" id="wsSaveCur" style="margin-top:5px;width:100%">⤓ Save current model to library</button>
@@ -797,7 +800,7 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
           <div class="ws-grid3" style="margin-top:5px">
             <label>scale<input type="number" id="wsSC" step="0.05" value="1"></label>
             <button class="btn" id="wsFloor" style="align-self:end">⤓ floor</button>
-            <button class="btn" id="wsDup" style="align-self:end">⎘ dup</button>
+            <button class="btn" id="wsDup" style="align-self:end">Duplicate</button>
           </div>
           <div class="ws-lbl2" style="margin-top:9px">colour</div>
           <div class="sw-row" id="wsSwatches"></div>
@@ -806,7 +809,7 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
             <input type="text" id="wsHex" spellcheck="false" maxlength="7" value="#9FB0C4" title="Type a hex colour, e.g. #C81E2A">
             <button class="btn ghost" id="wsColorReset" style="padding:5px 9px" title="Back to steel">↺</button>
           </div>
-          <button class="btn ghost" id="wsUndo" style="width:100%;margin-top:7px">↶ Undo change</button>
+          <button class="btn ghost" id="wsUndo" style="width:100%;margin-top:7px">Undo change</button>
           <button class="btn ghost" id="wsDel" style="width:100%;margin-top:6px">⌫ Delete part</button>
         </div>
 
@@ -823,8 +826,8 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
         <div class="ws-sec">
           <div class="ws-lbl">Save assembly as an object</div>
           <input id="wsName" class="proj-name mono" value="assembly-1" spellcheck="false" style="width:100%">
-          <button class="btn primary" id="wsSave" style="width:100%;margin-top:6px">💾 Save assembly to library</button>
-          <button class="btn" id="wsSTL" style="width:100%;margin-top:5px">⬇ Export combined STL</button>
+          <button class="btn primary" id="wsSave" style="width:100%;margin-top:6px">Save assembly to library</button>
+          <button class="btn" id="wsSTL" style="width:100%;margin-top:5px">↓ Export combined STL</button>
         </div>
       </div>
       <div class="vp-tools">
@@ -1317,8 +1320,22 @@ function makeVisualHull(p){
   // carving the field — that would need a grid fine enough to resolve a 1.8mm wall.
   const wall=Math.max(0.2,p.wallThickness??1.8);
   const hollow=p.hullHollow!==false;              // a toy frame is a shell, not a lump
+  // Edge crispness blends the SHAPE, not a smoothing pass. The only real difference between
+  // the smooth (loft) body and the exact hull is the cross-section: the loft sweeps an ELLIPSE
+  // through the side/top envelope, the hull intersects the traced FRONT outline. So at crisp 0
+  // the front term is that ellipse (identical cross-section to smooth mode); at crisp 1 it's the
+  // traced front, untouched; in between it morphs continuously from one to the other.
+  const cY=W/2; let loftBox=null;
   const F=(x,y,z)=>{
-    let d=Math.max(look(Tside,x,z), look(Ttop,x,y), look(Tfront,y,z));
+    let front=look(Tfront,y,z);
+    if(crisp<0.999 && loftBox){
+      const b=loftBox(x), zBot=b[0], span=Math.max(0.05,b[1]-b[0]), hw=b[2];
+      const ny=(y-cY)/hw, nz=(z-zBot)/span;
+      const el = nz<0 ? Math.max(zBot-z,(Math.abs(ny)-1)*Math.min(hw,span))    // below the flat floor
+                      : (Math.hypot(ny,nz)-1)*(hw+span)*0.5;                    // elliptical arch wall
+      front = (1-crisp)*el + crisp*front;
+    }
+    let d=Math.max(look(Tside,x,z), look(Ttop,x,y), front);
     for(let q=0;q<feats.length;q++){
       const f=feats[q], s=sdFeat(f,x,y,z);
       if(f.through){ d=Math.max(d,-s); continue; }              // a real opening, straight through
@@ -1342,6 +1359,16 @@ function makeVisualHull(p){
         : f.kind==="xy" ? mkTable(f.pts,L,W,nx*TB,ny*TB)
         :                 mkTable(f.pts,W,H,ny*TB,nz*TB);
   });
+  // per-length floor/roof/half-width, so the crisp<1 ellipse blend costs a lookup, not a solve
+  if(crisp<0.999){
+    const lz0=new Float32Array(nx+1), lz1=new Float32Array(nx+1), lhw=new Float32Array(nx+1);
+    for(let i=0;i<=nx;i++){const xf=i/nx;
+      lz0[i]=p.bottomProfile?sampleProfile(p.bottomProfile,xf):0;
+      lz1[i]=sampleProfile(p.topProfile,xf);
+      lhw[i]=Math.max(0.05,sampleProfile(p.widthProfile,xf));}
+    loftBox=(x)=>{ let fi=x/L*nx; fi=fi<0?0:(fi>nx?nx:fi); const i=fi|0,t=fi-i,i2=i<nx?i+1:nx;
+      return [lz0[i]+(lz0[i2]-lz0[i])*t, lz1[i]+(lz1[i2]-lz1[i])*t, lhw[i]+(lhw[i2]-lhw[i])*t]; };
+  }
   const px=i=>i*hx, py=j=>j*hy-W/2+W/2, pz=k=>k*hz;   // grid -> mm (y centred later)
   const field=new Float32Array(NX*NY*NZ);
   const BIG=Math.max(L,W,H);
@@ -2076,8 +2103,8 @@ traceCanvas.addEventListener("pointerdown",e=>{
     featSelect(features.length-1); requestRebuild(); drawTrace();
     const w=connWarn(kind,nominal,depth,CONN.nozzle);
     toast(kind==="peg"
-      ? `Peg Ø${nominal}mm placed — a socket at the same size will fit it.${w?" ⚠ "+w:""}`
-      : `Socket for a Ø${nominal}mm peg — cut Ø${dia.toFixed(1)} so it actually goes in.${w?" ⚠ "+w:""}`);
+      ? `Peg Ø${nominal}mm placed — a socket at the same size will fit it.${w?" — "+w:""}`
+      : `Socket for a Ø${nominal}mm peg — cut Ø${dia.toFixed(1)} so it actually goes in.${w?" — "+w:""}`);
     return;
   }
   if(featTool==="svg" && V[activeView] && V[activeView].img){
@@ -2910,7 +2937,7 @@ function setTraceStatus(){
   const la={side:"top",top:"left",front:"outline",rear:"outline"}[activeView], lb={side:"lower",top:"right",front:"base",rear:"base"}[activeView];
   if(v.A.length)parts.push(`${la}: ${v.A.length}`);
   if(v.B.length&&activeView!=="front"&&activeView!=="rear")parts.push(`${lb}: ${v.B.length}`);
-  if(featDraft&&featDraft.view===activeView)parts.push(`<b style="color:#E8C547">● drawing a feature — ${featDraft.pts.length} point(s), then Finish</b>`);
+  if(featDraft&&featDraft.view===activeView)parts.push(`<b style="color:var(--warn)">● drawing a feature — ${featDraft.pts.length} point(s), then Finish</b>`);
   else if(traceMode)parts.push(`<b style="color:var(--accent)">● ${traceMode==="cal"?"click 2 points to set scale":"click around the outline"}</b>`);
   s.innerHTML=parts.join(" &nbsp; ");
 }
@@ -3056,7 +3083,7 @@ function loadImageFile(file){
 }
 document.getElementById("bAuto").onclick=()=>{
   const v=cv();
-  if(!v.img){toast("Load a drawing into this view first (🖼 drawing), then Auto-trace.");return;}
+  if(!v.img){toast("Load a drawing into this view first (Drawing), then Auto-trace.");return;}
   // An SVG already contains the real lines. Reading its pixels back would be throwing away
   // exact geometry to guess at it, so re-use the paths and just step to the next shape if
   // the first pick wasn't the one you wanted.
@@ -3076,7 +3103,7 @@ document.getElementById("bAuto").onclick=()=>{
     const c=document.createElement("canvas"); c.width=w; c.height=h;
     c.getContext("2d",{willReadFrequently:true}).drawImage(im,0,0,w,h);
     const pts=autoOutline(c.getContext("2d").getImageData(0,0,w,h));
-    if(!pts){toast("Couldn't find a clear shape. Try the ◐ contrast flip, or trace it by hand.");return;}
+    if(!pts){toast("Couldn't find a clear shape. Try the contrast flip, or trace it by hand.");return;}
     v.A=pts; v.B=[];
     const turned=autoOrientView(activeView);       // blueprint drew it sideways? straighten it
     fitTrace(); drawTrace(); commitTrace(); updateViewDots();
@@ -3096,7 +3123,7 @@ document.querySelectorAll("#featTool button").forEach(b=>b.onclick=()=>{
     const have=(typeof svgDetails==="function")?svgDetails(activeView).length:0;
     const kind=(V[activeView]&&V[activeView].svgPolys&&V[activeView].svgPolys.length)?"vector line":"shape";
     const all=document.getElementById("featSvgAll");
-    if(all)all.textContent=have?`⚡ take all ${have}`:"⚡ take all";
+    if(all)all.textContent=have?`Take all ${have}`:"Take all";
     toast(have?`${have} ${kind}(s) found in this drawing — click one to take it.`
               :"No shapes found in this view's drawing. Load a drawing, or use Shape/Box/Text.");
   }
@@ -3216,7 +3243,7 @@ document.getElementById("bSaveAll").onclick=async ()=>{
     try{await CLOUD.upsert(name,"object",p,cat);cloud=true;}catch(e){cloud=false;}
   }
   if(typeof wsRenderLib==="function")wsRenderLib();
-  const where = cloud===true ? "this device + the cloud ☁"
+  const where = cloud===true ? "this device + the cloud"
               : cloud===false ? "this device (the cloud didn't answer — it's still saved here)"
               : "this device";
   toast(`Saved “${name}” to <b>${where}</b> · <span class="mono">${cat}</span>`);
@@ -3259,7 +3286,7 @@ mInput.addEventListener("keydown",e=>{if(e.key==="Enter")document.getElementById
    ========================================================================= */
 const projName=document.getElementById("projName");
 const projCat=document.getElementById("projCat");
-const DEFAULT_CATS=["Bodies","Wheels","Axles","Arms & legs","Accessories","Toys","Misc"];
+const DEFAULT_CATS=["Bodies","Wheels","Axles","Panels","Accessories","Misc"];
 function knownCategories(){
   const set=new Set(DEFAULT_CATS);
   try{(LIB.items||[]).forEach(it=>{const c=(it.category||(it.data&&it.data.category)||"").trim();if(c)set.add(c);});}catch(_){}
@@ -3632,7 +3659,7 @@ function impRenderPages(){
   IMP.pages.forEach((p,i)=>{
     const roles=[...new Set(p.boxes.filter(b=>b.role&&b.role!=="ignore").map(b=>b.role))];
     const el=document.createElement("div"); el.className="pg"+(i===IMP.page?" on":"");
-    el.innerHTML=`<img src="${p.url}" alt=""><span class="nm"></span><span class="rl">${roles.length?roles.join("+"):"—"}</span><button title="remove">✕</button>`;
+    el.innerHTML=`<img src="${p.url}" alt=""><span class="nm"></span><span class="rl">${roles.length?roles.join("+"):"—"}</span><button title="remove">×</button>`;
     el.querySelector(".nm").textContent=p.name;
     el.onclick=e=>{if(e.target.tagName!=="BUTTON")impShowPage(i);};
     el.querySelector("button").onclick=e=>{e.stopPropagation();impRemovePage(i);};
@@ -4377,7 +4404,7 @@ async function wsRenderLib(){
       const card=document.createElement("div");card.className="lib-card";card.title=`${it.name} · ${SRC_LABEL[it.src]}`;
       card.innerHTML=`<div class="ph"><img alt=""><span class="wait">…</span></div>
         <span class="nm"></span><span class="src ${it.src}">${SRC_LABEL[it.src]}${it.kind==="assembly"?" · asm":it.kind==="stl"?" · stl":""}</span>
-        ${it.src==="local"?'<button class="del" title="remove from this device">✕</button>':""}`;
+        ${it.src==="local"?'<button class="del" title="remove from this device">×</button>':""}`;
       card.querySelector(".nm").textContent=it.name;
       const img=card.querySelector("img"), wait=card.querySelector(".wait");
       card.onclick=async ()=>{
@@ -4432,7 +4459,7 @@ function wsSaveAssembly(){if(!WS.inst.length){toast("Add parts first.");return;}
   })};
   download(new Blob([JSON.stringify(asm,null,2)],{type:"application/json"}),name+".assembly.json");
   LIB.add(name,"assembly",asm,asm.category);wsRenderLib();
-  if(typeof CLOUD!=="undefined"&&CLOUD.ok())CLOUD.upsert(name,"assembly",asm,asm.category).then(()=>toast(`“${name}” also saved to cloud ☁`)).catch(e=>toast("Cloud push failed: "+e.message));
+  if(typeof CLOUD!=="undefined"&&CLOUD.ok())CLOUD.upsert(name,"assembly",asm,asm.category).then(()=>toast(`“${name}” also saved to cloud`)).catch(e=>toast("Cloud push failed: "+e.message));
   toast(`Saved assembly “${name}” (${asm.parts.length} parts) to the library.`);}
 
 function wsNDC(e){const r=document.getElementById("wsgl").getBoundingClientRect();return{x:((e.clientX-r.left)/r.width)*2-1,y:-((e.clientY-r.top)/r.height)*2+1};}
@@ -4466,7 +4493,7 @@ function wsBindPointer(cnv){
 /* workshop UI wiring */
 document.getElementById("wsAddCur").onclick=()=>{const p=fullProfile();wsAdd(JSON.parse(JSON.stringify(p)),p.name||("part-"+WS.nextId));};
 document.getElementById("wsLibRefresh").onclick=()=>{uniLibItems._repo=null;THUMB.cache={};wsRenderLib();toast("Library refreshed.");};
-document.getElementById("wsSaveCur").onclick=()=>{const p=fullProfile();LIB.add(p.name||"object","object",JSON.parse(JSON.stringify(p)),p.category);wsRenderLib();if(typeof CLOUD!=="undefined"&&CLOUD.ok())CLOUD.upsert(p.name||"object","object",p,p.category).catch(()=>{});toast(`Saved “${p.name||"object"}” to the library${(typeof CLOUD!=="undefined"&&CLOUD.ok())?" + cloud ☁":""}.`);};
+document.getElementById("wsSaveCur").onclick=()=>{const p=fullProfile();LIB.add(p.name||"object","object",JSON.parse(JSON.stringify(p)),p.category);wsRenderLib();if(typeof CLOUD!=="undefined"&&CLOUD.ok())CLOUD.upsert(p.name||"object","object",p,p.category).catch(()=>{});toast(`Saved “${p.name||"object"}” to the library${(typeof CLOUD!=="undefined"&&CLOUD.ok())?"  + cloud":""}.`);};
 document.getElementById("wsImport").onclick=()=>document.getElementById("wsFile").click();
 document.getElementById("wsFile").onchange=e=>{[...e.target.files].forEach(file=>{const r=new FileReader();
   r.onload=()=>{try{const d=JSON.parse(r.result);
@@ -4572,7 +4599,7 @@ async function sbRefreshList(){const host=document.getElementById("sbList");if(!
     Object.keys(groups).sort((a,b)=>a.localeCompare(b)).forEach(cat=>{
       const h=document.createElement("div");h.className="ws-lbl";h.style.marginTop="8px";h.textContent=cat+" ("+groups[cat].length+")";host.appendChild(h);
       groups[cat].forEach(row=>{const el=document.createElement("div");el.className="ws-row";
-        el.innerHTML='<span class="nm"></span><span class="tg"></span><button title="delete">✕</button>';
+        el.innerHTML='<span class="nm"></span><span class="tg"></span><button title="delete">×</button>';
         el.querySelector(".nm").textContent=row.name;el.querySelector(".tg").textContent=row.kind==="assembly"?"asm":"obj";
         el.querySelector(".nm").title="load";
         el.querySelector(".nm").onclick=async ()=>{try{sbLoadRow(await CLOUD.get(row.id));}catch(e){toast("Load failed: "+e.message);}};
