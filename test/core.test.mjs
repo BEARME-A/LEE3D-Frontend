@@ -1239,7 +1239,7 @@ t("editing: taking the drawing's lines never asks a surprise question", () => {
   // it used to confirm only past 24 shapes, so one view prompted and the next didn't —
   // which reads as random. The count belongs on the button, not in a dialog.
   ok(!/confirm\([^)]*lines as features/.test(script), "the threshold confirm is back");
-  ok(script.includes("⚡ take all ${have}") || script.includes("take all ${have}"),
+  ok(script.includes("Take all ${have}") || script.includes("take all ${have}"),
      "the button should say how many it will take");
 });
 t("editing: a feature's own points can be moved, added and removed", () => {
