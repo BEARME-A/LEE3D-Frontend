@@ -378,6 +378,15 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
   .ws-row .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
   .ws-row .tg{font-size:9px;color:var(--ink-dim);border:1px solid var(--line-2);border-radius:4px;padding:0 4px}
   .ws-row button{background:none;border:none;color:var(--ink-dim);cursor:pointer;padding:2px 4px;border-radius:4px;font-size:12px}
+  /* colour controls (workshop) */
+  .sw-row{display:flex;flex-wrap:wrap;gap:5px;margin:4px 0 2px}
+  .sw{width:22px;height:22px;border-radius:5px;border:1px solid var(--line);cursor:pointer;padding:0;transition:transform .1s}
+  .sw:hover{transform:translateY(-1px)}
+  .sw.on{box-shadow:0 0 0 2px var(--accent);border-color:var(--accent)}
+  .color-in{display:flex;align-items:center;gap:6px;margin-top:4px}
+  .color-in input[type=color]{width:34px;height:28px;padding:0;border:1px solid var(--line);border-radius:5px;background:#0c121b;cursor:pointer}
+  .color-in input[type=text]{flex:1;min-width:0;background:#0c121b;border:1px solid var(--line);color:var(--ink);border-radius:5px;padding:6px 7px;font-family:"JetBrains Mono",monospace;font-size:11px;text-transform:uppercase}
+  .color-in input[type=text]:focus{outline:none;border-color:var(--accent)}
   .ws-row button:hover{color:var(--ink);background:rgba(255,255,255,.06)}
   .ws-grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px}
   .ws-grid3 label{display:flex;flex-direction:column;font-size:10px;color:var(--ink-dim);gap:2px}
@@ -403,6 +412,7 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
     <div class="stat"><b id="rLen" class="mono">—</b><span>Length</span></div>
     <div class="stat"><b id="rTris" class="mono">—</b><span>Triangles</span></div>
     <div class="stat"><b id="rVol" class="mono">—</b><span>Volume</span></div>
+    <div class="stat"><b id="rArea" class="mono">—</b><span>Surface</span></div>
     <div id="stamp" class="stamp"><span class="t">SOLID SHAPE</span><span class="d">sealed ✓ watertight ✓</span></div>
   </div>
 </header>
@@ -747,6 +757,7 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
             <button class="btn" id="wsAddCur">＋ Add current model</button>
             <button class="btn" id="wsImport">📂 Import</button>
           </div>
+          <button class="btn" id="wsAddBox" style="margin-top:5px;width:100%">＋ Add a box (build &amp; colour by hand)</button>
           <button class="btn ghost" id="wsSaveCur" style="margin-top:5px;width:100%">⤓ Save current model to library</button>
           <input type="file" id="wsFile" accept="application/json,.json" hidden multiple>
           <div style="display:flex;align-items:center;justify-content:space-between;margin-top:9px">
@@ -763,6 +774,14 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
 
         <div class="ws-sec" id="wsXform" style="display:none">
           <div class="ws-lbl">Selected · <span id="wsSelName" class="mono"></span></div>
+          <div id="wsBoxSize" style="display:none">
+            <div class="ws-lbl2">box size (mm)</div>
+            <div class="ws-grid3">
+              <label>L<input type="number" id="wsBoxL" step="1" min="1"></label>
+              <label>W<input type="number" id="wsBoxW" step="1" min="1"></label>
+              <label>H<input type="number" id="wsBoxH" step="1" min="1"></label>
+            </div>
+          </div>
           <div class="ws-lbl2">position (mm)</div>
           <div class="ws-grid3">
             <label>X<input type="number" id="wsPX" step="1"></label>
@@ -780,6 +799,14 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
             <button class="btn" id="wsFloor" style="align-self:end">⤓ floor</button>
             <button class="btn" id="wsDup" style="align-self:end">⎘ dup</button>
           </div>
+          <div class="ws-lbl2" style="margin-top:9px">colour</div>
+          <div class="sw-row" id="wsSwatches"></div>
+          <div class="color-in">
+            <input type="color" id="wsColor" value="#9fb0c4" title="Pick any custom colour">
+            <input type="text" id="wsHex" spellcheck="false" maxlength="7" value="#9FB0C4" title="Type a hex colour, e.g. #C81E2A">
+            <button class="btn ghost" id="wsColorReset" style="padding:5px 9px" title="Back to steel">↺</button>
+          </div>
+          <button class="btn ghost" id="wsUndo" style="width:100%;margin-top:7px">↶ Undo change</button>
           <button class="btn ghost" id="wsDel" style="width:100%;margin-top:6px">⌫ Delete part</button>
         </div>
 
@@ -1326,6 +1353,84 @@ function makeVisualHull(p){
     if(j<ny && i>0&&i<nx&&k>0&&k<nz){const p1=inside(i,j+1,k)?1:0; if(p0!==p1)quad(cellV[cIdx(i-1,j,k-1)],cellV[cIdx(i,j,k-1)],cellV[cIdx(i,j,k)],cellV[cIdx(i-1,j,k)],p1<p0);}
     if(k<nz && i>0&&i<nx&&j>0&&j<ny){const p1=inside(i,j,k+1)?1:0; if(p0!==p1)quad(cellV[cIdx(i-1,j-1,k)],cellV[cIdx(i,j-1,k)],cellV[cIdx(i,j,k)],cellV[cIdx(i-1,j,k)],p1>p0);}
   }
+  /* WATERTIGHT REPAIR.
+     The one-vertex-per-cell solve is exact on the corners, but at a "saddle" cell — where
+     the surface threads through as two separate sheets — that single vertex can't seal both.
+     It leaves either an edge used once (a hole) or an edge shared by >2 faces (a pinch).
+     Neither is acceptable for a printable part or an honest volume, so the mesh is repaired
+     toward a closed 2-manifold: drop degenerate/duplicate faces, prune any over-shared edge
+     back to two, then cap every hole that closes into a loop with a centroid fan wound to
+     match. A clean mesh (spheres, boxes, most traces) has no defects and returns instantly.
+     Hard guarantee: the result is measured against the raw mesh and the raw mesh is returned
+     unchanged unless the repair STRICTLY reduced the defect count — repair can never regress. */
+  function sealMesh(V, tris){
+    const und=(a,b)=>a<b?a+"_"+b:b+"_"+a, dk=(a,b)=>a+"_"+b;
+    const area=(a,b,c)=>{const A=V[a],B=V[b],C=V[c],
+      ux=B[0]-A[0],uy=B[1]-A[1],uz=B[2]-A[2],vx=C[0]-A[0],vy=C[1]-A[1],vz=C[2]-A[2],
+      cx=uy*vz-uz*vy,cy=uz*vx-ux*vz,cz=ux*vy-uy*vx; return Math.hypot(cx,cy,cz);};
+    const defects=list=>{const m=new Map();
+      for(const t of list)for(const[u,v]of[[t[0],t[1]],[t[1],t[2]],[t[2],t[0]]]){const k=und(u,v);m.set(k,(m.get(k)||0)+1);}
+      let d=0; for(const c of m.values())if(c===1||c>2)d++; return d;};
+    // parse; on an already-sealed mesh (the common case) do nothing at all
+    let T=[]; for(let q=0;q<tris.length;q+=3)T.push([tris[q],tris[q+1],tris[q+2]]);
+    const rawDefects=defects(T);
+    if(rawDefects===0)return tris;
+    const V0=V.length;                                       // to roll back centroids if we bail
+    // 1) drop degenerate + duplicate faces
+    const seen=new Set(), T2=[];
+    for(const t of T){const a=t[0],b=t[1],c=t[2];
+      if(a===b||b===c||a===c)continue; if(area(a,b,c)<1e-9)continue;
+      const s=Math.min(a,b,c)+"_"+(a+b+c)+"_"+Math.max(a,b,c);   // min_sum_max -> the set, any winding
+      if(seen.has(s))continue; seen.add(s); T2.push([a,b,c]);}
+    T=T2;
+    for(let pass=0; pass<3 && defects(T)>0; pass++){
+      // 2) prune over-shared edges (>2 faces): drop the smallest offender until none remain
+      const em=new Map(), alive=new Uint8Array(T.length).fill(1);
+      const eAdd=ti=>{const t=T[ti];for(const[u,v]of[[t[0],t[1]],[t[1],t[2]],[t[2],t[0]]]){const k=und(u,v);let s=em.get(k);if(!s){s=new Set();em.set(k,s);}s.add(ti);}};
+      const eDel=ti=>{const t=T[ti];for(const[u,v]of[[t[0],t[1]],[t[1],t[2]],[t[2],t[0]]]){const k=und(u,v);const s=em.get(k);if(s){s.delete(ti);if(!s.size)em.delete(k);}}};
+      for(let ti=0;ti<T.length;ti++)eAdd(ti);
+      for(let g=0;;g++){ let over=null; for(const s of em.values())if(s.size>2){over=s;break;}
+        if(!over||g>T.length)break;
+        let victim=-1,vA=Infinity; for(const ti of over){const ar=area(T[ti][0],T[ti][1],T[ti][2]);if(ar<vA){vA=ar;victim=ti;}}
+        if(victim<0)break; eDel(victim); alive[victim]=0; }
+      const live=[]; for(let ti=0;ti<T.length;ti++)if(alive[ti])live.push(T[ti]);
+      // 3) cap holes. A boundary edge sits in exactly one triangle; it is sealed the moment a
+      //    cap gives it a second face — whichever way that cap winds. So the boundary is walked
+      //    UNDIRECTED (every vertex has even degree there, so an Eulerian walk covers every
+      //    edge), the walk is split into SIMPLE cycles — no vertex repeats inside one cap — and
+      //    each cycle is capped with a centroid fan. Fan edges within a cap pair up with each
+      //    other, so capping cannot mint a new defect, and no boundary edge is ever left out.
+      const uCnt=new Map(), dHas=new Set();
+      for(const t of live)for(const[u,v]of[[t[0],t[1]],[t[1],t[2]],[t[2],t[0]]]){uCnt.set(und(u,v),(uCnt.get(und(u,v))||0)+1);dHas.add(dk(u,v));}
+      const adj=new Map(); const addA=(a,b)=>{let o=adj.get(a);if(!o){o=[];adj.set(a,o);}o.push(b);};
+      for(const[k,c]of uCnt){ if(c!==1)continue; const q=k.indexOf("_"),a=+k.slice(0,q),b=+k.slice(q+1); addA(a,b); addA(b,a); }
+      const takeEdge=(a,b)=>{const o=adj.get(a),i=o.indexOf(b); o.splice(i,1); const o2=adj.get(b); o2.splice(o2.indexOf(a),1);};
+      const capLoop=cyc=>{ const n=cyc.length; if(n<3)return; let cx=0,cy=0,cz=0;
+        for(const a of cyc){cx+=V[a][0];cy+=V[a][1];cz+=V[a][2];} cx/=n;cy/=n;cz/=n;
+        const C=V.length; V.push([cx,cy,cz]);
+        for(let q=0;q<n;q++){const a=cyc[q],b=cyc[(q+1)%n];
+          if(dHas.has(dk(a,b)))live.push([b,a,C]); else live.push([a,b,C]);} };  // wind against the lone face
+      const hasEdge=()=>{for(const o of adj.values())if(o.length)return true;return false;};
+      for(let comp=0; hasEdge() && comp<=uCnt.size; comp++){
+        let s0=null; for(const[v,o]of adj)if(o.length){s0=v;break;} if(s0==null)break;
+        const st=[s0], circ=[];                        // Hierholzer over the undirected edges
+        while(st.length){ const v=st[st.length-1], o=adj.get(v);
+          if(o&&o.length){const w=o[o.length-1]; takeEdge(v,w); st.push(w);} else circ.push(st.pop()); }
+        circ.reverse();
+        const stk=[], at=new Map();                    // split circuit into simple cycles
+        for(let q=0;q<circ.length;q++){ const v=circ[q];
+          if(at.has(v)){ const start=at.get(v); const cyc=stk.slice(start);
+            for(let j=start;j<stk.length;j++)at.delete(stk[j]); stk.length=start;
+            capLoop(cyc); stk.push(v); at.set(v,stk.length-1); }
+          else { stk.push(v); at.set(v,stk.length-1); } }
+      }
+      T=live;
+    }
+    // never-worse: keep the repair only if it strictly beat the raw mesh, else hand back raw
+    if(defects(T)>=rawDefects && defects(T)>0){ V.length=V0; return tris; }
+    const res=[]; for(const t of T)res.push(t[0],t[1],t[2]); return res;
+  }
+  indices = sealMesh(V, indices);
   let positions=new Float32Array(V.length*3); V.forEach((v,q)=>{positions[q*3]=v[0];positions[q*3+1]=v[1];positions[q*3+2]=v[2];});
   const facing=idx=>{let s2=0; for(let q=0;q<idx.length;q+=3){const A=idx[q]*3,B=idx[q+1]*3,C=idx[q+2]*3;
     s2+=(positions[A]*(positions[B+1]*positions[C+2]-positions[B+2]*positions[C+1])-positions[A+1]*(positions[B]*positions[C+2]-positions[B+2]*positions[C])+positions[A+2]*(positions[B]*positions[C+1]-positions[B+1]*positions[C]))/6;}
@@ -1605,7 +1710,19 @@ function rebuild(){
   const dx=(bb.max.x-bb.min.x), dy=(bb.max.y-bb.min.y), dz=(bb.max.z-bb.min.z);
   rLen.textContent=fmtLen(S.len);
   rTris.textContent=tri.toLocaleString();
-  rVol.textContent=(volume/1000).toFixed(1)+" cm³";
+  // A signed volume is only EXACT over a closed surface — flag it, don't fake it.
+  rVol.textContent=(man.watertight?"":"≈")+(volume/1000).toFixed(1)+" cm³";
+  rVol.title=man.watertight?"Exact — the surface is fully closed.":"Approximate — the surface has defects, so the enclosed volume can't be measured exactly.";
+  { let sa=0;                                             // total surface area, for material estimates
+    for(let q=0;q<indices.length;q+=3){
+      const A=indices[q]*3,B=indices[q+1]*3,C=indices[q+2]*3;
+      const ux=positions[B]-positions[A],uy=positions[B+1]-positions[A+1],uz=positions[B+2]-positions[A+2];
+      const vx2=positions[C]-positions[A],vy2=positions[C+1]-positions[A+1],vz2=positions[C+2]-positions[A+2];
+      sa+=Math.hypot(uy*vz2-uz*vy2, uz*vx2-ux*vz2, ux*vy2-uy*vx2)*0.5;
+    }
+    const el=document.getElementById("rArea");
+    if(el){el.textContent=(sa/100).toFixed(1)+" cm²";el.title="Total surface area — paint, plating, or wrap estimates.";}
+  }
   const uf=UNIT_MM[displayUnit], ud=(displayUnit==="mm"||displayUnit==="px")?0:1;
   const buildMs=performance.now()-t0; hullTune(buildMs);
   dims.textContent=`bbox  L ${(dx/uf).toFixed(ud)} × W ${(dy/uf).toFixed(ud)} × H ${(dz/uf).toFixed(ud)} ${displayUnit}  ·  ${buildMs.toFixed(0)} ms`;
@@ -1614,8 +1731,11 @@ function rebuild(){
     stamp.querySelector(".t").textContent="SOLID SHAPE";
     stamp.querySelector(".d").textContent="sealed ✓ watertight ✓";}
   else{stamp.classList.add("warn");
-    stamp.querySelector(".t").textContent="HAS GAPS";stamp.title=`${man.boundary} open edges. Usually a feature finer than the mesh can resolve — raise Detail in Advanced, or make the feature bigger.`;
-    stamp.querySelector(".d").textContent=man.boundary+" open edges — the shape is not sealed";}
+    stamp.querySelector(".t").textContent="HAS GAPS";
+    const parts=[]; if(man.boundary)parts.push(man.boundary+" open");
+    if(man.nonman)parts.push(man.nonman+" pinched");
+    stamp.title=`${parts.join(" and ")} edge${(man.boundary+man.nonman)>1?"s":""}. Usually a feature finer than the mesh can resolve — raise Detail in Advanced, or make the feature bigger.`;
+    stamp.querySelector(".d").textContent=parts.join(" · ")+" edges — the shape is not sealed";}
   updateViewDots();
 }
 
@@ -3775,7 +3895,10 @@ const LIB={
   removeAt(i){this.items.splice(i,1);this.persist();}
 };
 const WS={on:false,ready:false,renderer:null,scene:null,cameraObj:null,cam:{az:-0.9,pol:1.05,rad:600},target:null,
-  inst:[],sel:null,nextId:1,ext:400,gridOn:true,gridStep:10,gridGroup:null,ray:null,mode:0,last:null,moveOff:null,first:true};
+  inst:[],sel:null,nextId:1,ext:400,gridOn:true,gridStep:10,gridGroup:null,ray:null,mode:0,last:null,moveOff:null,first:true,
+  session:[]};                     // reversible edits on the current part; cleared (committed) when you click off
+const WS_STEEL=0x9fb0c4;           // default body colour
+const WS_SWATCHES=[0x9fb0c4,0xd9dee6,0x2b3440,0xc81e2a,0xe07a1f,0xe6c452,0x4fae54,0x2f9e8f,0x2f6fd0,0x7a4fd0,0xd05b9e,0x9c6b43];
 
 function wsInit(){
   if(WS.ready)return;
@@ -3789,7 +3912,7 @@ function wsInit(){
   const d1=new THREE.DirectionalLight(0xffffff,0.8);d1.position.set(1,2,1.2);WS.scene.add(d1);
   const d2=new THREE.DirectionalLight(0x6fa8d8,0.35);d2.position.set(-1.4,0.6,-1);WS.scene.add(d2);
   WS.ray=new THREE.Raycaster();
-  wsBuildGrid(); wsBindPointer(cnv); wsRecenter();
+  wsBuildGrid(); wsBindPointer(cnv); wsRecenter(); wsBuildSwatches();
   LIB.load(); wsRenderLib(); wsRenderParts();
   WS.ready=true;
   wsRequestRender();
@@ -3838,10 +3961,84 @@ function wsMeshFor(profile){
     oriented.add(bmesh);meshes.push(bmesh);}
   return {pivot,shell,meshes};
 }
-function wsAdd(profile,name,xform){wsRequestRender();
+/* ---- colour, boxes, and per-part undo -----------------------------------
+   Colour lives on the instance (it.color), so it survives deselection and is
+   written into the saved assembly — permanent until you set a different colour.
+   Undo is a small stack of reversible edits scoped to the part you're editing;
+   clicking off (selecting another part or empty space) commits them for good. */
+function wsSelItem(){return WS.inst.find(x=>x.id===WS.sel);}
+function wsPushUndo(fn){WS.session.push(fn);}
+function wsCommitSession(){WS.session.length=0;}   // lock in every edit on the part we're leaving
+function wsUndo(){const fn=WS.session.pop(); if(!fn){toast("Nothing to undo on this part — earlier changes are locked in.");return;} fn(); wsRequestRender();}
+function wsHex(n){return "#"+(n>>>0&0xffffff).toString(16).padStart(6,"0");}
+function wsBuildSwatches(){const host=document.getElementById("wsSwatches"); if(!host)return; host.innerHTML="";
+  WS_SWATCHES.forEach(h=>{const b=document.createElement("button"); b.className="sw"; b.dataset.hex=h;
+    b.style.background=wsHex(h); b.title=wsHex(h).toUpperCase();
+    b.onclick=()=>{const it=wsSelItem(); if(it)wsApplyColor(it,h,true);}; host.appendChild(b);});}
+function wsColorSyncUI(it){ if(!it)return; const hx=wsHex(it.color).toUpperCase();
+  const ci=document.getElementById("wsColor"); if(ci)ci.value=wsHex(it.color);
+  const hi=document.getElementById("wsHex"); if(hi)hi.value=hx;
+  document.querySelectorAll("#wsSwatches .sw").forEach(s=>s.classList.toggle("on",(+s.dataset.hex)===it.color));}
+function wsApplyColor(it,hex,record){ if(!it)return; hex=hex>>>0&0xffffff;
+  if(record && it.color!==hex){const prev=it.color; wsPushUndo(()=>wsApplyColor(it,prev,false));}
+  it.color=hex; it.meshes.forEach(m=>m.material.color.setHex(hex));
+  if(WS.sel===it.id)wsColorSyncUI(it); wsRequestRender();}
+function wsBoxMesh(l,w,h,color){const pivot=new THREE.Group();
+  const g=new THREE.BoxGeometry(l,h,w);   // model axes: L→x, H→y(up), W→z(depth)
+  const mesh=new THREE.Mesh(g,new THREE.MeshStandardMaterial({color:color??WS_STEEL,metalness:.1,roughness:.62,side:THREE.DoubleSide}));
+  pivot.add(mesh); return {pivot,shell:mesh,meshes:[mesh]};}
+function wsBoxSyncUI(it){ if(!it||!it.box)return;
+  document.getElementById("wsBoxL").value=Math.round(it.box.l);
+  document.getElementById("wsBoxW").value=Math.round(it.box.w);
+  document.getElementById("wsBoxH").value=Math.round(it.box.h);}
+function wsRebuildBox(it,dims,record){ if(!it||!it.box)return;
+  if(record){const prev={...it.box}; wsPushUndo(()=>{wsRebuildBox(it,prev,false); if(WS.sel===it.id)wsBoxSyncUI(it);});}
+  it.box={l:Math.max(1,dims.l),w:Math.max(1,dims.w),h:Math.max(1,dims.h)};
+  const old=it.shell.geometry; it.shell.geometry=new THREE.BoxGeometry(it.box.l,it.box.h,it.box.w); old.dispose();
+  wsFloor(it,true); wsRecomputeExtent(); if(WS.sel===it.id)wsBoxSyncUI(it); wsRequestRender();}
+function wsAddBox(dims,name,xform,color){wsCommitSession();wsRequestRender();
+  const l=(dims&&dims.l)||WS.gridStep*4, w=(dims&&dims.w)||WS.gridStep*4, h=(dims&&dims.h)||WS.gridStep*4;
+  const {pivot,shell,meshes}=wsBoxMesh(l,w,h,color);
+  const it={id:WS.nextId++,name:name||("box-"+WS.nextId),box:{l,w,h},profile:null,shell,meshes,pivot,
+    pos:xform?{...xform.pos}:{x:0,y:0,z:0},rot:xform?{...xform.rot}:{x:0,y:0,z:0},scale:xform&&xform.scale?xform.scale:1,
+    color:(color??WS_STEEL)>>>0&0xffffff};
+  meshes.forEach(me=>me.userData.instId=it.id);
+  WS.scene.add(pivot); WS.inst.push(it); wsApply(it); wsApplyColor(it,it.color,false);
+  if(!xform)wsFloor(it,true);
+  wsRecomputeExtent(); if(WS.inst.length===1)wsRecenter();
+  wsSelect(it.id); wsRenderParts();
+  wsPushUndo(()=>wsDelete(it.id));   // undo right after adding removes the box
+  return it;
+}
+/* An STL / raw-mesh part. Oriented like the studio (model-Z → world-Y) so a model exported
+   from the studio drops back in upright. Colourable and movable exactly like any other part. */
+function wsMeshPart(positions,color){
+  const pivot=new THREE.Group(), oriented=new THREE.Group(); oriented.rotation.x=-Math.PI/2; pivot.add(oriented);
+  const p=positions instanceof Float32Array?positions:new Float32Array(positions);
+  const geo=new THREE.BufferGeometry(); geo.setAttribute("position",new THREE.Float32BufferAttribute(p,3)); geo.computeVertexNormals();
+  const mesh=new THREE.Mesh(geo,new THREE.MeshStandardMaterial({color:color??WS_STEEL,metalness:.1,roughness:.62,side:THREE.DoubleSide}));
+  oriented.add(mesh); return {pivot,shell:mesh,meshes:[mesh]};
+}
+function wsAddMesh(positions,name,xform,color,path){wsCommitSession();wsRequestRender();
+  const {pivot,shell,meshes}=wsMeshPart(positions,color);
+  const it={id:WS.nextId++,name:name||("mesh-"+WS.nextId),
+    mesh:{positions:positions instanceof Float32Array?positions:new Float32Array(positions),path:path||null},
+    profile:null,box:null,shell,meshes,pivot,
+    pos:xform?{...xform.pos}:{x:0,y:0,z:0},rot:xform?{...xform.rot}:{x:0,y:0,z:0},scale:xform&&xform.scale?xform.scale:1,
+    color:(color??WS_STEEL)>>>0&0xffffff};
+  meshes.forEach(me=>me.userData.instId=it.id);
+  WS.scene.add(pivot); WS.inst.push(it); wsApply(it); wsApplyColor(it,it.color,false);
+  if(!xform)wsFloor(it,true);
+  wsRecomputeExtent(); if(WS.inst.length===1)wsRecenter();
+  wsSelect(it.id); wsRenderParts();
+  wsPushUndo(()=>wsDelete(it.id));
+  return it;
+}
+function wsAdd(profile,name,xform){wsCommitSession();wsRequestRender();
   const {pivot,shell,meshes}=wsMeshFor(profile);
   const it={id:WS.nextId++,name:name||("part-"+WS.nextId),profile,shell,meshes,pivot,
-    pos:xform?{...xform.pos}:{x:0,y:0,z:0},rot:xform?{...xform.rot}:{x:0,y:0,z:0},scale:xform&&xform.scale?xform.scale:1};
+    pos:xform?{...xform.pos}:{x:0,y:0,z:0},rot:xform?{...xform.rot}:{x:0,y:0,z:0},scale:xform&&xform.scale?xform.scale:1,
+    color:WS_STEEL};                          // shell starts steel; bottom keeps its accent until you colour it
   meshes.forEach(me=>me.userData.instId=it.id);
   WS.scene.add(pivot); WS.inst.push(it); wsApply(it);
   if(!xform)wsFloor(it,true);
@@ -3858,7 +4055,10 @@ function wsSelect(id){WS.sel=id;wsRequestRender();
   for(const it of WS.inst)it.shell.material.emissive.setHex(it.id===id?0x1f3326:0x000000);
   const it=WS.inst.find(x=>x.id===id);
   document.getElementById("wsXform").style.display=it?"block":"none";
-  if(it){document.getElementById("wsSelName").textContent=it.name;wsSyncInputs();}
+  if(it){document.getElementById("wsSelName").textContent=it.name;wsSyncInputs();
+    const bs=document.getElementById("wsBoxSize"); if(bs)bs.style.display=it.box?"block":"none";
+    if(it.box)wsBoxSyncUI(it);
+    wsColorSyncUI(it);}
   wsRenderParts();
 }
 function wsSyncInputs(){const it=WS.inst.find(x=>x.id===WS.sel);if(!it)return;
@@ -3872,13 +4072,16 @@ function wsDelete(id){const i=WS.inst.findIndex(x=>x.id===id);if(i<0)return;cons
   WS.inst.splice(i,1);if(WS.sel===id){WS.sel=null;document.getElementById("wsXform").style.display="none";}
   wsRecomputeExtent();wsRenderParts();}
 function wsDuplicate(id){const it=WS.inst.find(x=>x.id===id);if(!it)return;
-  wsAdd(JSON.parse(JSON.stringify(it.profile)),it.name+" copy",{pos:{x:it.pos.x+WS.gridStep*3,y:it.pos.y,z:it.pos.z},rot:{...it.rot},scale:it.scale});}
+  const xform={pos:{x:it.pos.x+WS.gridStep*3,y:it.pos.y,z:it.pos.z},rot:{...it.rot},scale:it.scale};
+  if(it.box){wsAddBox({...it.box},it.name+" copy",xform,it.color);}
+  else if(it.mesh){wsAddMesh(it.mesh.positions,it.name+" copy",xform,it.color,it.mesh.path);}
+  else{const n=wsAdd(JSON.parse(JSON.stringify(it.profile)),it.name+" copy",xform); wsApplyColor(n,it.color,false);}}
 function wsRenderParts(){const host=document.getElementById("wsParts");if(!host)return;
   document.getElementById("wsCount").textContent=WS.inst.length?`(${WS.inst.length})`:"";host.innerHTML="";
   WS.inst.forEach(it=>{const row=document.createElement("div");row.className="ws-row"+(it.id===WS.sel?" sel":"");
     row.innerHTML='<span class="nm"></span><button title="delete">⌫</button>';
     row.querySelector(".nm").textContent=it.name;
-    row.querySelector(".nm").onclick=()=>wsSelect(it.id);
+    row.querySelector(".nm").onclick=()=>{if(it.id!==WS.sel)wsCommitSession();wsSelect(it.id);};
     row.querySelector("button").onclick=()=>wsDelete(it.id);host.appendChild(row);});}
 /* =========================================================================
    MODEL PREVIEWS + UNIFIED LIBRARY
@@ -3886,6 +4089,35 @@ function wsRenderParts(){const host=document.getElementById("wsParts");if(!host)
    model you have — on this device, in the cloud, and in the shared repo — as
    clickable preview cards. Click one to drop it into the Workshop.
    ========================================================================= */
+/* Parse an STL file (binary OR ASCII) into a flat Float32Array of triangle-soup vertices.
+   Binary layout: 80-byte header, uint32 triangle count, then per triangle 12B normal +
+   3×12B vertices + 2B attribute. ASCII: "vertex x y z" lines. Pure + headless-testable. */
+function parseSTL(buf){
+  const dv=new DataView(buf), n=buf.byteLength;
+  const readBinary=(tris)=>{const pos=new Float32Array(tris*9); let o=84,p=0;
+    for(let i=0;i<tris;i++){o+=12; for(let k=0;k<9;k++){pos[p++]=dv.getFloat32(o,true);o+=4;} o+=2;} return pos;};
+  if(n>=84){const tris=dv.getUint32(80,true); if(84+tris*50===n) return readBinary(tris);}   // exact size ⇒ binary
+  const txt=new TextDecoder().decode(new Uint8Array(buf));
+  if(/^\s*solid/i.test(txt)&&/vertex/i.test(txt)){
+    const nums=[]; const re=/vertex\s+(-?[\d.eE+]+)\s+(-?[\d.eE+]+)\s+(-?[\d.eE+]+)/g; let m;
+    while((m=re.exec(txt)))nums.push(+m[1],+m[2],+m[3]);
+    if(nums.length>=9) return new Float32Array(nums);
+  }
+  if(n>=84){const tris=dv.getUint32(80,true); if(84+tris*50<=n) return readBinary(tris);}    // trust header as a fallback
+  throw new Error("not a readable STL");
+}
+// a display mesh from raw triangle-soup positions, oriented like the studio shows models
+function meshFromPositions(positions,color){
+  const p=positions instanceof Float32Array?positions:new Float32Array(positions);
+  const geo=new THREE.BufferGeometry();
+  geo.setAttribute("position",new THREE.BufferAttribute(p,3)); geo.computeVertexNormals();
+  const mesh=new THREE.Mesh(geo,new THREE.MeshStandardMaterial({color:color??0x9fb0c4,metalness:.1,roughness:.62,side:THREE.DoubleSide}));
+  mesh.rotation.set(-Math.PI/2,0,0); return mesh;
+}
+function boxThumbMesh(box,color){
+  return new THREE.Mesh(new THREE.BoxGeometry(box.l,box.h,box.w),
+    new THREE.MeshStandardMaterial({color:color??0x9fb0c4,metalness:.1,roughness:.62,side:THREE.DoubleSide}));
+}
 const THUMB={renderer:null,scene:null,cam:null,cache:{},queue:[],busy:false};
 function thumbInit(){
   if(THUMB.renderer)return true;
@@ -3902,13 +4134,15 @@ function thumbInit(){
     return true;
   }catch(_){return false;}   // no WebGL context available -> cards fall back to a glyph
 }
-// geometry for one profile, oriented the same way the studio shows it
-function thumbMeshFor(profile){
-  const g=makeBody(profile);
+// geometry for one profile, oriented the same way the studio shows it. Thumbnails use the
+// coarse "fast" hull so a heavy repo model renders in a few ms instead of ~700.
+function thumbMeshFor(profile,color){
+  const src=(profile.mode==="projection")?{...profile,hullFast:true}:profile;
+  const g=makeBody(src);
   const geo=new THREE.BufferGeometry();
   geo.setAttribute("position",new THREE.BufferAttribute(g.positions,3));
   geo.setIndex(g.indices);geo.computeVertexNormals();
-  const mesh=new THREE.Mesh(geo,new THREE.MeshStandardMaterial({color:0x9fb0c4,metalness:0.1,roughness:0.62,side:THREE.DoubleSide}));
+  const mesh=new THREE.Mesh(geo,new THREE.MeshStandardMaterial({color:color??0x9fb0c4,metalness:0.1,roughness:0.62,side:THREE.DoubleSide}));
   mesh.rotation.set(-Math.PI/2,0,0);
   return mesh;
 }
@@ -3916,17 +4150,21 @@ function renderThumb(doc){
   if(!thumbInit())return null;
   const root=new THREE.Group();
   try{
-    if(doc&&doc.parts&&doc.parts.length){                      // assembly: every part in place
-      doc.parts.slice(0,12).forEach(p=>{
-        if(!p.profile)return;
-        const m=thumbMeshFor(p.profile),pivot=new THREE.Group();
-        pivot.add(m);
+    if(doc&&doc.stl&&doc.positions){ root.add(meshFromPositions(doc.positions,doc.color)); }   // an STL mesh
+    else if(doc&&doc.parts&&doc.parts.length){                 // assembly: every part in place
+      doc.parts.slice(0,16).forEach(p=>{
+        let m=null;
+        if(p.profile)m=thumbMeshFor(p.profile,p.color);
+        else if(p.box)m=boxThumbMesh(p.box,p.color);
+        else if(p.meshPositions)m=meshFromPositions(new Float32Array(p.meshPositions),p.color);
+        if(!m)return;                                           // repo-referenced mesh parts are skipped in the preview
+        const pivot=new THREE.Group(); pivot.add(m);
         if(p.pos)pivot.position.set(p.pos.x||0,p.pos.y||0,p.pos.z||0);
         if(p.rot)pivot.rotation.set(p.rot.x||0,p.rot.y||0,p.rot.z||0);
         if(p.scale)pivot.scale.setScalar(p.scale||1);
         root.add(pivot);
       });
-    } else { root.add(thumbMeshFor(doc)); }
+    } else if(doc){ root.add(thumbMeshFor(doc)); }
   }catch(_){ return null; }
   if(!root.children.length)return null;
   THUMB.scene.add(root);
@@ -3938,7 +4176,8 @@ function renderThumb(doc){
     THUMB.cam.position.set(c.x+r*0.72,c.y+r*0.5,c.z+r*0.78);
     THUMB.cam.lookAt(c);THUMB.cam.updateProjectionMatrix();
     THUMB.renderer.render(THUMB.scene,THUMB.cam);
-    try{url=THUMB.renderer.domElement.toDataURL("image/webp",0.7);}catch(_){url=null;}
+    try{url=THUMB.renderer.domElement.toDataURL("image/webp",0.72);}catch(_){}
+    if(!url||url.length<200){try{url=THUMB.renderer.domElement.toDataURL("image/png");}catch(_){url=null;}}  // webp unsupported ⇒ png
   }
   THUMB.scene.remove(root);
   root.traverse(o=>{if(o.geometry)o.geometry.dispose();if(o.material)o.material.dispose();});
@@ -3998,7 +4237,8 @@ async function uniLibItems(){
       const now=Date.now();
       if(!uniLibItems._repo || now-uniLibItems._repoAt>60000){uniLibItems._repo=await GHLIB.list();uniLibItems._repoAt=now;}
       (uniLibItems._repo||[]).forEach(f=>out.push({src:"repo",name:f.name,category:(f.path.split("/").slice(-2,-1)[0]||"repo"),
-        kind:f.kind,key:"repo:"+f.path,getDoc:async()=>GHLIB.fetchDoc(f.path)}));
+        kind:f.kind,key:"repo:"+f.path,
+        getDoc: f.kind==="stl" ? (async()=>GHLIB.fetchSTL(f.path)) : (async()=>GHLIB.fetchDoc(f.path))}));
     }catch(_){}
   }
   return libCanonical(out);
@@ -4019,14 +4259,15 @@ async function wsRenderLib(){
     groups[cat].forEach(it=>{
       const card=document.createElement("div");card.className="lib-card";card.title=`${it.name} · ${SRC_LABEL[it.src]}`;
       card.innerHTML=`<div class="ph"><img alt=""><span class="wait">…</span></div>
-        <span class="nm"></span><span class="src ${it.src}">${SRC_LABEL[it.src]}${it.kind==="assembly"?" · asm":""}</span>
+        <span class="nm"></span><span class="src ${it.src}">${SRC_LABEL[it.src]}${it.kind==="assembly"?" · asm":it.kind==="stl"?" · stl":""}</span>
         ${it.src==="local"?'<button class="del" title="remove from this device">✕</button>':""}`;
       card.querySelector(".nm").textContent=it.name;
       const img=card.querySelector("img"), wait=card.querySelector(".wait");
       card.onclick=async ()=>{
         try{
           const doc=await it.getDoc(); if(!doc)throw new Error("couldn't load it");
-          if(it.kind==="assembly"||(doc.parts&&doc.parts.length))wsLoadAssembly(doc);
+          if(doc.stl){wsAddMesh(doc.positions,it.name,null,undefined,doc.path);toast(`Added “${it.name}” (STL mesh) to the workshop.`);}
+          else if(it.kind==="assembly"||(doc.parts&&doc.parts.length))wsLoadAssembly(doc);
           else {wsAdd(doc,it.name);toast(`Added “${it.name}” to the workshop.`);}
         }catch(e){toast("Couldn't open that model: "+e.message);}
       };
@@ -4041,8 +4282,18 @@ async function wsRenderLib(){
 }
 
 function wsLoadAssembly(asm){wsRequestRender();if(!asm||!asm.parts){toast("Not a valid assembly file.");return;}
-  asm.parts.forEach(p=>wsAdd(p.profile,p.name,{pos:p.pos,rot:p.rot,scale:p.scale}));
+  asm.parts.forEach(p=>{
+    if(p.kind==="box"||p.box){ wsAddBox(p.box,p.name,{pos:p.pos,rot:p.rot,scale:p.scale},p.color); }
+    else if(p.kind==="mesh"||p.meshPositions||p.meshPath){
+      if(p.meshPath&&typeof GHLIB!=="undefined"){ GHLIB.fetchSTL(p.meshPath)
+        .then(d=>wsAddMesh(d.positions,p.name,{pos:p.pos,rot:p.rot,scale:p.scale},p.color,p.meshPath))
+        .catch(()=>toast(`Couldn't fetch mesh part “${p.name}” from the repo.`)); }
+      else if(p.meshPositions){ wsAddMesh(new Float32Array(p.meshPositions),p.name,{pos:p.pos,rot:p.rot,scale:p.scale},p.color); }
+    }
+    else { const it=wsAdd(p.profile,p.name,{pos:p.pos,rot:p.rot,scale:p.scale}); if(p.color!=null)wsApplyColor(it,p.color,false); }
+  });
   if(asm.name)document.getElementById("wsName").value=asm.name;
+  wsCommitSession();
   toast(`Loaded assembly “${asm.name||"?"}” · ${asm.parts.length} parts`);}
 function wsExportSTL(){const tris=[],v=new THREE.Vector3();
   for(const it of WS.inst){it.pivot.updateWorldMatrix(true,true);
@@ -4055,7 +4306,13 @@ function wsExportSTL(){const tris=[],v=new THREE.Vector3();
   toast(`Combined STL · <span class="mono">${(tris.length/3).toLocaleString()} tris · ${WS.inst.length} part(s)</span>`);}
 function wsSaveAssembly(){if(!WS.inst.length){toast("Add parts first.");return;}
   const name=(document.getElementById("wsName").value||"assembly").trim();
-  const asm={schema:"lee3d.assembly/v1",units:"mm",name,category:(projCat.value||"Assemblies").trim(),parts:WS.inst.map(it=>({name:it.name,profile:it.profile,pos:it.pos,rot:it.rot,scale:it.scale}))};
+  const asm={schema:"lee3d.assembly/v1",units:"mm",name,category:(projCat.value||"Assemblies").trim(),parts:WS.inst.map(it=>{
+    const base={name:it.name,pos:it.pos,rot:it.rot,scale:it.scale,color:it.color};
+    if(it.box) return {...base,kind:"box",box:it.box};
+    if(it.mesh) return {...base,kind:"mesh",                       // repo STL ⇒ tiny path ref; otherwise embed the geometry
+      meshPath:it.mesh.path||undefined, meshPositions:it.mesh.path?undefined:Array.from(it.mesh.positions)};
+    return {...base,profile:it.profile};
+  })};
   download(new Blob([JSON.stringify(asm,null,2)],{type:"application/json"}),name+".assembly.json");
   LIB.add(name,"assembly",asm,asm.category);wsRenderLib();
   if(typeof CLOUD!=="undefined"&&CLOUD.ok())CLOUD.upsert(name,"assembly",asm,asm.category).then(()=>toast(`“${name}” also saved to cloud ☁`)).catch(e=>toast("Cloud push failed: "+e.message));
@@ -4069,19 +4326,22 @@ function wsGround(e){const n=wsNDC(e);WS.ray.setFromCamera(n,WS.cameraObj);const
   return WS.ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0,1,0),0),p)?p:null;}
 function wsBindPointer(cnv){
   cnv.addEventListener("contextmenu",e=>e.preventDefault());
-  cnv.addEventListener("pointerdown",e=>{cnv.setPointerCapture(e.pointerId);WS.last={x:e.clientX,y:e.clientY};
+  cnv.addEventListener("pointerdown",e=>{cnv.setPointerCapture(e.pointerId);WS.last={x:e.clientX,y:e.clientY};WS.downX=e.clientX;WS.downY=e.clientY;WS.moved=false;
     if(e.button===2||e.shiftKey){WS.mode=2;return;}
     const hit=wsPick(e);
-    if(hit){wsSelect(hit.it.id);WS.mode=3;const gp=wsGround(e);WS.moveOff=gp?{x:gp.x-hit.it.pos.x,z:gp.z-hit.it.pos.z}:{x:0,z:0};}
+    if(hit){if(hit.it.id!==WS.sel)wsCommitSession();      // switching parts locks in the last one's edits
+      wsSelect(hit.it.id);WS.mode=3;const gp=wsGround(e);WS.moveOff=gp?{x:gp.x-hit.it.pos.x,z:gp.z-hit.it.pos.z}:{x:0,z:0};}
     else WS.mode=1;});
   cnv.addEventListener("pointermove",e=>{if(!WS.mode)return;const dx=e.clientX-WS.last.x,dy=e.clientY-WS.last.y;WS.last={x:e.clientX,y:e.clientY};
+    if(!WS.moved && Math.hypot(e.clientX-WS.downX,e.clientY-WS.downY)>4)WS.moved=true;
     if(WS.mode===1){WS.cam.az-=dx*0.008;WS.cam.pol-=dy*0.008;wsUpdateCam();}
     else if(WS.mode===2){const s=WS.cam.rad*0.0016,fwd=new THREE.Vector3();WS.cameraObj.getWorldDirection(fwd);
       const right=new THREE.Vector3().crossVectors(fwd,new THREE.Vector3(0,1,0)).normalize();
       const upv=new THREE.Vector3().crossVectors(right,fwd).normalize();
       WS.target.addScaledVector(right,-dx*s);WS.target.addScaledVector(upv,dy*s);wsUpdateCam();}
     else if(WS.mode===3){const it=WS.inst.find(x=>x.id===WS.sel),gp=wsGround(e);if(it&&gp){it.pos.x=gp.x-WS.moveOff.x;it.pos.z=gp.z-WS.moveOff.z;wsApply(it);wsSyncInputs();}}});
-  const end=()=>{WS.mode=0;};
+  const end=()=>{ if(WS.mode===1 && !WS.moved && WS.sel!=null){wsCommitSession();wsSelect(null);}  // tap empty space = click off, colours locked in
+    WS.mode=0;};
   cnv.addEventListener("pointerup",end);cnv.addEventListener("pointerleave",end);
   cnv.addEventListener("wheel",e=>{e.preventDefault();WS.cam.rad*=(1+Math.sign(e.deltaY)*0.09);wsUpdateCam();},{passive:false});
 }
@@ -4109,6 +4369,29 @@ document.getElementById("wsSTL").onclick=wsExportSTL;
 document.getElementById("wsRecenter").onclick=wsRecenter;
 document.getElementById("wsZoomIn").onclick=()=>{WS.cam.rad*=0.8;wsUpdateCam();};
 document.getElementById("wsZoomOut").onclick=()=>{WS.cam.rad*=1.25;wsUpdateCam();};
+
+/* box + colour + undo wiring */
+document.getElementById("wsAddBox").onclick=()=>wsAddBox();
+["wsBoxL","wsBoxW","wsBoxH"].forEach(id=>document.getElementById(id).addEventListener("change",()=>{
+  const it=wsSelItem(); if(!it||!it.box)return;
+  wsRebuildBox(it,{l:+document.getElementById("wsBoxL").value||it.box.l,
+                   w:+document.getElementById("wsBoxW").value||it.box.w,
+                   h:+document.getElementById("wsBoxH").value||it.box.h}, true);
+  wsSyncInputs();
+}));
+let wsPickStart=null;
+const wsColorEl=document.getElementById("wsColor");
+wsColorEl.addEventListener("input",()=>{const it=wsSelItem(); if(!it)return;
+  if(wsPickStart==null)wsPickStart=it.color; wsApplyColor(it,parseInt(wsColorEl.value.slice(1),16),false);});   // live preview
+wsColorEl.addEventListener("change",()=>{const it=wsSelItem(); if(!it){wsPickStart=null;return;}
+  const prev=wsPickStart; wsPickStart=null;
+  if(prev!=null && prev!==it.color)wsPushUndo(()=>wsApplyColor(it,prev,false));   // one undo step for the whole drag
+  wsColorSyncUI(it);});
+document.getElementById("wsHex").addEventListener("change",e=>{const it=wsSelItem(); if(!it)return;
+  const h=e.target.value.trim().replace(/^#/,""); if(!/^[0-9a-fA-F]{6}$/.test(h)){wsColorSyncUI(it);toast("Enter a 6-digit hex colour, e.g. #C81E2A.");return;}
+  wsApplyColor(it,parseInt(h,16),true);});
+document.getElementById("wsColorReset").onclick=()=>{const it=wsSelItem(); if(it)wsApplyColor(it,WS_STEEL,true);};
+document.getElementById("wsUndo").onclick=wsUndo;
 
 /* =========================================================================
    CLOUD DATABASE — Supabase (Postgres via PostgREST, no SDK / zero-build)
@@ -4349,13 +4632,19 @@ const GHLIB={ repo:"BEARME-A/LEE3D-Lib", branch:"main", loaded:false,
     try{data=await this.tree("main");}
     catch(e){ if((""+e.message).match(/40[49]/)){branch="master";data=await this.tree("master");} else throw e; }
     this.branch=branch;
-    const files=(data.tree||[]).filter(t=>t.type==="blob"&&/\.(profile|assembly)\.json$/i.test(t.path));
-    return files.map(t=>({path:t.path, name:t.path.split("/").pop().replace(/\.(profile|assembly)\.json$/i,""),
-                          kind:/\.assembly\.json$/i.test(t.path)?"assembly":"object"}));
+    const files=(data.tree||[]).filter(t=>t.type==="blob"&&/\.(profile\.json|assembly\.json|stl)$/i.test(t.path));
+    return files.map(t=>{const stl=/\.stl$/i.test(t.path);
+      return {path:t.path, name:t.path.split("/").pop().replace(/\.(profile\.json|assembly\.json|stl)$/i,""),
+              kind: stl?"stl":(/\.assembly\.json$/i.test(t.path)?"assembly":"object")};});
   },
   async fetchDoc(path){const [o,r]=this.repo.split("/");
     const res=await fetch(`https://raw.githubusercontent.com/${o}/${r}/${this.branch}/${path}`);
-    if(!res.ok)throw new Error("HTTP "+res.status); return res.json();}
+    if(!res.ok)throw new Error("HTTP "+res.status); return res.json();},
+  async fetchSTL(path){const [o,r]=this.repo.split("/");
+    const res=await fetch(`https://raw.githubusercontent.com/${o}/${r}/${this.branch}/${path}`);
+    if(!res.ok)throw new Error("HTTP "+res.status);
+    const buf=await res.arrayBuffer();
+    return {stl:true, positions:parseSTL(buf), path, name:path.split("/").pop().replace(/\.stl$/i,"")};}
 };
 function ghState(t,c){const el=document.getElementById("ghState");if(el){el.textContent=t;el.style.color=c||"var(--ink-faint)";}}
 async function ghRefresh(silent){
@@ -4365,12 +4654,14 @@ async function ghRefresh(silent){
   try{
     const items=await GHLIB.list(); GHLIB.loaded=true;
     const host=document.getElementById("ghList"); host.innerHTML="";
-    if(!items.length){host.innerHTML='<div class="hint" style="opacity:.6">No <code>*.profile.json</code> / <code>*.assembly.json</code> found in this repo. Export a model and commit it, then Refresh.</div>';ghState(`0 models · ${GHLIB.branch}`,"var(--ink-dim)");return;}
+    if(!items.length){host.innerHTML='<div class="hint" style="opacity:.6">No <code>*.profile.json</code> / <code>*.assembly.json</code> / <code>*.stl</code> found in this repo. Export a model (or drop an STL) and commit it, then Refresh.</div>';ghState(`0 models · ${GHLIB.branch}`,"var(--ink-dim)");return;}
     items.forEach(it=>{const el=document.createElement("div");el.className="ws-row";
       el.innerHTML='<span class="nm"></span><span class="tg"></span>';
       el.querySelector(".nm").textContent=it.name; el.querySelector(".nm").title=it.path;
-      el.querySelector(".tg").textContent=it.kind==="assembly"?"asm":"obj";
-      el.querySelector(".nm").onclick=async ()=>{try{const d=await GHLIB.fetchDoc(it.path);
+      el.querySelector(".tg").textContent=it.kind==="stl"?"stl":(it.kind==="assembly"?"asm":"obj");
+      el.querySelector(".nm").onclick=async ()=>{try{
+        if(it.kind==="stl"){const d=await GHLIB.fetchSTL(it.path);switchTab("workshop");wsInit();requestAnimationFrame(wsResize);wsAddMesh(d.positions,it.name,null,undefined,it.path);toast(`Added “${it.name}” (STL mesh) to the workshop.`);return;}
+        const d=await GHLIB.fetchDoc(it.path);
         if(d&&d.schema&&(""+d.schema).indexOf("assembly")>=0){switchTab("workshop");wsInit();requestAnimationFrame(wsResize);wsLoadAssembly(d);toast(`Loaded assembly “${it.name}” from the repo.`);}
         else{applyProfile(d);switchTab("three");toast(`Loaded “${it.name}” from the repo — resume editing.`);}
       }catch(e){toast("Load failed: "+e.message);}};
