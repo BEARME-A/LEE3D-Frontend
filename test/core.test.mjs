@@ -226,7 +226,7 @@ t("hull: respects the silhouette — a notched side view removes material", () =
   const notched = [[0.05,0.05],[0.95,0.05],[0.95,0.95],[0.55,0.95],[0.55,0.5],[0.45,0.5],[0.45,0.95],[0.05,0.95]];
   // solid on purpose: this asks whether a notch removes MATERIAL, which only means
   // anything for a lump — on a shell a notch adds surface, so it adds material.
-  const mk = side => API.makeBody({ mode: "projection", hullHollow: false, length: 100, stations: 32,
+  const mk = side => API.makeBody({ mode: "projection", hullHollow: false, length: 100, stations: 32, hullCrisp: 1,
     sidePoly: side, topPoly: box, frontPoly: box, topProfile: [[0,60]], widthProfile: [[0,30]] });
   const full = mk(box), cut = mk(notched);
   watertight(cut, "hull notched");
