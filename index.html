@@ -1104,7 +1104,7 @@ function makeBody(p){
         +positions[A+2]*(positions[B]*positions[C+1]-positions[B+1]*positions[C]))/6;
   }
   if(vol<0){for(let k=0;k<indices.length;k+=3){const t2=indices[k+1];indices[k+1]=indices[k+2];indices[k+2]=t2;}vol=-vol;}
-  return {positions,indices,volume:vol};
+  return {positions,indices,volume:vol,hollow:true};
 }
 
 /* Separate BOTTOM PLATE — its own watertight part, so the shell stays hollow.
@@ -1199,6 +1199,59 @@ function sdPoly(poly,x,y){
     if(((ay>y)!==(by>y)) && (x<(bx-ax)*(y-ay)/((by-ay)||1e-9)+ax))inside=!inside;
   }
   return (inside?-1:1)*Math.sqrt(d);
+}
+/* SCULPT for the hull (follow-my-drawing). The loft's sculpt is a per-grid-vertex offset,
+   which the dual-contouring hull has no equivalent for. Instead a hull sculpt is a list of
+   brush strokes in MODEL space; they replay on the freshly-built surface every rebuild and
+   bake straight into exports. add/trim push the surface along its normal; smooth relaxes a
+   vertex toward its one-ring neighbours. Applied to the OUTER surface BEFORE it's hollowed,
+   so the inner wall follows the sculpted shape at the same thickness. Deterministic build +
+   ordered strokes means the live preview and the rebuilt result agree. */
+function hullVertexNormals(positions,indices){
+  const n=positions.length/3, nrm=new Float32Array(positions.length);
+  for(let q=0;q<indices.length;q+=3){const a=indices[q],b=indices[q+1],c=indices[q+2];
+    const ax=positions[a*3],ay=positions[a*3+1],az=positions[a*3+2];
+    const ux=positions[b*3]-ax,uy=positions[b*3+1]-ay,uz=positions[b*3+2]-az;
+    const vx=positions[c*3]-ax,vy=positions[c*3+1]-ay,vz=positions[c*3+2]-az;
+    const fx=uy*vz-uz*vy,fy=uz*vx-ux*vz,fz=ux*vy-uy*vx;
+    for(const k of [a,b,c]){nrm[k*3]+=fx;nrm[k*3+1]+=fy;nrm[k*3+2]+=fz;}}
+  for(let k=0;k<n;k++){const l=Math.hypot(nrm[k*3],nrm[k*3+1],nrm[k*3+2])||1;nrm[k*3]/=l;nrm[k*3+1]/=l;nrm[k*3+2]/=l;}
+  return nrm;
+}
+function hullAdjacency(positions,indices){
+  const n=positions.length/3, adj=Array.from({length:n},()=>new Set());
+  for(let q=0;q<indices.length;q+=3){const a=indices[q],b=indices[q+1],c=indices[q+2];
+    adj[a].add(b);adj[a].add(c);adj[b].add(a);adj[b].add(c);adj[c].add(a);adj[c].add(b);}
+  return adj.map(s=>[...s]);
+}
+// apply ONE stroke to a position buffer in place. Iterates the OUTER vertices [0,vc); if an
+// inner copy exists (positions longer than vc), the paired inner vertex moves the same way so
+// wall thickness is preserved.
+function applyStroke(positions,nrm,adj,s,vc){
+  const r=s.r, r2=r*r, hasInner=positions.length>vc*3;
+  const hit=[];
+  for(let k=0;k<vc;k++){const dx=positions[k*3]-s.x,dy=positions[k*3+1]-s.y,dz=positions[k*3+2]-s.z,d2=dx*dx+dy*dy+dz*dz;
+    if(d2<r2)hit.push([k,1-Math.sqrt(d2)/r]);}
+  const move=(k,vx,vy,vz)=>{positions[k*3]+=vx;positions[k*3+1]+=vy;positions[k*3+2]+=vz;
+    if(hasInner){const m=vc+k; if(m*3+2<positions.length){positions[m*3]+=vx;positions[m*3+1]+=vy;positions[m*3+2]+=vz;}}};
+  if(s.mode==="smooth"){
+    const tgt=hit.map(([k])=>{const nb=adj&&adj[k]; if(!nb||!nb.length)return null;
+      let sx=0,sy=0,sz=0; for(const j of nb){sx+=positions[j*3];sy+=positions[j*3+1];sz+=positions[j*3+2];}
+      return [sx/nb.length,sy/nb.length,sz/nb.length];});
+    for(let i=0;i<hit.length;i++){const [k,fall]=hit[i],t=tgt[i]; if(!t)continue;
+      const w=Math.min(1,s.amt*0.5)*fall;
+      move(k,(t[0]-positions[k*3])*w,(t[1]-positions[k*3+1])*w,(t[2]-positions[k*3+2])*w);}
+  } else {
+    const dir=s.mode==="trim"?-1:1;
+    for(const [k,fall] of hit){const e=s.amt*dir*fall*fall; move(k,nrm[k*3]*e,nrm[k*3+1]*e,nrm[k*3+2]*e);}
+  }
+}
+function applyHullStrokes(positions,indices,strokes){
+  if(!strokes||!strokes.length)return;
+  const vc=positions.length/3;                       // pre-hollow: everything here is outer
+  const nrm=hullVertexNormals(positions,indices);
+  const adj=strokes.some(s=>s.mode==="smooth")?hullAdjacency(positions,indices):null;
+  for(const s of strokes)applyStroke(positions,nrm,adj,s,vc);
 }
 /* VISUAL HULL — the volume inside every traced outline at once.
    Dual contouring rather than plain surface nets: each cell's vertex is solved from where
@@ -1438,6 +1491,9 @@ function makeVisualHull(p){
   let vol=facing(indices);
   if(vol<0){for(let q=0;q<indices.length;q+=3){const t=indices[q+1];indices[q+1]=indices[q+2];indices[q+2]=t;}vol=-vol;}
 
+  // sculpt touch-ups (recorded strokes), applied to the outer surface before it's hollowed
+  if(p.sculptStrokes && p.sculptStrokes.length){ applyHullStrokes(positions,indices,p.sculptStrokes); vol=Math.abs(facing(indices)); }
+
   /* HOLLOW IT.
      Trying to carve the void out of the distance field needs a grid fine enough to SEE a
      1.8mm wall — on a 200mm car that's a 1.3M-cell grid and seconds per rebuild, which is
@@ -1468,7 +1524,7 @@ function makeVisualHull(p){
     positions=pos2; indices=idx2;
     vol=Math.abs(facing(indices));                     // now the SHELL's material, not the lump
   }
-  return {positions,indices,volume:Math.abs(vol)};
+  return {positions,indices,volume:Math.abs(vol),hollow:(hollow&&wall>0)};
 }
 function checkManifold(indices){
   const m=new Map(),key=(a,b)=>a<b?a+"_"+b:b+"_"+a;
@@ -1601,6 +1657,7 @@ function currentProfile(){
     sidePoly:traced.sidePoly, topPoly:traced.topPoly, frontPoly:traced.frontPoly, hullCrisp:S.hullCrisp,
     hullRes:(qFast?hullDragRes:null), hullFast:qFast,   // self-tuning mid-drag, full on release
     sculpt:(SC.off && SC.off.length)?Array.from(SC.off):null,
+    sculptStrokes:(SC.strokes && SC.strokes.length)?SC.strokes.map(s=>({x:s.x,y:s.y,z:s.z,r:s.r,amt:s.amt,mode:s.mode})):null,
     features:features.length?features.map(f=>{const o={...f}; if(o.kind==="text")delete o.mask; return o;}):null,
     shape:S.shape, revShape:S.revShape, revSize:S.revSize, widMM:S.widMM, hgtMM:S.hgtMM,
     revProfile:(S.shape==="revolve"?buildRevProfile():null), revLen:(S.shape==="revolve"?revLenFor():null),
@@ -1671,7 +1728,7 @@ function rebuild(){
   requestRender();
   const prof=currentProfile();
   const t0=performance.now();
-  const {positions,indices,volume}=makeBody(prof);
+  const {positions,indices,volume,hollow}=makeBody(prof);
 
   const geo=new THREE.BufferGeometry();
   geo.setAttribute("position",new THREE.Float32BufferAttribute(positions,3));
@@ -1724,9 +1781,16 @@ function rebuild(){
   const dx=(bb.max.x-bb.min.x), dy=(bb.max.y-bb.min.y), dz=(bb.max.z-bb.min.z);
   rLen.textContent=fmtLen(S.len);
   rTris.textContent=tri.toLocaleString();
-  // A signed volume is only EXACT over a closed surface — flag it, don't fake it.
+  // A signed volume is only EXACT over a closed surface — flag it, don't fake it. And say
+  // WHAT it measures: a hollow frame (no closed bottom) reports its WALL MATERIAL — the outer
+  // skin minus an inner copy set one wall-thickness in — not the space it encloses.
   rVol.textContent=(man.watertight?"":"≈")+(volume/1000).toFixed(1)+" cm³";
-  rVol.title=man.watertight?"Exact — the surface is fully closed.":"Approximate — the surface has defects, so the enclosed volume can't be measured exactly.";
+  if(hollow){
+    const w=fmtLen(S.wall);
+    rVol.title=`Hollow shell — the frame's WALL MATERIAL only: the outer surface minus an inner copy set ${w} inward. ${man.watertight?"Exact for this wall thickness.":"Approximate — the surface isn't fully closed."} This is the real material of the frame, not the volume it encloses.`;
+  } else {
+    rVol.title=man.watertight?"Solid — the volume enclosed by the surface (exact).":"Approximate — the surface has defects, so the volume can't be measured exactly.";
+  }
   { let sa=0;                                             // total surface area, for material estimates
     for(let q=0;q<indices.length;q+=3){
       const A=indices[q]*3,B=indices[q+1]*3,C=indices[q+2]*3;
@@ -1739,7 +1803,7 @@ function rebuild(){
   }
   const uf=UNIT_MM[displayUnit], ud=(displayUnit==="mm"||displayUnit==="px")?0:1;
   const buildMs=performance.now()-t0; hullTune(buildMs);
-  dims.textContent=`bbox  L ${(dx/uf).toFixed(ud)} × W ${(dy/uf).toFixed(ud)} × H ${(dz/uf).toFixed(ud)} ${displayUnit}  ·  ${buildMs.toFixed(0)} ms`;
+  dims.textContent=`bbox  L ${(dx/uf).toFixed(ud)} × W ${(dy/uf).toFixed(ud)} × H ${(dz/uf).toFixed(ud)} ${displayUnit}${hollow?`  ·  hollow shell · ${fmtLen(S.wall)} wall`:""}  ·  ${buildMs.toFixed(0)} ms`;
   const stamp=document.getElementById("stamp");
   if(man.watertight){stamp.classList.remove("warn");
     stamp.querySelector(".t").textContent="SOLID SHAPE";
@@ -3364,6 +3428,7 @@ function applyProfile(p){
     document.querySelectorAll("#modeSeg button").forEach(x=>x.classList.toggle("on",x.dataset.m===S.mode));}
   if(p.sepBottom!=null){S.sepBottom=!!p.sepBottom;const cb=document.getElementById("sepBottom");if(cb)cb.checked=S.sepBottom;}
   if(typeof SC!=="undefined")SC.off=(p.sculpt&&p.sculpt.length)?Float32Array.from(p.sculpt):null;
+  if(typeof SC!=="undefined")SC.strokes=(p.sculptStrokes&&p.sculptStrokes.length)?p.sculptStrokes.map(s=>({x:s.x,y:s.y,z:s.z,r:s.r,amt:s.amt,mode:s.mode})):null;
   features=Array.isArray(p.features)?JSON.parse(JSON.stringify(p.features)):[];
   if(typeof featEnsureMasks==="function")featEnsureMasks();
   if(typeof featRender==="function")featRender();
@@ -4548,7 +4613,8 @@ CLOUD.load();
    thickness and topology are preserved (the shell stays watertight).
    ========================================================================= */
 const SC={on:false, mode:"add", radius:14, strength:1.4, sym:true, off:null, io:0,
-  baseOuter:null, baseInner:null, baseNrm:null, ring:null};
+  baseOuter:null, baseInner:null, baseNrm:null, ring:null,
+  strokes:null, hullWork:null, hullBase:null, hullNrm:null, hullAdj:null, hullVC:0};
 const scRay=new THREE.Raycaster();
 
 function computeOuterNormals(outer,N,M){
@@ -4561,6 +4627,19 @@ function computeOuterNormals(outer,N,M){
   return nrm;
 }
 function sculptCache(){
+  if(S.mode==="projection"){                          // hull: cache the built surface for live strokes
+    if(!bodyMesh)return;
+    const posAttr=bodyMesh.geometry.attributes.position, idx=bodyMesh.geometry.index;
+    const total=posAttr.count, hollow=(S.hullHollow!==false), vc=hollow?Math.floor(total/2):total;
+    SC.hullVC=vc;
+    SC.hullWork=new Float32Array(posAttr.array);       // full working copy (outer [+ inner])
+    SC.hullBase=new Float32Array(posAttr.array.subarray(0,vc*3));
+    const otri=[]; if(idx){const ia=idx.array; for(let q=0;q<ia.length;q+=3){if(ia[q]<vc&&ia[q+1]<vc&&ia[q+2]<vc)otri.push(ia[q],ia[q+1],ia[q+2]);}}
+    SC.hullNrm=hullVertexNormals(SC.hullBase,otri);
+    SC.hullAdj=hullAdjacency(SC.hullBase,otri);
+    if(!SC.strokes)SC.strokes=[];
+    return;
+  }
   const N=Math.max(8,S.st|0), M=Math.max(6,S.seg|0), io=(N+1)*(M+1);
   const prof=currentProfile(); prof.sculpt=null;               // base = the un-sculpted shape
   const g=makeBody(prof);
@@ -4571,6 +4650,13 @@ function sculptCache(){
   if(!SC.off || SC.off.length!==io) SC.off=new Float32Array(io);
 }
 function applySculptLive(){
+  if(S.mode==="projection"){
+    if(!bodyMesh||!SC.hullWork)return;
+    const pos=bodyMesh.geometry.attributes.position;
+    if(pos.array.length===SC.hullWork.length){ pos.array.set(SC.hullWork); pos.needsUpdate=true;
+      bodyMesh.geometry.computeVertexNormals(); bodyMesh.geometry.computeBoundingBox(); requestRender(); }
+    return;
+  }
   if(!bodyMesh||!SC.baseOuter)return;
   const pos=bodyMesh.geometry.attributes.position, io=SC.io;
   if(pos.count<2*io)return;
@@ -4605,6 +4691,18 @@ function scShowRing(hit){
   requestRender();
 }
 function sculptDab(e){
+  if(S.mode==="projection"){
+    if(!bodyMesh||!SC.hullWork)return false;
+    const rect=glCanvas.getBoundingClientRect();
+    scRay.setFromCamera({x:((e.clientX-rect.left)/rect.width)*2-1, y:-((e.clientY-rect.top)/rect.height)*2+1}, camera);
+    const hit=scRay.intersectObject(bodyMesh,false)[0]; if(!hit)return false;
+    const inv=new THREE.Matrix4().copy(bodyMesh.matrixWorld).invert();
+    const lp=hit.point.clone().applyMatrix4(inv);
+    const base={x:lp.x,y:lp.y,z:lp.z,r:SC.radius,amt:SC.strength,mode:SC.mode};
+    const strokes=SC.sym?[base,{x:base.x,y:-base.y,z:base.z,r:base.r,amt:base.amt,mode:base.mode}]:[base];
+    for(const s of strokes){ applyStroke(SC.hullWork,SC.hullNrm,SC.hullAdj,s,SC.hullVC); SC.strokes.push(s); }
+    applySculptLive(); return true;
+  }
   if(!bodyMesh||!SC.baseOuter)return false;
   const rect=glCanvas.getBoundingClientRect();
   const nd={x:((e.clientX-rect.left)/rect.width)*2-1, y:-((e.clientY-rect.top)/rect.height)*2+1};
@@ -4637,10 +4735,10 @@ function sculptDab(e){
   applySculptLive(); return true;
 }
 function commitSculpt(){ requestRebuild(); }        // clean re-bake + refresh readouts
-function clearSculpt(){ SC.off=null; requestRebuild(); toast("Sculpt cleared — back to the traced shape."); }
+function clearSculpt(){ SC.off=null; SC.strokes=null; SC.hullWork=null; requestRebuild(); toast("Sculpt cleared — back to the traced shape."); }
 
 function setSculpt(on){
-  if(on && (S.shape==="revolve"||S.mode==="projection")){toast("Sculpt works on the smooth-loft shell — switch to Smooth loft first.");document.getElementById("tSculpt").classList.remove("on");return;}
+  if(on && S.mode!=="projection" && S.shape==="revolve"){toast("Sculpt needs a shell surface — switch off Round object (revolve) first.");document.getElementById("tSculpt").classList.remove("on");return;}
   SC.on=on;
   document.getElementById("scPanel").style.display=on?"block":"none";
   document.getElementById("tSculpt").classList.toggle("on",on);
