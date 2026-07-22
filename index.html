@@ -1291,6 +1291,32 @@ function applyHullStrokes(positions,indices,strokes){
   const adj=strokes.some(s=>s.mode==="smooth")?hullAdjacency(positions,indices):null;
   for(const s of strokes)applyStroke(positions,nrm,adj,s,vc);
 }
+/* Stamp traced detail onto the BUILT surface, on the face it was drawn on.
+   In the distance field a feature moves every surface at that spot, whichever way it faces, so
+   side-view detail got pressed into the wheel-arch ceilings, the floor and the inside of the
+   shell — the model came out ribbed everywhere instead of only on its sides. The smooth body
+   never had that problem because it stamps detail per vertex and skips any vertex not facing
+   the view. This runs that same applyFeatures pass over the hull's own vertices, so both modes
+   emboss identically. Cut-throughs are NOT stamped here — a real hole has to be cut in the
+   field, and it already is. */
+function embossHull(p,positions,indices,crisp){
+  // a cut-through is only a real hole when it goes INWARD; "through" with a positive depth is
+  // a raised bump, so it gets stamped like any other detail (same rule the field uses)
+  const list=(p.features||[]).filter(f=>f.depth && !(f.through && f.depth<0));
+  if(!list.length || crisp<=0.001) return 0;
+  const n=positions.length/3;
+  const nf=hullVertexNormals(positions,indices);
+  const pts=new Array(n), nrm=new Array(n), spare=new Array(n);
+  for(let k=0;k<n;k++){
+    pts[k]=[positions[k*3],positions[k*3+1],positions[k*3+2]];
+    nrm[k]=[nf[k*3],nf[k*3+1],nf[k*3+2]];
+    spare[k]=[0,0,0];                                   // the inner wall is built later, from this
+  }
+  const faded=list.map(f=>({...f,depth:f.depth*crisp}));   // detail still fades toward Smooth
+  const hits=applyFeatures({...p,features:faded},pts,spare,nrm);
+  for(let k=0;k<n;k++){positions[k*3]=pts[k][0];positions[k*3+1]=pts[k][1];positions[k*3+2]=pts[k][2];}
+  return hits;
+}
 /* THE UNDERSIDE — which triangles an open-bottom shell should drop.
    Not "faces downward and sits low": on a real car body that also catches wheel-arch ceilings,
    window-indent faces and the roof seen from inside, punching holes through the middle of the
@@ -1467,12 +1493,10 @@ function makeVisualHull(p){
       d = (1-crisp)*soft + crisp*hull;
     }
     if(crisp>0.001) for(let q=0;q<feats.length;q++){
-      const f=feats[q], s=sdFeat(f,x,y,z);
-      if(f.through){ d += crisp*(Math.max(d,-s)-d); continue; }   // an opening morphs straight through
-      const t=Math.min(1,Math.max(0,-s/f.soft)), cover=t*t*(3-2*t);
-      const dep=(f.depth<0)?Math.max(f.depth,-wall):f.depth;      // an indent stays inside the frame
-      d += crisp*(-dep)*cover;
-    }
+      const f=feats[q]; if(!f.through)continue;                     // indents are stamped on the
+      const s=sdFeat(f,x,y,z);                                      // built surface instead (embossHull),
+      d += crisp*(Math.max(d,-s)-d);                                // so they land on the face they
+    }                                                               // were drawn on, not everywhere
     return d;
   };
   const res=Math.max(20,Math.min(80,Math.round(p.hullRes||Math.max(p.stations||48,40))));
@@ -1647,6 +1671,9 @@ function makeVisualHull(p){
     return s2;};
   let vol=facing(indices);
   if(vol<0){for(let q=0;q<indices.length;q+=3){const t=indices[q+1];indices[q+1]=indices[q+2];indices[q+2]=t;}vol=-vol;}
+
+  // traced detail, stamped on the face it was drawn on (the smooth body's rule)
+  if(crisp>0.001 && p.features && p.features.length){ embossHull(p,positions,indices,crisp); vol=Math.abs(facing(indices)); }
 
   // sculpt touch-ups (recorded strokes), applied to the outer surface before it's hollowed
   if(p.sculptStrokes && p.sculptStrokes.length){ applyHullStrokes(positions,indices,p.sculptStrokes); vol=Math.abs(facing(indices)); }
