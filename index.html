@@ -323,6 +323,25 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
   .toast.show{opacity:1;transform:translateX(-50%) translateY(-4px)}
   .toast .mono{color:var(--accent)}
 
+  /* holographic full-model preview */
+  #holoOverlay{position:fixed;inset:0;z-index:120;display:none;
+    background:radial-gradient(140% 100% at 50% 40%, rgba(20,40,58,.72), rgba(5,9,14,.94) 70%);
+    backdrop-filter:blur(3px);}
+  #holoOverlay.on{display:block}
+  #holoCanvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+  .holo-scan{position:absolute;inset:0;pointer-events:none;
+    background:repeating-linear-gradient(0deg, rgba(57,207,234,.05) 0 1px, transparent 1px 4px);
+    mix-blend-mode:screen;opacity:.55;animation:holoScan 7s linear infinite}
+  @keyframes holoScan{from{background-position:0 0}to{background-position:0 -220px}}
+  .holo-frame{position:absolute;inset:20px;pointer-events:none;border:1px solid rgba(57,207,234,.28);border-radius:12px;
+    box-shadow:inset 0 0 60px rgba(57,207,234,.10)}
+  .holo-frame::before,.holo-frame::after{content:"";position:absolute;width:26px;height:26px;border:2px solid var(--accent);opacity:.8}
+  .holo-frame::before{top:-1px;left:-1px;border-right:none;border-bottom:none;border-top-left-radius:12px}
+  .holo-frame::after{bottom:-1px;right:-1px;border-left:none;border-top:none;border-bottom-right-radius:12px}
+  .holo-hud{position:absolute;top:30px;left:34px;right:34px;display:flex;justify-content:space-between;align-items:center;pointer-events:none}
+  .holo-hud .mono{color:var(--accent);letter-spacing:.14em;font-size:12px;text-shadow:0 0 10px var(--glow)}
+  .holo-hud .btn{pointer-events:auto;width:auto;background:rgba(10,20,28,.7)}
+
   /* modal */
   .modal-bg{position:fixed;inset:0;background:rgba(4,7,11,.72);display:none;place-items:center;z-index:60}
   .modal-bg.show{display:grid}
@@ -809,6 +828,12 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
             <input type="text" id="wsHex" spellcheck="false" maxlength="7" value="#9FB0C4" title="Type a hex colour, e.g. #C81E2A">
             <button class="btn ghost" id="wsColorReset" style="padding:5px 9px" title="Back to steel">↺</button>
           </div>
+          <button class="btn ghost" id="wsPaintBtn" style="width:100%;margin-top:7px">Paint a region</button>
+          <div id="wsPaintPanel" style="display:none;margin-top:6px;padding:8px;border:1px solid var(--line);border-radius:6px;background:var(--panel-2)">
+            <div class="hint" style="margin:0 0 7px">Drag the box <b>corners</b> to frame part of the model, or its <b>centre dot</b> to slide it. Pick a colour above, then paint. Paint again elsewhere for a second colour.</div>
+            <button class="btn primary" id="wsPaintGo" style="width:100%">Paint this region</button>
+            <button class="btn ghost" id="wsPaintClear" style="width:100%;margin-top:5px">Clear painted regions</button>
+          </div>
           <button class="btn ghost" id="wsUndo" style="width:100%;margin-top:7px">Undo change</button>
           <button class="btn ghost" id="wsDel" style="width:100%;margin-top:6px">⌫ Delete part</button>
         </div>
@@ -834,6 +859,7 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
         <button class="btn" id="wsZoomIn" style="font-weight:700">＋</button>
         <button class="btn" id="wsZoomOut" style="font-weight:700">－</button>
         <button class="btn" id="wsRecenter">Recenter</button>
+        <button class="btn" id="wsHolo" style="border-color:var(--accent);color:var(--accent)">Hologram</button>
       </div>
       <div class="vp-overlay">
         <div><span class="k">drag</span> orbit · <span class="k">scroll</span> zoom · <span class="k">right-drag</span> pan · <span class="k">drag a part</span> move</div>
@@ -844,6 +870,15 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
 </main>
 
 <div class="toast" id="toast"></div>
+<div id="holoOverlay" aria-hidden="true">
+  <canvas id="holoCanvas"></canvas>
+  <div class="holo-scan"></div>
+  <div class="holo-frame"></div>
+  <div class="holo-hud">
+    <span id="holoTitle" class="mono">MODEL</span>
+    <button class="btn ghost" id="holoClose">Close ×</button>
+  </div>
+</div>
 
 <div class="modal-bg" id="modalBg">
   <div class="modal">
@@ -1529,12 +1564,30 @@ function makeVisualHull(p){
      1.8mm wall — on a 200mm car that's a 1.3M-cell grid and seconds per rebuild, which is
      why this mode used to hand back a filled lump. But it doesn't need the field at all:
      the surface we just built is already closed, so a copy of it pushed inward along its
-     own normals, wound the other way, IS the inside. No rim to stitch — a closed surface
-     has no edges. Any wall thickness, at any detail, for the cost of one more copy. */
+     own normals, wound the other way, IS the inside. Any wall thickness, at any detail, for
+     the cost of one more copy. Unless a bottom face was traced, the underside is OPENED first
+     (the ground-facing skin is dropped) and the two shells are stitched with a rim, so it's a
+     genuine open-bottom shell you can see up into — like the smooth body — and still watertight. */
   if(hollow && wall>0){
+    const openBottom = !p.closedBottom;
+    let outerIdx = indices;
+    if(openBottom){                                    // drop the ground-facing skin
+      const keep=[];
+      for(let q=0;q<indices.length;q+=3){
+        const a=indices[q],b=indices[q+1],c=indices[q+2];
+        const ax=positions[a*3],ay=positions[a*3+1],az=positions[a*3+2];
+        const ux=positions[b*3]-ax,uy=positions[b*3+1]-ay,uz=positions[b*3+2]-az;
+        const vx=positions[c*3]-ax,vy=positions[c*3+1]-ay,vz=positions[c*3+2]-az;
+        const fx=uy*vz-uz*vy, fy=uz*vx-ux*vz, fz=ux*vy-uy*vx, fl=Math.hypot(fx,fy,fz)||1;
+        const cz=(az+positions[b*3+2]+positions[c*3+2])/3;
+        if(fz/fl < -0.5 && cz < H*0.45) continue;      // faces the ground & sits low -> remove
+        keep.push(a,b,c);
+      }
+      outerIdx = keep.length ? keep : indices;         // never remove everything
+    }
     const vc=V.length, nrm=new Float32Array(vc*3);
-    for(let q=0;q<indices.length;q+=3){
-      const a=indices[q],b=indices[q+1],c=indices[q+2];
+    for(let q=0;q<outerIdx.length;q+=3){
+      const a=outerIdx[q],b=outerIdx[q+1],c=outerIdx[q+2];
       const ax=positions[a*3],ay=positions[a*3+1],az=positions[a*3+2];
       const ux=positions[b*3]-ax, uy=positions[b*3+1]-ay, uz=positions[b*3+2]-az;
       const vx=positions[c*3]-ax, vy=positions[c*3+1]-ay, vz=positions[c*3+2]-az;
@@ -1549,12 +1602,27 @@ function makeVisualHull(p){
       pos2[(vc+k)*3+1]=positions[k*3+1]-ny2*wall;
       pos2[(vc+k)*3+2]=positions[k*3+2]-nz2*wall;
     }
-    const idx2=Array.from(indices);
-    for(let q=0;q<indices.length;q+=3)idx2.push(vc+indices[q], vc+indices[q+2], vc+indices[q+1]);  // wound inward
+    const idx2=Array.from(outerIdx);
+    for(let q=0;q<outerIdx.length;q+=3)idx2.push(vc+outerIdx[q], vc+outerIdx[q+2], vc+outerIdx[q+1]);  // wound inward
+    if(openBottom){                                    // stitch the rim around the opening
+      const ec=new Map(), dir=new Set(), und=(a,b)=>a<b?a+"_"+b:b+"_"+a, dk=(a,b)=>a+"_"+b;
+      for(let q=0;q<outerIdx.length;q+=3){const t=[outerIdx[q],outerIdx[q+1],outerIdx[q+2]];
+        for(const[u,v]of[[t[0],t[1]],[t[1],t[2]],[t[2],t[0]]]){ec.set(und(u,v),(ec.get(und(u,v))||0)+1); dir.add(dk(u,v));}}
+      for(const[k,c]of ec){ if(c!==1)continue; const p2=k.indexOf("_"),a=+k.slice(0,p2),b=+k.slice(p2+1);
+        const s=dir.has(dk(a,b))?a:b, e=s===a?b:a;     // oriented as the outer skin winds it
+        idx2.push(e, s, vc+s); idx2.push(e, vc+s, vc+e);
+      }
+    }
     positions=pos2; indices=idx2;
+    if(openBottom){    // the rim can leave a couple of non-manifold edges where the footprint pinches
+      const V2=[]; for(let k=0;k<positions.length;k+=3)V2.push([positions[k],positions[k+1],positions[k+2]]);
+      indices=sealMesh(V2,indices);
+      positions=new Float32Array(V2.length*3);
+      for(let k=0;k<V2.length;k++){positions[k*3]=V2[k][0];positions[k*3+1]=V2[k][1];positions[k*3+2]=V2[k][2];}
+    }
     vol=Math.abs(facing(indices));                     // now the SHELL's material, not the lump
   }
-  return {positions,indices,volume:Math.abs(vol),hollow:(hollow&&wall>0)};
+  return {positions,indices,volume:Math.abs(vol),hollow:(hollow&&wall>0),openBottom:(hollow&&wall>0&&!p.closedBottom)};
 }
 function checkManifold(indices){
   const m=new Map(),key=(a,b)=>a<b?a+"_"+b:b+"_"+a;
@@ -1685,6 +1753,7 @@ function currentProfile(){
     sections:(traced.sections&&traced.sections.length?traced.sections:null),
     mode:S.mode, frontHull:(S.mode==="projection"?traced.frontHull:null), sepBottom:S.sepBottom,
     sidePoly:traced.sidePoly, topPoly:traced.topPoly, frontPoly:traced.frontPoly, hullCrisp:S.hullCrisp,
+    closedBottom:!!traced.bottomPoly,
     hullRes:(qFast?hullDragRes:null), hullFast:qFast,   // self-tuning mid-drag, full on release
     sculpt:(SC.off && SC.off.length)?Array.from(SC.off):null,
     sculptStrokes:(SC.strokes && SC.strokes.length)?SC.strokes.map(s=>({x:s.x,y:s.y,z:s.z,r:s.r,amt:s.amt,mode:s.mode})):null,
@@ -4121,15 +4190,126 @@ function wsHex(n){return "#"+(n>>>0&0xffffff).toString(16).padStart(6,"0");}
 function wsBuildSwatches(){const host=document.getElementById("wsSwatches"); if(!host)return; host.innerHTML="";
   WS_SWATCHES.forEach(h=>{const b=document.createElement("button"); b.className="sw"; b.dataset.hex=h;
     b.style.background=wsHex(h); b.title=wsHex(h).toUpperCase();
-    b.onclick=()=>{const it=wsSelItem(); if(it)wsApplyColor(it,h,true);}; host.appendChild(b);});}
+    b.onclick=()=>{const it=wsSelItem(); if(!it)return;
+      if(WS.paint&&WS.paint.on)wsPaintSetColor(h); else wsApplyColor(it,h,true);}; host.appendChild(b);});}
+// while painting, a colour choice arms the brush instead of repainting the whole part
+function wsPaintSetColor(hex){ wsPaintInit(); WS.paint.color=hex>>>0&0xffffff;
+  const ci=document.getElementById("wsColor"); if(ci)ci.value=wsHex(WS.paint.color);
+  const hi=document.getElementById("wsHex"); if(hi)hi.value=wsHex(WS.paint.color).toUpperCase();
+  document.querySelectorAll("#wsSwatches .sw").forEach(s=>s.classList.toggle("on",(+s.dataset.hex)===WS.paint.color)); }
 function wsColorSyncUI(it){ if(!it)return; const hx=wsHex(it.color).toUpperCase();
   const ci=document.getElementById("wsColor"); if(ci)ci.value=wsHex(it.color);
   const hi=document.getElementById("wsHex"); if(hi)hi.value=hx;
   document.querySelectorAll("#wsSwatches .sw").forEach(s=>s.classList.toggle("on",(+s.dataset.hex)===it.color));}
 function wsApplyColor(it,hex,record){ if(!it)return; hex=hex>>>0&0xffffff;
   if(record && it.color!==hex){const prev=it.color; wsPushUndo(()=>wsApplyColor(it,prev,false));}
-  it.color=hex; it.meshes.forEach(m=>m.material.color.setHex(hex));
+  it.color=hex; wsRecolor(it);
   if(WS.sel===it.id)wsColorSyncUI(it); wsRequestRender();}
+/* ---- per-region painting -------------------------------------------------
+   Colour is baked into a vertex-colour attribute: the base colour fills the whole part, then
+   each painted region (a box, stored in the part's own local frame so it moves with the part
+   and survives save/reload) overrides the vertices inside it. Later regions win over earlier. */
+function wsEnsureVColor(m){
+  const g=m.geometry, n=g.attributes.position.count;
+  if(!g.attributes.color || g.attributes.color.count!==n)
+    g.setAttribute("color", new THREE.BufferAttribute(new Float32Array(n*3),3));
+  if(!m.material.vertexColors){ m.material.vertexColors=true; m.material.color.setHex(0xffffff); m.material.needsUpdate=true; }
+}
+function wsInRegion(px,py,pz,rg){          // point-in-oriented-box test in the part's local frame
+  const dx=px-rg.c[0], dy=py-rg.c[1], dz=pz-rg.c[2];
+  for(const ax of [rg.A,rg.B,rg.C]){ const d=dx*ax[0]+dy*ax[1]+dz*ax[2], a2=ax[0]*ax[0]+ax[1]*ax[1]+ax[2]*ax[2];
+    if(Math.abs(d)>a2) return false; }
+  return true;
+}
+function wsRecolor(it){
+  const base=new THREE.Color(it.color); const paints=it.paints||[];
+  for(const p of paints) if(!p._c) p._c=new THREE.Color(p.color);
+  for(const m of it.meshes){
+    wsEnsureVColor(m);
+    const pos=m.geometry.attributes.position, col=m.geometry.attributes.color, n=pos.count;
+    for(let i=0;i<n;i++){
+      let r=base.r, g=base.g, b=base.b;
+      if(paints.length){ const px=pos.getX(i),py=pos.getY(i),pz=pos.getZ(i);
+        for(let k=0;k<paints.length;k++){ if(wsInRegion(px,py,pz,paints[k])){ const c=paints[k]._c; r=c.r;g=c.g;b=c.b; } } }
+      col.setXYZ(i,r,g,b);
+    }
+    col.needsUpdate=true;
+  }
+}
+// convert the world-space paint box to an oriented box in the part's local (geometry) frame
+function wsWorldBoxToLocal(it,box){
+  const m=it.meshes[0]; m.updateWorldMatrix(true,false);
+  const inv=new THREE.Matrix4().copy(m.matrixWorld).invert();
+  const wc=new THREE.Vector3((box.min[0]+box.max[0])/2,(box.min[1]+box.max[1])/2,(box.min[2]+box.max[2])/2);
+  const he=[(box.max[0]-box.min[0])/2,(box.max[1]-box.min[1])/2,(box.max[2]-box.min[2])/2];
+  const c=wc.clone().applyMatrix4(inv);
+  const A=wc.clone().add(new THREE.Vector3(he[0],0,0)).applyMatrix4(inv).sub(c);
+  const B=wc.clone().add(new THREE.Vector3(0,he[1],0)).applyMatrix4(inv).sub(c);
+  const C=wc.clone().add(new THREE.Vector3(0,0,he[2])).applyMatrix4(inv).sub(c);
+  return {c:[c.x,c.y,c.z], A:[A.x,A.y,A.z], B:[B.x,B.y,B.z], C:[C.x,C.y,C.z]};
+}
+function wsPaintInit(){ if(!WS.paint)WS.paint={on:false,box:null,group:null,edges:null,handles:[],color:0xc81e2a,drag:null}; }
+function wsPaintResetBox(it){
+  it.pivot.updateWorldMatrix(true,false);
+  const box=new THREE.Box3().setFromObject(it.pivot);
+  const c=box.getCenter(new THREE.Vector3()), s=box.getSize(new THREE.Vector3());
+  WS.paint.box={min:[c.x-s.x*0.3,c.y-s.y*0.3,c.z-s.z*0.3], max:[c.x+s.x*0.3,c.y+s.y*0.3,c.z+s.z*0.3]};
+}
+function wsPaintBuildGizmo(){
+  const grp=new THREE.Group();
+  const edges=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(1,1,1)),
+    new THREE.LineBasicMaterial({color:0x39cfea,transparent:true,opacity:0.95,depthTest:false}));
+  edges.renderOrder=998; grp.add(edges);
+  const handles=[];
+  for(let i=0;i<8;i++){ const s=new THREE.Mesh(new THREE.SphereGeometry(1,10,8),
+      new THREE.MeshBasicMaterial({color:0x7fecff,depthTest:false})); s.renderOrder=999; s.userData.corner=i; grp.add(s); handles.push(s); }
+  const ctr=new THREE.Mesh(new THREE.SphereGeometry(1,10,8), new THREE.MeshBasicMaterial({color:0xffb020,depthTest:false}));
+  ctr.renderOrder=999; ctr.userData.corner=-2; grp.add(ctr); handles.push(ctr);
+  WS.scene.add(grp); WS.paint.group=grp; WS.paint.edges=edges; WS.paint.handles=handles;
+}
+function wsPaintUpdateGizmo(){
+  const b=WS.paint.box; if(!WS.paint.edges||!b)return;
+  const cx=(b.min[0]+b.max[0])/2, cy=(b.min[1]+b.max[1])/2, cz=(b.min[2]+b.max[2])/2;
+  const sx=Math.max(0.2,b.max[0]-b.min[0]), sy=Math.max(0.2,b.max[1]-b.min[1]), sz=Math.max(0.2,b.max[2]-b.min[2]);
+  WS.paint.edges.position.set(cx,cy,cz); WS.paint.edges.scale.set(sx,sy,sz);
+  const hs=Math.max(sx,sy,sz)*0.03+WS.ext*0.006;
+  for(let i=0;i<8;i++){ const h=WS.paint.handles[i];
+    h.position.set(i&1?b.max[0]:b.min[0], i&2?b.max[1]:b.min[1], i&4?b.max[2]:b.min[2]); h.scale.setScalar(hs); }
+  const ctr=WS.paint.handles[8]; ctr.position.set(cx,cy,cz); ctr.scale.setScalar(hs*1.15);
+}
+function wsPaintToggle(on){
+  wsPaintInit();
+  const want = on===undefined ? !WS.paint.on : on;
+  const it=wsSelItem();
+  if(want && !it){toast("Select a part first, then paint regions on it.");return;}
+  WS.paint.on=want;
+  if(want){
+    if(!WS.paint.box) wsPaintResetBox(it);
+    if(!WS.paint.group) wsPaintBuildGizmo();
+    WS.paint.group.visible=true; wsPaintUpdateGizmo();
+    const ci=document.getElementById("wsColor"); if(ci)WS.paint.color=parseInt(ci.value.slice(1),16);
+  } else if(WS.paint.group) WS.paint.group.visible=false;
+  const pp=document.getElementById("wsPaintPanel"); if(pp)pp.style.display=want?"block":"none";
+  const btn=document.getElementById("wsPaintBtn"); if(btn)btn.classList.toggle("active",want);
+  wsRequestRender();
+}
+function wsPaintPick(e){
+  if(!WS.paint||!WS.paint.on||!WS.paint.handles.length)return null;
+  const rect=WS.renderer.domElement.getBoundingClientRect();
+  WS.ray.setFromCamera({x:((e.clientX-rect.left)/rect.width)*2-1,y:-((e.clientY-rect.top)/rect.height)*2+1}, WS.cameraObj);
+  const hit=WS.ray.intersectObjects(WS.paint.handles,false)[0];
+  return hit?{corner:hit.object.userData.corner}:null;
+}
+function wsPaintApply(){
+  const it=wsSelItem(); if(!it||!WS.paint||!WS.paint.box){toast("Frame a region on a part first.");return;}
+  const rg=wsWorldBoxToLocal(it, WS.paint.box); rg.color=WS.paint.color>>>0&0xffffff; rg._c=new THREE.Color(rg.color);
+  if(!it.paints)it.paints=[]; it.paints.push(rg); wsRecolor(it);
+  wsPushUndo(()=>{ (it.paints||[]).pop(); wsRecolor(it); wsRequestRender(); });
+  wsRequestRender(); toast(`Painted the region ${wsHex(rg.color).toUpperCase()}.`);
+}
+function wsPaintClearAll(){ const it=wsSelItem(); if(!it||!it.paints||!it.paints.length){toast("No painted regions on this part.");return;}
+  const prev=it.paints; it.paints=[]; wsRecolor(it);
+  wsPushUndo(()=>{ it.paints=prev; wsRecolor(it); wsRequestRender(); }); wsRequestRender(); toast("Cleared this part's painted regions."); }
 function wsBoxMesh(l,w,h,color){const pivot=new THREE.Group();
   const g=new THREE.BoxGeometry(l,h,w);   // model axes: L→x, H→y(up), W→z(depth)
   const mesh=new THREE.Mesh(g,new THREE.MeshStandardMaterial({color:color??WS_STEEL,metalness:.1,roughness:.62,side:THREE.DoubleSide}));
@@ -4205,7 +4385,9 @@ function wsSelect(id){WS.sel=id;wsRequestRender();
   if(it){document.getElementById("wsSelName").textContent=it.name;wsSyncInputs();
     const bs=document.getElementById("wsBoxSize"); if(bs)bs.style.display=it.box?"block":"none";
     if(it.box)wsBoxSyncUI(it);
-    wsColorSyncUI(it);}
+    wsColorSyncUI(it);
+    if(WS.paint&&WS.paint.on){wsPaintResetBox(it);wsPaintUpdateGizmo();}   // reframe on the part you moved to
+  } else if(WS.paint&&WS.paint.on){wsPaintToggle(false);}                  // clicking off ends painting
   wsRenderParts();
 }
 function wsSyncInputs(){const it=WS.inst.find(x=>x.id===WS.sel);if(!it)return;
@@ -4220,9 +4402,13 @@ function wsDelete(id){const i=WS.inst.findIndex(x=>x.id===id);if(i<0)return;cons
   wsRecomputeExtent();wsRenderParts();}
 function wsDuplicate(id){const it=WS.inst.find(x=>x.id===id);if(!it)return;
   const xform={pos:{x:it.pos.x+WS.gridStep*3,y:it.pos.y,z:it.pos.z},rot:{...it.rot},scale:it.scale};
-  if(it.box){wsAddBox({...it.box},it.name+" copy",xform,it.color);}
-  else if(it.mesh){wsAddMesh(it.mesh.positions,it.name+" copy",xform,it.color,it.mesh.path);}
-  else{const n=wsAdd(JSON.parse(JSON.stringify(it.profile)),it.name+" copy",xform); wsApplyColor(n,it.color,false);}}
+  let n;
+  if(it.box){n=wsAddBox({...it.box},it.name+" copy",xform,it.color);}
+  else if(it.mesh){n=wsAddMesh(it.mesh.positions,it.name+" copy",xform,it.color,it.mesh.path);}
+  else{n=wsAdd(JSON.parse(JSON.stringify(it.profile)),it.name+" copy",xform); wsApplyColor(n,it.color,false);}
+  if(n&&it.paints&&it.paints.length){                       // the copy keeps its painted regions
+    n.paints=it.paints.map(p=>({c:[...p.c],A:[...p.A],B:[...p.B],C:[...p.C],color:p.color})); wsRecolor(n); wsRequestRender(); }
+  return n;}
 function wsRenderParts(){const host=document.getElementById("wsParts");if(!host)return;
   document.getElementById("wsCount").textContent=WS.inst.length?`(${WS.inst.length})`:"";host.innerHTML="";
   WS.inst.forEach(it=>{const row=document.createElement("div");row.className="ws-row"+(it.id===WS.sel?" sel":"");
@@ -4429,15 +4615,17 @@ async function wsRenderLib(){
 }
 
 function wsLoadAssembly(asm){wsRequestRender();if(!asm||!asm.parts){toast("Not a valid assembly file.");return;}
+  const restore=(it,p)=>{ if(!it)return; if(p.paints&&p.paints.length){
+      it.paints=p.paints.map(r=>({c:r.c,A:r.A,B:r.B,C:r.C,color:r.color>>>0&0xffffff})); wsRecolor(it); wsRequestRender(); } };
   asm.parts.forEach(p=>{
-    if(p.kind==="box"||p.box){ wsAddBox(p.box,p.name,{pos:p.pos,rot:p.rot,scale:p.scale},p.color); }
+    if(p.kind==="box"||p.box){ restore(wsAddBox(p.box,p.name,{pos:p.pos,rot:p.rot,scale:p.scale},p.color),p); }
     else if(p.kind==="mesh"||p.meshPositions||p.meshPath){
       if(p.meshPath&&typeof GHLIB!=="undefined"){ GHLIB.fetchSTL(p.meshPath)
-        .then(d=>wsAddMesh(d.positions,p.name,{pos:p.pos,rot:p.rot,scale:p.scale},p.color,p.meshPath))
+        .then(d=>restore(wsAddMesh(d.positions,p.name,{pos:p.pos,rot:p.rot,scale:p.scale},p.color,p.meshPath),p))
         .catch(()=>toast(`Couldn't fetch mesh part “${p.name}” from the repo.`)); }
-      else if(p.meshPositions){ wsAddMesh(new Float32Array(p.meshPositions),p.name,{pos:p.pos,rot:p.rot,scale:p.scale},p.color); }
+      else if(p.meshPositions){ restore(wsAddMesh(new Float32Array(p.meshPositions),p.name,{pos:p.pos,rot:p.rot,scale:p.scale},p.color),p); }
     }
-    else { const it=wsAdd(p.profile,p.name,{pos:p.pos,rot:p.rot,scale:p.scale}); if(p.color!=null)wsApplyColor(it,p.color,false); }
+    else { const it=wsAdd(p.profile,p.name,{pos:p.pos,rot:p.rot,scale:p.scale}); if(p.color!=null)wsApplyColor(it,p.color,false); restore(it,p); }
   });
   if(asm.name)document.getElementById("wsName").value=asm.name;
   wsCommitSession();
@@ -4454,7 +4642,8 @@ function wsExportSTL(){const tris=[],v=new THREE.Vector3();
 function wsSaveAssembly(){if(!WS.inst.length){toast("Add parts first.");return;}
   const name=(document.getElementById("wsName").value||"assembly").trim();
   const asm={schema:"lee3d.assembly/v1",units:"mm",name,category:(projCat.value||"Assemblies").trim(),parts:WS.inst.map(it=>{
-    const base={name:it.name,pos:it.pos,rot:it.rot,scale:it.scale,color:it.color};
+    const base={name:it.name,pos:it.pos,rot:it.rot,scale:it.scale,color:it.color,
+      paints:(it.paints&&it.paints.length)?it.paints.map(p=>({c:p.c,A:p.A,B:p.B,C:p.C,color:p.color})):undefined};
     if(it.box) return {...base,kind:"box",box:it.box};
     if(it.mesh) return {...base,kind:"mesh",                       // repo STL ⇒ tiny path ref; otherwise embed the geometry
       meshPath:it.mesh.path||undefined, meshPositions:it.mesh.path?undefined:Array.from(it.mesh.positions)};
@@ -4471,23 +4660,51 @@ function wsPick(e){const n=wsNDC(e);WS.ray.setFromCamera(n,WS.cameraObj);const m
   const id=hits[0].object.userData.instId;const it=WS.inst.find(x=>x.id===id);return it?{it,point:hits[0].point}:null;}
 function wsGround(e){const n=wsNDC(e);WS.ray.setFromCamera(n,WS.cameraObj);const p=new THREE.Vector3();
   return WS.ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0,1,0),0),p)?p:null;}
+function wsPaintRayPlane(e,plane){
+  const rect=WS.renderer.domElement.getBoundingClientRect();
+  WS.ray.setFromCamera({x:((e.clientX-rect.left)/rect.width)*2-1,y:-((e.clientY-rect.top)/rect.height)*2+1}, WS.cameraObj);
+  const P=new THREE.Vector3(); return WS.ray.ray.intersectPlane(plane,P)?P:null;
+}
 function wsBindPointer(cnv){
   cnv.addEventListener("contextmenu",e=>e.preventDefault());
   cnv.addEventListener("pointerdown",e=>{cnv.setPointerCapture(e.pointerId);WS.last={x:e.clientX,y:e.clientY};WS.downX=e.clientX;WS.downY=e.clientY;WS.moved=false;
     if(e.button===2||e.shiftKey){WS.mode=2;return;}
+    if(WS.paint&&WS.paint.on){                            // drag a box handle to resize/move the selection
+      const ph=wsPaintPick(e);
+      if(ph){ WS.mode=5; const b=WS.paint.box;
+        const anchor=ph.corner===-2
+          ? new THREE.Vector3((b.min[0]+b.max[0])/2,(b.min[1]+b.max[1])/2,(b.min[2]+b.max[2])/2)
+          : new THREE.Vector3(ph.corner&1?b.max[0]:b.min[0], ph.corner&2?b.max[1]:b.min[1], ph.corner&4?b.max[2]:b.min[2]);
+        const nrm=new THREE.Vector3(); WS.cameraObj.getWorldDirection(nrm);
+        const plane=new THREE.Plane().setFromNormalAndCoplanarPoint(nrm,anchor);
+        WS.paint.drag={corner:ph.corner, plane, start:wsPaintRayPlane(e,plane)||anchor, box0:{min:[...b.min],max:[...b.max]}};
+        return; }
+    }
     const hit=wsPick(e);
     if(hit){if(hit.it.id!==WS.sel)wsCommitSession();      // switching parts locks in the last one's edits
       wsSelect(hit.it.id);WS.mode=3;const gp=wsGround(e);WS.moveOff=gp?{x:gp.x-hit.it.pos.x,z:gp.z-hit.it.pos.z}:{x:0,z:0};}
     else WS.mode=1;});
   cnv.addEventListener("pointermove",e=>{if(!WS.mode)return;const dx=e.clientX-WS.last.x,dy=e.clientY-WS.last.y;WS.last={x:e.clientX,y:e.clientY};
     if(!WS.moved && Math.hypot(e.clientX-WS.downX,e.clientY-WS.downY)>4)WS.moved=true;
+    if(WS.mode===5 && WS.paint&&WS.paint.drag){
+      const d=WS.paint.drag, P=wsPaintRayPlane(e,d.plane); if(!P)return; const b=WS.paint.box, MIN=2;
+      if(d.corner===-2){ const ax=P.x-d.start.x,ay=P.y-d.start.y,az=P.z-d.start.z;
+        b.min=[d.box0.min[0]+ax,d.box0.min[1]+ay,d.box0.min[2]+az]; b.max=[d.box0.max[0]+ax,d.box0.max[1]+ay,d.box0.max[2]+az]; }
+      else{
+        if(d.corner&1)b.max[0]=Math.max(P.x,b.min[0]+MIN); else b.min[0]=Math.min(P.x,b.max[0]-MIN);
+        if(d.corner&2)b.max[1]=Math.max(P.y,b.min[1]+MIN); else b.min[1]=Math.min(P.y,b.max[1]-MIN);
+        if(d.corner&4)b.max[2]=Math.max(P.z,b.min[2]+MIN); else b.min[2]=Math.min(P.z,b.max[2]-MIN);
+      }
+      wsPaintUpdateGizmo(); wsRequestRender(); return;
+    }
     if(WS.mode===1){WS.cam.az-=dx*0.008;WS.cam.pol-=dy*0.008;wsUpdateCam();}
     else if(WS.mode===2){const s=WS.cam.rad*0.0016,fwd=new THREE.Vector3();WS.cameraObj.getWorldDirection(fwd);
       const right=new THREE.Vector3().crossVectors(fwd,new THREE.Vector3(0,1,0)).normalize();
       const upv=new THREE.Vector3().crossVectors(right,fwd).normalize();
       WS.target.addScaledVector(right,-dx*s);WS.target.addScaledVector(upv,dy*s);wsUpdateCam();}
-    else if(WS.mode===3){const it=WS.inst.find(x=>x.id===WS.sel),gp=wsGround(e);if(it&&gp){it.pos.x=gp.x-WS.moveOff.x;it.pos.z=gp.z-WS.moveOff.z;wsApply(it);wsSyncInputs();}}});
-  const end=()=>{ if(WS.mode===1 && !WS.moved && WS.sel!=null){wsCommitSession();wsSelect(null);}  // tap empty space = click off, colours locked in
+    else if(WS.mode===3){const it=WS.inst.find(x=>x.id===WS.sel),gp=wsGround(e);if(it&&gp){it.pos.x=gp.x-WS.moveOff.x;it.pos.z=gp.z-WS.moveOff.z;wsApply(it);wsSyncInputs();if(WS.paint&&WS.paint.on)wsPaintUpdateGizmo();}}});
+  const end=()=>{ if(WS.paint)WS.paint.drag=null;
+    if(WS.mode===1 && !WS.moved && WS.sel!=null){wsCommitSession();wsSelect(null);}  // tap empty space = click off
     WS.mode=0;};
   cnv.addEventListener("pointerup",end);cnv.addEventListener("pointerleave",end);
   cnv.addEventListener("wheel",e=>{e.preventDefault();WS.cam.rad*=(1+Math.sign(e.deltaY)*0.09);wsUpdateCam();},{passive:false});
@@ -4517,6 +4734,54 @@ document.getElementById("wsRecenter").onclick=wsRecenter;
 document.getElementById("wsZoomIn").onclick=()=>{WS.cam.rad*=0.8;wsUpdateCam();};
 document.getElementById("wsZoomOut").onclick=()=>{WS.cam.rad*=1.25;wsUpdateCam();};
 
+/* HOLOGRAPHIC full-model preview — pops the whole assembly up as a slowly turning cyan hologram. */
+const HOLO={renderer:null,scene:null,cam:null,raf:0,group:null,t:0,radius:300};
+function openHologram(){
+  if(!WS.inst.length){toast("Add parts to the workshop first — then project them as a hologram.");return;}
+  const ov=document.getElementById("holoOverlay"); ov.classList.add("on"); ov.setAttribute("aria-hidden","false");
+  const cnv=document.getElementById("holoCanvas");
+  if(!HOLO.renderer){
+    HOLO.renderer=new THREE.WebGLRenderer({canvas:cnv,antialias:true,alpha:true});
+    HOLO.scene=new THREE.Scene();
+    HOLO.cam=new THREE.PerspectiveCamera(45,1,0.1,500000);
+    HOLO.scene.add(new THREE.HemisphereLight(0x9fd8ff,0x0a1018,1.15));
+    const dl=new THREE.DirectionalLight(0x8fe0ff,0.75); dl.position.set(1,2,1.5); HOLO.scene.add(dl);
+  }
+  if(HOLO.group){HOLO.scene.remove(HOLO.group);
+    HOLO.group.traverse(o=>{if(o.geometry)o.geometry.dispose();if(o.material&&o.material.dispose)o.material.dispose();});}
+  HOLO.group=new THREE.Group();
+  const box=new THREE.Box3();
+  for(const it of WS.inst)for(const m of it.meshes){
+    m.updateWorldMatrix(true,false);
+    const g=m.geometry.clone(); g.applyMatrix4(m.matrixWorld);
+    const skin=new THREE.Mesh(g,new THREE.MeshStandardMaterial({color:0x2aa8c8,emissive:0x0b3a49,
+      emissiveIntensity:0.9,metalness:0.2,roughness:0.35,transparent:true,opacity:0.8,side:THREE.DoubleSide}));
+    const wire=new THREE.Mesh(g,new THREE.MeshBasicMaterial({color:0x7fecff,wireframe:true,transparent:true,opacity:0.12}));
+    HOLO.group.add(skin); HOLO.group.add(wire); box.expandByObject(skin);
+  }
+  HOLO.scene.add(HOLO.group);
+  const c=box.getCenter(new THREE.Vector3()), sz=box.getSize(new THREE.Vector3());
+  HOLO.group.position.set(-c.x,-c.y,-c.z);
+  HOLO.radius=Math.max(sz.x,sz.y,sz.z)*1.7||300;
+  document.getElementById("holoTitle").textContent=((projName&&projName.value)||"MODEL").toUpperCase()+"  ·  HOLOGRAM";
+  holoResize(); cancelAnimationFrame(HOLO.raf); HOLO.t=0; holoLoop();
+}
+function holoResize(){ if(!HOLO.renderer)return; const cnv=document.getElementById("holoCanvas");
+  const w=cnv.clientWidth||window.innerWidth, h=cnv.clientHeight||window.innerHeight;
+  HOLO.renderer.setPixelRatio(Math.min(2,window.devicePixelRatio||1)); HOLO.renderer.setSize(w,h,false);
+  HOLO.cam.aspect=w/h; HOLO.cam.updateProjectionMatrix(); }
+function holoLoop(){ HOLO.raf=requestAnimationFrame(holoLoop); HOLO.t+=0.006;
+  const r=HOLO.radius, az=HOLO.t, pol=1.12;
+  HOLO.cam.position.set(Math.sin(az)*Math.sin(pol)*r, Math.cos(pol)*r+r*0.34, Math.cos(az)*Math.sin(pol)*r);
+  HOLO.cam.lookAt(0,0,0); HOLO.renderer.render(HOLO.scene,HOLO.cam); }
+function closeHologram(){ cancelAnimationFrame(HOLO.raf); HOLO.raf=0;
+  const ov=document.getElementById("holoOverlay"); ov.classList.remove("on"); ov.setAttribute("aria-hidden","true"); }
+document.getElementById("wsHolo").onclick=openHologram;
+document.getElementById("holoClose").onclick=closeHologram;
+document.getElementById("holoOverlay").addEventListener("click",e=>{if(e.target.id==="holoOverlay")closeHologram();});
+window.addEventListener("keydown",e=>{if(e.key==="Escape"&&document.getElementById("holoOverlay").classList.contains("on"))closeHologram();});
+window.addEventListener("resize",()=>{if(document.getElementById("holoOverlay").classList.contains("on"))holoResize();});
+
 /* box + colour + undo wiring */
 document.getElementById("wsAddBox").onclick=()=>wsAddBox();
 ["wsBoxL","wsBoxW","wsBoxH"].forEach(id=>document.getElementById(id).addEventListener("change",()=>{
@@ -4529,16 +4794,22 @@ document.getElementById("wsAddBox").onclick=()=>wsAddBox();
 let wsPickStart=null;
 const wsColorEl=document.getElementById("wsColor");
 wsColorEl.addEventListener("input",()=>{const it=wsSelItem(); if(!it)return;
+  if(WS.paint&&WS.paint.on){wsPaintSetColor(parseInt(wsColorEl.value.slice(1),16));return;}
   if(wsPickStart==null)wsPickStart=it.color; wsApplyColor(it,parseInt(wsColorEl.value.slice(1),16),false);});   // live preview
 wsColorEl.addEventListener("change",()=>{const it=wsSelItem(); if(!it){wsPickStart=null;return;}
+  if(WS.paint&&WS.paint.on){wsPickStart=null;return;}
   const prev=wsPickStart; wsPickStart=null;
   if(prev!=null && prev!==it.color)wsPushUndo(()=>wsApplyColor(it,prev,false));   // one undo step for the whole drag
   wsColorSyncUI(it);});
 document.getElementById("wsHex").addEventListener("change",e=>{const it=wsSelItem(); if(!it)return;
   const h=e.target.value.trim().replace(/^#/,""); if(!/^[0-9a-fA-F]{6}$/.test(h)){wsColorSyncUI(it);toast("Enter a 6-digit hex colour, e.g. #C81E2A.");return;}
+  if(WS.paint&&WS.paint.on){wsPaintSetColor(parseInt(h,16));return;}
   wsApplyColor(it,parseInt(h,16),true);});
 document.getElementById("wsColorReset").onclick=()=>{const it=wsSelItem(); if(it)wsApplyColor(it,WS_STEEL,true);};
 document.getElementById("wsUndo").onclick=wsUndo;
+document.getElementById("wsPaintBtn").onclick=()=>wsPaintToggle();
+document.getElementById("wsPaintGo").onclick=wsPaintApply;
+document.getElementById("wsPaintClear").onclick=wsPaintClearAll;
 
 /* =========================================================================
    CLOUD DATABASE — Supabase (Postgres via PostgREST, no SDK / zero-build)
