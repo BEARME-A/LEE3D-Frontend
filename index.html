@@ -1401,17 +1401,21 @@ function embossHull(p,positions,indices,crisp,wall){
    inner wall (joined by the rim when the underside is open) — anything else the field threw
    off is a stray scrap rattling around in there. Components are compared by size, so both
    walls survive while scraps are dropped. */
-function dropStrayShells(positions,indices){
+function dropStrayShells(positions,indices,expect){
   const nTri=indices.length/3; if(!nTri)return indices;
+  expect=Math.max(1,expect||1);
   const par=new Int32Array(positions.length/3).fill(-1);
   const find=x=>{while(par[x]>=0)x=par[x];return x;};
   const uni=(a,b)=>{a=find(a);b=find(b);if(a!==b)par[a]=b;};
   for(let q=0;q<indices.length;q+=3){uni(indices[q],indices[q+1]);uni(indices[q+1],indices[q+2]);}
   const cnt=new Map();
   for(let q=0;q<indices.length;q+=3){const r=find(indices[q]); cnt.set(r,(cnt.get(r)||0)+1);}
-  if(cnt.size<2)return indices;
-  let big=0; for(const v of cnt.values())if(v>big)big=v;
-  const keep=new Set(); for(const[r,v]of cnt)if(v>=big*0.15)keep.add(r);   // both walls, no scraps
+  if(cnt.size<=expect)return indices;
+  // A frame is a known number of pieces: one when the underside is open (skin, wall and the rim
+  // that joins them are all one surface), two when it is sealed (skin and wall separately).
+  // Keep exactly those, biggest first. Anything else is scenery, however big it grew.
+  const order=[...cnt.entries()].sort((a,b)=>b[1]-a[1]).slice(0,expect);
+  const keep=new Set(order.map(e=>e[0]));
   if(keep.size===cnt.size)return indices;
   const out=[];
   for(let q=0;q<indices.length;q+=3)if(keep.has(find(indices[q])))out.push(indices[q],indices[q+1],indices[q+2]);
@@ -1878,7 +1882,7 @@ function makeVisualHull(p){
       positions=new Float32Array(V2.length*3);
       for(let k=0;k<V2.length;k++){positions[k*3]=V2[k][0];positions[k*3+1]=V2[k][1];positions[k*3+2]=V2[k][2];}
     }
-    indices=dropStrayShells(positions,indices);        // no scraps rattling around inside
+    indices=dropStrayShells(positions,indices,trimmed?1:2);   // exactly the frame, nothing else
     vol=Math.abs(facing(indices));                     // now the SHELL's material, not the lump
   }
   return {positions,indices,volume:Math.abs(vol),hollow:(hollow&&wall>0),openBottom:openedBottom};
