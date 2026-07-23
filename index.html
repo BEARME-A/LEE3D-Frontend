@@ -1648,6 +1648,24 @@ function makeVisualHull(p){
     const border=(i===0||j===0||k===0||i===nx||j===ny||k===nz);
     field[idx(i,j,k)] = border ? BIG : F(px(i),py(j),pz(k));   // keep the shell closed
   }
+  /* NO GUTS. Anywhere the field happens to enclose a pocket of air — where traced cuts cross,
+     where a fold closes over on itself — the mesher faithfully builds a surface around it, and
+     those become the slabs and boxes rattling about inside the frame. A frame should be its
+     outer skin and the wall behind it, nothing else. So flood the OUTSIDE air inward from the
+     border first; any air the flood never reaches is a sealed pocket, and it gets filled in as
+     solid. What's left is one clean cavity you can see into, and no interior scenery. */
+  {
+    const N=NX*NY*NZ, out=new Uint8Array(N), st=[];
+    for(let i=0;i<NX;i++)for(let j=0;j<NY;j++)for(let k=0;k<NZ;k++){
+      if(i===0||j===0||k===0||i===nx||j===ny||k===nz){const o=idx(i,j,k); if(field[o]>0&&!out[o]){out[o]=1;st.push(o);}}}
+    while(st.length){
+      const o=st.pop(), k=o%NZ, j=((o-k)/NZ)%NY, i=((o-k)/NZ-j)/NY;
+      const go=(i2,j2,k2)=>{ if(i2<0||j2<0||k2<0||i2>=NX||j2>=NY||k2>=NZ)return;
+        const q=idx(i2,j2,k2); if(!out[q]&&field[q]>0){out[q]=1;st.push(q);} };
+      go(i-1,j,k);go(i+1,j,k);go(i,j-1,k);go(i,j+1,k);go(i,j,k-1);go(i,j,k+1);
+    }
+    for(let o=0;o<N;o++) if(field[o]>0 && !out[o]) field[o]=-cell*0.5;   // sealed pocket -> solid
+  }
   const inside=(i,j,k)=>field[idx(i,j,k)]<0;
   const grad=(x,y,z)=>{                       // which way the surface faces here
     const e=Math.min(hx,hy,hz)*0.35;
