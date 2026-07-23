@@ -537,6 +537,8 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
         <div class="hint">Only touch these if you want to. Higher detail = smoother but slower.</div>
         <div class="field"><label>Frame thickness <span class="val"><span id="vWall">1.8</span> mm</span></label><input type="range" id="sWall" min="0.4" max="12" value="1.8" step="0.1"></div>
         <div class="hint" style="margin:-2px 0 4px">How thick the frame is. Nothing pressed in is allowed to go deeper than this — a 1&nbsp;mm scoop needs more than 1&nbsp;mm of frame. Tick <b>cut clean through</b> on a feature when you actually want a hole.</div>
+        <label style="display:flex;align-items:center;gap:7px;font-size:11px;margin:2px 0 6px;cursor:pointer"><input type="checkbox" id="noDetail"> Plain frame — ignore traced detail</label>
+        <div class="hint" style="margin:-2px 0 6px">Tick this and the model is just the outline you traced: no scoops, panel lines or ribbing pressed into it. Windows and other <b>cut clean through</b> holes still cut.</div>
         <label style="display:flex;align-items:center;gap:7px;font-size:11px;margin:2px 0 6px;cursor:pointer"><input type="checkbox" id="wallPerFace"> Different thickness per face</label>
         <div id="wallFaces" style="display:none">
           <div class="field"><label>Top / roof <span class="val"><span id="vWallTop">1.8</span> mm</span></label><input type="range" id="sWallTop" min="0.4" max="12" value="1.8" step="0.1"></div>
@@ -994,6 +996,7 @@ function sampleMask(f,u,v){
   return a+(c-a)*ty;
 }
 function applyFeatures(p,outer,inner,nrm){
+  if(p.plainFrame)return 0;                        // "Plain frame" — press nothing into the skin
   const F=p.features; if(!F||!F.length)return 0;
   let x0=Infinity,x1=-Infinity,y0=Infinity,y1=-Infinity,z0=Infinity,z1=-Infinity;
   for(const P of outer){
@@ -1338,6 +1341,7 @@ function viewSkinVerts(positions,indices,axis){
 function embossHull(p,positions,indices,crisp,wall){
   // a cut-through is only a real hole when it goes INWARD; "through" with a positive depth is
   // a raised bump, so it gets stamped like any other detail (same rule the field uses)
+  if(p.plainFrame) return 0;                       // "Plain frame" — press nothing into the skin
   const list=(p.features||[]).filter(f=>f.depth && !(f.through && f.depth<0));
   if(!list.length || crisp<=0.001) return 0;
   const n=positions.length/3;
@@ -1918,7 +1922,7 @@ const PRESETS={
   suv   :{len:210,nose:38,cowl:56,roof:84,roofPos:.5 ,tail:74,sill:14,nw:26,mw:52,wp:.5 ,tw:48,round:2.2},
 };
 const S={...PRESETS.hotrod, wall:1.8, st:72, seg:56, opacity:.55, mode:"projection", sepBottom:true, shape:"loft", revShape:"sphere", revSize:50, widMM:0, hgtMM:0, widK:1, hgtK:1, hullCrisp:0.5,
-  wallTop:1.8, wallSide:1.8, wallBottom:1.8, wallPerFace:false, hullHollow:true /* a frame is always a shell */};
+  wallTop:1.8, wallSide:1.8, wallBottom:1.8, wallPerFace:false, noDetail:false, hullHollow:true /* a frame is always a shell */};
 // NOTE: revolve primitives (sphere/cylinder/dome/cone) are retired from the UI — this tool
 // is for IMPORTED shapes. makeRevolve() stays so old saved files still load.
 let traced={top:null,bottom:null,width:null,widthBot:null,section:null,sections:null,frontHull:null,rearHull:null,sidePoly:null,topPoly:null,frontPoly:null,bottomPoly:null,natWid:null,natHgt:null};
@@ -2001,13 +2005,14 @@ function currentProfile(){
   return {
     schema:"lee3d.profile/v1", units:"mm", name:projName.value||"untitled-object", category:(projCat.value||"uncategorized").trim(),
     length:S.len, stations:S.st, arcSegments:S.seg, roofFlatness:S.round,
-    wallThickness:S.wall, wallPerFace:S.wallPerFace, hullHollow:true,
+    wallThickness:S.wall, wallPerFace:S.wallPerFace, noDetail:!!S.noDetail, hullHollow:true,
     wallTop:S.wallPerFace?S.wallTop:S.wall, wallSide:S.wallPerFace?S.wallSide:S.wall, wallBottom:S.wallPerFace?S.wallBottom:S.wall,
     topProfile:SZ.topP, bottomProfile:SZ.botP, widthProfile:SZ.widP, widthBottomProfile:SZ.widBotP,
     section:buildSection(),
     sections:(traced.sections&&traced.sections.length?traced.sections:null),
     mode:S.mode, frontHull:(S.mode==="projection"?traced.frontHull:null), sepBottom:S.sepBottom,
     sidePoly:traced.sidePoly, topPoly:traced.topPoly, frontPoly:traced.frontPoly, hullCrisp:S.hullCrisp,
+    plainFrame:!!S.noDetail,
     closedBottom:!!traced.bottomPoly,
     hullRes:(qFast?hullDragRes:null), hullFast:qFast,   // self-tuning mid-drag, full on release
     sculpt:(SC.off && SC.off.length)?Array.from(SC.off):null,
@@ -3655,6 +3660,11 @@ function syncWallUI(){
   lab("vWallTop",S.wallTop);lab("vWallSide",S.wallSide);lab("vWallBot",S.wallBottom);
   const box=document.getElementById("wallFaces"); if(box)box.style.display=S.wallPerFace?"":"none";
 }
+document.getElementById("noDetail").addEventListener("change",e=>{
+  S.noDetail=e.target.checked; requestRebuild();
+  toast(S.noDetail?"Plain frame — the traced detail is off. Cut-through holes still cut."
+                  :"Traced detail is back on.");
+});
 document.getElementById("wallPerFace").addEventListener("change",e=>{
   S.wallPerFace=e.target.checked;
   if(!S.wallPerFace)S.wallTop=S.wallSide=S.wallBottom=S.wall;
@@ -3766,6 +3776,8 @@ function applyProfile(p){
   if(p.wallThickness)S.wall=p.wallThickness;
   S.wallTop=p.wallTop??S.wall; S.wallSide=p.wallSide??S.wall; S.wallBottom=p.wallBottom??S.wall;
   if(p.wallPerFace!=null)S.wallPerFace=!!p.wallPerFace;
+  if(p.noDetail!=null){S.noDetail=!!p.noDetail;
+    const nd=document.getElementById("noDetail"); if(nd)nd.checked=S.noDetail;}
   if(typeof syncWallUI==="function")syncWallUI();
   // NOTE: hullHollow is deliberately NOT restored from the file. A frame is always a shell,
   // and an old saved profile carrying hullHollow:false used to switch the session to a solid
