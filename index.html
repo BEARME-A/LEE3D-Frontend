@@ -1327,7 +1327,7 @@ function viewSkinVerts(positions,indices,axis){
    that view is touched, then backs off any push that would turn a triangle inside-out (that tearing
    is what opened holes in the shell). Cut-throughs are NOT stamped — a real hole is cut in the
    field, and it already is. */
-function embossHull(p,positions,indices,crisp){
+function embossHull(p,positions,indices,crisp,wall){
   // a cut-through is only a real hole when it goes INWARD; "through" with a positive depth is
   // a raised bump, so it gets stamped like any other detail (same rule the field uses)
   const list=(p.features||[]).filter(f=>f.depth && !(f.through && f.depth<0));
@@ -1356,7 +1356,10 @@ function embossHull(p,positions,indices,crisp){
                  : (v==="rear")   ? !!S.inner[k] : !!S.outer[k];
       if(!seen){ keep.push([k,nrm[k]]); nrm[k]=[0,0,0]; }
     }
-    hits+=applyFeatures({...p,features:[{...f,depth:f.depth*crisp}]},pts,spare,nrm);
+    // an indent may never reach the inner wall, or it would open a hole into the frame
+    const lim=Math.max(0.05,(wall||2)*0.5);
+    const dep=f.depth<0?Math.max(f.depth,-lim):Math.min(f.depth,lim*2);
+    hits+=applyFeatures({...p,features:[{...f,depth:dep*crisp}]},pts,spare,nrm);
     for(const [k,v2] of keep)nrm[k]=v2;              // restore for the next feature
   }
   // back off anything that would tear the surface
@@ -1381,6 +1384,26 @@ function embossHull(p,positions,indices,crisp){
     put();
   }
   return hits;
+}
+/* Nothing should float loose inside the frame. A finished shell is its outer skin plus its
+   inner wall (joined by the rim when the underside is open) — anything else the field threw
+   off is a stray scrap rattling around in there. Components are compared by size, so both
+   walls survive while scraps are dropped. */
+function dropStrayShells(positions,indices){
+  const nTri=indices.length/3; if(!nTri)return indices;
+  const par=new Int32Array(positions.length/3).fill(-1);
+  const find=x=>{while(par[x]>=0)x=par[x];return x;};
+  const uni=(a,b)=>{a=find(a);b=find(b);if(a!==b)par[a]=b;};
+  for(let q=0;q<indices.length;q+=3){uni(indices[q],indices[q+1]);uni(indices[q+1],indices[q+2]);}
+  const cnt=new Map();
+  for(let q=0;q<indices.length;q+=3){const r=find(indices[q]); cnt.set(r,(cnt.get(r)||0)+1);}
+  if(cnt.size<2)return indices;
+  let big=0; for(const v of cnt.values())if(v>big)big=v;
+  const keep=new Set(); for(const[r,v]of cnt)if(v>=big*0.15)keep.add(r);   // both walls, no scraps
+  if(keep.size===cnt.size)return indices;
+  const out=[];
+  for(let q=0;q<indices.length;q+=3)if(keep.has(find(indices[q])))out.push(indices[q],indices[q+1],indices[q+2]);
+  return out.length?out:indices;
 }
 /* THE UNDERSIDE — which triangles an open-bottom shell should drop.
    Not "faces downward and sits low": on a real car body that also catches wheel-arch ceilings,
@@ -1767,11 +1790,22 @@ function makeVisualHull(p){
   let vol=facing(indices);
   if(vol<0){for(let q=0;q<indices.length;q+=3){const t=indices[q+1];indices[q+1]=indices[q+2];indices[q+2]=t;}vol=-vol;}
 
-  // traced detail, stamped on the face it was drawn on (the smooth body's rule)
-  if(crisp>0.001 && p.features && p.features.length){ embossHull(p,positions,indices,crisp); vol=Math.abs(facing(indices)); }
-
-  // sculpt touch-ups (recorded strokes), applied to the outer surface before it's hollowed
+  // Sculpt touch-ups are a change to the SHAPE, so they happen first and the inner wall follows.
   if(p.sculptStrokes && p.sculptStrokes.length){ applyHullStrokes(positions,indices,p.sculptStrokes); vol=Math.abs(facing(indices)); }
+
+  /* The clean shape, kept aside. Traced detail is SURFACE decoration on the outside of the
+     frame — it must not appear inside. The inner wall is built from this copy, so the cavity
+     stays a smooth empty shell: no ribbing, no ridges, no guts, whatever the drawing shows. */
+  const cleanPos=new Float32Array(positions);
+
+  // traced detail, stamped on the face it was drawn on (outer skin only)
+  // The inner wall is built from THIS copy — the shape before any drawing is stamped on it —
+  // so the inside stays a clean smooth frame. Copying the detailed surface inward is what put
+  // a rib on the inside for every rib on the outside.
+  let plainSkin=positions;
+  if(crisp>0.001 && p.features && p.features.length){
+    plainSkin=new Float32Array(positions);
+    embossHull(p,positions,indices,crisp,wall); vol=Math.abs(facing(indices)); }
 
   /* HOLLOW IT.
      Trying to carve the void out of the distance field needs a grid fine enough to SEE a
@@ -1794,7 +1828,7 @@ function makeVisualHull(p){
     }
     const trimmed = outerIdx!==indices; openedBottom=trimmed;   // did we actually open the underside?
     const vc=V.length;
-    const inner=innerOffsets(positions,outerIdx,wall,vc);
+    const inner=innerOffsets(plainSkin,outerIdx,wall,vc);   // clean inside, no stamped detail
     const pos2=new Float32Array(vc*6); pos2.set(positions,0); pos2.set(inner,vc*3);
     const idx2=Array.from(outerIdx);
     for(let q=0;q<outerIdx.length;q+=3)idx2.push(vc+outerIdx[q], vc+outerIdx[q+2], vc+outerIdx[q+1]);  // wound inward
@@ -1814,6 +1848,7 @@ function makeVisualHull(p){
       positions=new Float32Array(V2.length*3);
       for(let k=0;k<V2.length;k++){positions[k*3]=V2[k][0];positions[k*3+1]=V2[k][1];positions[k*3+2]=V2[k][2];}
     }
+    indices=dropStrayShells(positions,indices);        // no scraps rattling around inside
     vol=Math.abs(facing(indices));                     // now the SHELL's material, not the lump
   }
   return {positions,indices,volume:Math.abs(vol),hollow:(hollow&&wall>0),openBottom:openedBottom};
