@@ -50,7 +50,7 @@ const NAMES = ["outlineEnvelope", "anchorPxPerMm", "makeRevolve", "pointInPoly",
   "rasterRegions", "otsuThreshold", "lumOf", "regionOutline", "dilateMask", "labelBlobs", "outlineBBox", "sdPoly",
   "wallSpec", "wallAt", "minWall",
   "connDiameter", "connWarn", "connPoly", "simplifyPoly",
-  "applyHullStrokes", "applyStroke", "hullVertexNormals", "hullAdjacency", "bottomSkinTris", "innerOffsets", "embossHull", "sampleMask", "distToPoly", "viewUV"];
+  "applyHullStrokes", "applyStroke", "hullVertexNormals", "hullAdjacency", "bottomSkinTris", "innerOffsets", "embossHull", "viewSkinVerts", "sampleMask", "distToPoly", "viewUV"];
 const found = [];
 const src = PRELUDE + NAMES.map(n => {
   try { const s = grab(n); found.push(n); return s; }
