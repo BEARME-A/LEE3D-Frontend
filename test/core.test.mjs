@@ -1228,6 +1228,27 @@ t("mobile: the feature panel becomes a bottom sheet a thumb can reach", () => {
   ok(/#featPanel\{[^}]*bottom:0/.test(m.replace(/\s+/g, "")), "the inspector should dock to the bottom");
   ok(/\.ws-panel\{[^}]*bottom:0/.test(m.replace(/\s+/g, "")), "so should the workshop panel");
 });
+t("mobile: every file picker can actually be opened on a phone", () => {
+  // iOS Safari will not open the file picker for an input that is display:none, which is what
+  // the `hidden` attribute does — on an iPhone the button simply did nothing. Each picker must
+  // stay rendered and be driven by a real <label for=...>, which activates it natively.
+  const inputs = [...html.matchAll(/<input type="file"[^>]*>/g)].map(m => m[0]);
+  ok(inputs.length > 0, "there are file pickers to check");
+  for (const tag of inputs) {
+    const id = (tag.match(/id="([^"]+)"/) || [])[1];
+    ok(!/\shidden(\s|>|=)/.test(tag), `${id}: must not be hidden (iOS refuses to open it)`);
+    const label = new RegExp(`<label[^>]*for="${id}"`).test(html);
+    ok(label, `${id}: needs a <label for="${id}"> so a tap opens it natively`);
+  }
+  // and no scripted .click() on a file input, which would ask iOS for the picker twice
+  for (const id of ["sheetFile", "imgFile", "jsonFile", "wsFile"])
+    ok(!new RegExp(`${id}"?\\)?\\.click\\(\\)`).test(script), `${id}: no scripted click`);
+});
+t("mobile: a photo with no MIME type is still accepted", () => {
+  // files picked from the iPhone Files app often arrive with an empty type
+  const fn = script.slice(script.indexOf("function loadSheet("));
+  ok(/!file\.type/.test(fn.slice(0, 900)), "an empty type must not be rejected outright");
+});
 t("mobile: the viewport meta is set, or none of this applies", () => {
   ok(/name="viewport"[^>]*width=device-width/.test(html), "without this a phone renders it at desktop width");
 });
