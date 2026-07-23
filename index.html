@@ -1291,13 +1291,41 @@ function applyHullStrokes(positions,indices,strokes){
   const adj=strokes.some(s=>s.mode==="smooth")?hullAdjacency(positions,indices):null;
   for(const s of strokes)applyStroke(positions,nrm,adj,s,vc);
 }
+/* Which vertices are actually SEEN from a view — the outermost skin along that axis.
+   The smooth body could stamp any vertex facing the view, because a swept loft has no inside:
+   every side-facing point is on the outside. The hull does have insides — the walls inside a
+   wheel arch face sideways too, and so does the inner shell — so "faces the view" alone pressed
+   the drawing onto surfaces buried inside the model. This is a depth buffer along the view axis:
+   a vertex counts as seen only where it is the nearest surface to the viewer in its column. */
+function viewSkinVerts(positions,indices,axis){
+  const n=positions.length/3;
+  const A=axis, U=(axis+1)%3, V=(axis+2)%3;
+  let u0=1e30,u1=-1e30,v0=1e30,v1=-1e30;
+  for(let k=0;k<n;k++){const u=positions[k*3+U],v=positions[k*3+V];
+    if(u<u0)u0=u; if(u>u1)u1=u; if(v<v0)v0=v; if(v>v1)v1=v;}
+  const su=Math.max(1e-6,u1-u0), sv=Math.max(1e-6,v1-v0);
+  const G=96, cu=G/su, cv=G/sv;
+  const hi=new Float64Array(G*G).fill(-Infinity), lo=new Float64Array(G*G).fill(Infinity);
+  const cell=k=>{
+    const i=Math.max(0,Math.min(G-1,Math.floor((positions[k*3+U]-u0)*cu)));
+    const j=Math.max(0,Math.min(G-1,Math.floor((positions[k*3+V]-v0)*cv)));
+    return j*G+i;};
+  for(let k=0;k<n;k++){const o=cell(k), a=positions[k*3+A];
+    if(a>hi[o])hi[o]=a; if(a<lo[o])lo[o]=a;}
+  const tol=Math.max(su,sv)/G*1.5;
+  const outer=new Uint8Array(n), inner=new Uint8Array(n);
+  for(let k=0;k<n;k++){const o=cell(k), a=positions[k*3+A];
+    if(a>=hi[o]-tol)outer[k]=1;                      // nearest surface from the + side
+    if(a<=lo[o]+tol)inner[k]=1;}                     // nearest surface from the - side
+  return {outer,inner};
+}
 /* Stamp traced detail onto the BUILT surface, on the face it was drawn on.
    In the distance field a feature moves every surface at that spot, whichever way it faces, so
    side-view detail got pressed into the wheel-arch ceilings, the floor and the inside of the
-   shell — the model came out ribbed everywhere instead of only on its sides. The smooth body
-   never had that problem because it stamps detail per vertex and skips any vertex not facing
-   the view. This runs that same applyFeatures pass over the hull's own vertices, so both modes
-   emboss identically. Cut-throughs are NOT stamped here — a real hole has to be cut in the
+   shell — the model came out ribbed everywhere instead of only on its sides. This runs the smooth
+   body's own applyFeatures pass over the hull's vertices, gated so only the outermost skin for
+   that view is touched, then backs off any push that would turn a triangle inside-out (that tearing
+   is what opened holes in the shell). Cut-throughs are NOT stamped — a real hole is cut in the
    field, and it already is. */
 function embossHull(p,positions,indices,crisp){
   // a cut-through is only a real hole when it goes INWARD; "through" with a positive depth is
@@ -1305,16 +1333,53 @@ function embossHull(p,positions,indices,crisp){
   const list=(p.features||[]).filter(f=>f.depth && !(f.through && f.depth<0));
   if(!list.length || crisp<=0.001) return 0;
   const n=positions.length/3;
+  const before=new Float32Array(positions);
   const nf=hullVertexNormals(positions,indices);
+  const skin={};                                     // view axis -> which vertices that view can see
+  for(const f of list){ const v=f.view||"side", ax=(v==="side")?1:(v==="top"||v==="bottom")?2:0;
+    if(!skin[ax])skin[ax]=viewSkinVerts(positions,indices,ax); }
   const pts=new Array(n), nrm=new Array(n), spare=new Array(n);
   for(let k=0;k<n;k++){
     pts[k]=[positions[k*3],positions[k*3+1],positions[k*3+2]];
     nrm[k]=[nf[k*3],nf[k*3+1],nf[k*3+2]];
-    spare[k]=[0,0,0];                                   // the inner wall is built later, from this
+    spare[k]=[0,0,0];                                // the inner wall is built later, from this
   }
-  const faded=list.map(f=>({...f,depth:f.depth*crisp}));   // detail still fades toward Smooth
-  const hits=applyFeatures({...p,features:faded},pts,spare,nrm);
-  for(let k=0;k<n;k++){positions[k*3]=pts[k][0];positions[k*3+1]=pts[k][1];positions[k*3+2]=pts[k][2];}
+  let hits=0;
+  for(const f of list){
+    const v=f.view||"side", ax=(v==="side")?1:(v==="top"||v==="bottom")?2:0, S=skin[ax];
+    // hide every vertex this view cannot see, by zeroing its normal — applyFeatures skips those
+    const keep=[];
+    for(let k=0;k<n;k++){
+      const seen = (v==="side")   ? (S.outer[k]||S.inner[k])      // both flanks are outside skin
+                 : (v==="top")    ? !!S.outer[k]
+                 : (v==="bottom") ? !!S.inner[k]
+                 : (v==="rear")   ? !!S.inner[k] : !!S.outer[k];
+      if(!seen){ keep.push([k,nrm[k]]); nrm[k]=[0,0,0]; }
+    }
+    hits+=applyFeatures({...p,features:[{...f,depth:f.depth*crisp}]},pts,spare,nrm);
+    for(const [k,v2] of keep)nrm[k]=v2;              // restore for the next feature
+  }
+  // back off anything that would tear the surface
+  const scale=new Float32Array(n).fill(1);
+  const put=()=>{for(let k=0;k<n;k++){const s=scale[k];
+    positions[k*3]  =before[k*3]  +(pts[k][0]-before[k*3])*s;
+    positions[k*3+1]=before[k*3+1]+(pts[k][1]-before[k*3+1])*s;
+    positions[k*3+2]=before[k*3+2]+(pts[k][2]-before[k*3+2])*s;}};
+  put();
+  for(let pass=0;pass<10;pass++){
+    let bad=0;
+    for(let q=0;q<indices.length;q+=3){
+      const a=indices[q],b=indices[q+1],c=indices[q+2];
+      const nb=(P0)=>{const ux=P0[b*3]-P0[a*3],uy=P0[b*3+1]-P0[a*3+1],uz=P0[b*3+2]-P0[a*3+2];
+        const vx=P0[c*3]-P0[a*3],vy=P0[c*3+1]-P0[a*3+1],vz=P0[c*3+2]-P0[a*3+2];
+        return [uy*vz-uz*vy,uz*vx-ux*vz,ux*vy-uy*vx];};
+      const f1=nb(before), f2=nb(positions);
+      if(f1[0]*f2[0]+f1[1]*f2[1]+f1[2]*f2[2]<=0){bad++;
+        scale[a]*=0.5; scale[b]*=0.5; scale[c]*=0.5;}
+    }
+    if(!bad)break;
+    put();
+  }
   return hits;
 }
 /* THE UNDERSIDE — which triangles an open-bottom shell should drop.
@@ -1367,6 +1432,36 @@ function bottomSkinTris(positions,indices,opts){
     const low=minZ[gy*GX+gx];
     if(low===Infinity || cz<=low+tol) flag[t]=1;                // nothing below it -> underside
   }
+  /* Keep only substantial openings. A stray triangle here and there also satisfies "nothing
+     below me" — on a ribbed surface a single speck can qualify — and removing one isolated
+     triangle punches a pinprick hole through the side of the shell. So group the flagged
+     triangles into connected patches and keep the ones that cover a real share of the opening.
+     Measured by AREA, not triangle count: a coarse floor can be two big triangles while a speck
+     on a dense ribbed surface is one tiny one. */
+  const emap=new Map(), key=(a,b)=>a<b?a+"_"+b:b+"_"+a;
+  for(let q=0,t=0;q<indices.length;q+=3,t++){ if(!flag[t])continue;
+    const tri=[indices[q],indices[q+1],indices[q+2]];
+    for(const[a,b]of[[tri[0],tri[1]],[tri[1],tri[2]],[tri[2],tri[0]]]){
+      const k=key(a,b); let arr=emap.get(k); if(!arr){arr=[];emap.set(k,arr);} arr.push(t);}}
+  const nb=new Map();
+  for(const ts of emap.values()) for(let i=0;i<ts.length;i++) for(let j=i+1;j<ts.length;j++){
+    let A=nb.get(ts[i]); if(!A){A=[];nb.set(ts[i],A);} A.push(ts[j]);
+    let B=nb.get(ts[j]); if(!B){B=[];nb.set(ts[j],B);} B.push(ts[i]);}
+  const triArea=t=>{const a=indices[t*3],b=indices[t*3+1],c=indices[t*3+2];
+    const ux=positions[b*3]-positions[a*3],uy=positions[b*3+1]-positions[a*3+1],uz=positions[b*3+2]-positions[a*3+2];
+    const vx=positions[c*3]-positions[a*3],vy=positions[c*3+1]-positions[a*3+1],vz=positions[c*3+2]-positions[a*3+2];
+    return Math.hypot(uy*vz-uz*vy,uz*vx-ux*vz,ux*vy-uy*vx)*0.5;};
+  let totArea=0; for(let t=0;t<nTri;t++) if(flag[t])totArea+=triArea(t);
+  const seen=new Uint8Array(nTri), comps=[];
+  for(let t=0;t<nTri;t++){
+    if(!flag[t]||seen[t])continue;
+    const comp=[t]; seen[t]=1; let area=triArea(t);
+    for(let i=0;i<comp.length;i++){ for(const y of nb.get(comp[i])||[]) if(!seen[y]){seen[y]=1;comp.push(y);area+=triArea(y);} }
+    comps.push({comp,area});
+  }
+  comps.sort((a,b)=>b.area-a.area);
+  for(let i=1;i<comps.length;i++)                            // the biggest patch is always the opening
+    if(comps[i].area < totArea*0.02) for(const x of comps[i].comp) flag[x]=0;   // a speck, not an opening
   return flag;
 }
 /* The inner wall: the outer skin pushed in by one wall thickness. Where the body turns a corner
