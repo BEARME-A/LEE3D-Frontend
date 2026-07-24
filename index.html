@@ -1663,7 +1663,12 @@ function makeVisualHull(p){
       const ny=(y-cY)/hw, nz=(z-zBot)/span;
       const soft = nz<0 ? Math.max(zBot-z,(Math.abs(ny)-1)*Math.min(hw,span))   // below the flat floor
                         : (Math.hypot(ny,nz)-1)*(hw+span)*0.5;                   // elliptical arch wall
-      d = (1-crisp)*soft + crisp*hull;
+      /* Both fields must agree about where the body ends, or the average between them crosses
+         zero in mid-air and manufactures a flat plane through the middle — the slab that showed
+         up from underneath. Clamping the smooth field to the same traced side outline the hull
+         uses keeps the wheel arches in BOTH, so the blend can only round the cross-section. */
+      const sSide=look(Tside,x,z);
+      d = (1-crisp)*Math.max(soft,sSide) + crisp*hull;
     }
     if(crisp>0.001) for(let q=0;q<feats.length;q++){
       const f=feats[q]; if(!f.through)continue;                     // indents are stamped on the
@@ -1704,12 +1709,7 @@ function makeVisualHull(p){
   if(crisp<0.999){
     const lz0=new Float32Array(nx+1), lz1=new Float32Array(nx+1), lhw=new Float32Array(nx+1);
     for(let i=0;i<=nx;i++){const xf=i/nx;
-      // The smooth field must NOT carry its own floor. The traced bottom edge of a car rises
-      // to the underbody between the wheels, while the exact hull runs right down to the ground
-      // at each wheel. Blending the two then crosses zero somewhere in between and manufactures
-      // a flat plane through the middle of the body — the slab you could see from underneath.
-      // Both fields now share the same underside, so the blend has nothing to invent.
-      lz0[i]=0;
+      lz0[i]=p.bottomProfile?sampleProfile(p.bottomProfile,xf):0;
       lz1[i]=sampleProfile(p.topProfile,xf);
       lhw[i]=Math.max(0.05,sampleProfile(p.widthProfile,xf));}
     loftBox=(x)=>{ let fi=x/L*nx; fi=fi<0?0:(fi>nx?nx:fi); const i=fi|0,t=fi-i,i2=i<nx?i+1:nx;
