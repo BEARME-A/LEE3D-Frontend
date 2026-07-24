@@ -1457,14 +1457,14 @@ function bottomSkinTris(positions,indices,opts){
       const z=l1*az+l2*bz+l3*cz, o=j*GX+i; if(z<minZ[o])minZ[o]=z;
     }
   }
-  const tol=opts.tol||Math.max(1e-4,cell*0.75);
+  const tol=opts.tol||Math.max(1e-4,cell*2.5);   // generous, so a raised underbody opens cleanly instead of raggedly
   for(let q=0,t=0;q<indices.length;q+=3,t++){
     const a=indices[q],b=indices[q+1],c=indices[q+2];
     const ax=positions[a*3],ay=positions[a*3+1],az=positions[a*3+2];
     const ux=positions[b*3]-ax,uy=positions[b*3+1]-ay,uz=positions[b*3+2]-az;
     const vx=positions[c*3]-ax,vy=positions[c*3+1]-ay,vz=positions[c*3+2]-az;
     const fz=ux*vy-uy*vx, fl=Math.hypot(uy*vz-uz*vy,uz*vx-ux*vz,fz)||1;
-    if(fz/fl>=-0.35)continue;                                   // must face the floor
+    if(fz/fl>=-0.15)continue;                                   // must face the floor (a sloped underbody counts)
     const cz=(az+positions[b*3+2]+positions[c*3+2])/3;
     const gx=Math.max(0,Math.min(GX-1,Math.floor(((positions[a*3]+positions[b*3]+positions[c*3])/3-x0)*sx)));
     const gy=Math.max(0,Math.min(GY-1,Math.floor(((ay+positions[b*3+1]+positions[c*3+1])/3-y0)*sy)));
