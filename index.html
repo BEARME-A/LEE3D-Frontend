@@ -1541,6 +1541,36 @@ function innerOffsets(positions,indices,wall,vc){
     if(!bad)break;
     build();
   }
+  /* The cavity must be a clean hollow, the way the smooth body's is. Pushing every outer vertex
+     straight inward copies the skin exactly — so a wheel arch, which is a recess in the skin,
+     comes back as a lump sticking INTO the cavity, and a row of them reads as boxes and slabs
+     rattling about inside the shell. The skin keeps its recesses; the wall behind it is relaxed
+     until the inside is smooth, then pulled back wherever that would leave less than the asked
+     for thickness, so nothing ever breaks through. */
+  {
+    const n=vc, adj=Array.from({length:n},()=>[]);
+    for(let q=0;q<indices.length;q+=3){const a=indices[q],b=indices[q+1],c=indices[q+2];
+      if(a<n&&b<n){adj[a].push(b);adj[b].push(a);} if(b<n&&c<n){adj[b].push(c);adj[c].push(b);}
+      if(c<n&&a<n){adj[c].push(a);adj[a].push(c);}}
+    const tmp=new Float32Array(inner.length);
+    for(let pass=0;pass<12;pass++){
+      tmp.set(inner);
+      for(let k=0;k<n;k++){
+        const nb=adj[k]; if(!nb.length)continue;
+        let sx=0,sy=0,sz=0;
+        for(const j of nb){sx+=tmp[j*3];sy+=tmp[j*3+1];sz+=tmp[j*3+2];}
+        const m=nb.length, ax=sx/m, ay=sy/m, az=sz/m;
+        // relax toward the neighbours, but never let the wall get thinner than asked
+        let px=tmp[k*3]+(ax-tmp[k*3])*0.6, py=tmp[k*3+1]+(ay-tmp[k*3+1])*0.6, pz=tmp[k*3+2]+(az-tmp[k*3+2])*0.6;
+        const ox=positions[k*3],oy=positions[k*3+1],oz=positions[k*3+2];
+        // must still sit INSIDE the skin: measure along the inward normal, not just distance
+        const inx=-nrm[k*3],iny=-nrm[k*3+1],inz=-nrm[k*3+2];
+        const along=(px-ox)*inx+(py-oy)*iny+(pz-oz)*inz;
+        if(along<wall*0.75){const add=wall*0.75-along; px+=inx*add; py+=iny*add; pz+=inz*add;}
+        inner[k*3]=px; inner[k*3+1]=py; inner[k*3+2]=pz;
+      }
+    }
+  }
   return inner;
 }
 /* VISUAL HULL — the volume inside every traced outline at once.
