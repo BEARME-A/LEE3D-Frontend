@@ -201,6 +201,8 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
   #featLayer{position:absolute;inset:0;pointer-events:none}
   #featLayer .fbox{position:absolute;border:1.5px dashed currentColor;border-radius:3px;pointer-events:auto;cursor:move}
   #featLayer .fbox.sel{border-style:solid;border-width:2px;box-shadow:0 0 0 1px rgba(0,0,0,.5),0 0 12px rgba(255,122,47,.35)}
+  /* a member of a group selection: clearly in, but the one you're editing points still leads */
+  #featLayer .fbox.gsel{border-style:solid;border-width:2px;box-shadow:0 0 0 1px rgba(0,0,0,.5),0 0 6px rgba(255,122,47,.18)}
   #featLayer .fbox .fh{position:absolute;width:9px;height:9px;background:var(--bg);border:1.5px solid currentColor;border-radius:2px}
   #featLayer .fbox .nw{left:-5px;top:-5px;cursor:nwse-resize}
   #featLayer .fbox .ne{right:-5px;top:-5px;cursor:nesw-resize}
@@ -751,6 +753,12 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
           <button class="btn ghost" id="featCancel" style="display:none">Cancel</button>
           <input id="featText" class="proj-name mono" style="width:110px;font-size:11px;display:none" placeholder="wording…" value="LEE3D">
           <button class="btn ghost" id="featSvgAll" style="display:none">Take all</button>
+          <span id="featSelRow" style="display:none;align-items:center;gap:5px">
+            <span class="hint" style="margin:0;opacity:.6">select</span>
+            <button class="btn ghost" id="featSelFace">Face</button>
+            <button class="btn ghost" id="featSelAll">All</button>
+            <button class="btn ghost" id="featSelNone" style="display:none">None</button>
+          </span>
           <button class="btn ghost" id="bRot" title="Rotate this view 90° — use it if the object is drawn sideways">⟳ 90°</button>
           <label class="btn ghost" id="pickImg" for="imgFile">Drawing</label>
           <input type="file" id="imgFile" class="filepick" accept="image/*,image/svg+xml,.svg,.png,.jpg,.jpeg,.heic,.webp">
@@ -1374,6 +1382,22 @@ function embossHull(p,positions,indices,crisp,wall){
     hits+=applyFeatures({...p,features:[{...f,depth:dep*crisp}]},pts,spare,nrm);
     for(const [k,v2] of keep)nrm[k]=v2;              // restore for the next feature
   }
+  /* Every stamp is capped, but stamps ADD — traced detail nests (a vent inside a panel inside
+     a door), and a vertex sitting under five nested outlines was pressed five times: measured
+     12.65mm of travel from features drawn 2.5mm deep. That much travel crushes the hood, folds
+     the rocker skin up into the wheel arches (the floating planks seen through the arch), and
+     hands the underside detector a surface it can't read. Detail within detail still shows —
+     each stamp keeps its own edge ramp — but the TOTAL travel of any vertex is now held to a
+     whisker over one full stamp, so nesting can shade, never excavate. */
+  {
+    const capTot=Math.max(0.05,(wall||2)*0.5)*1.35;
+    for(let k=0;k<n;k++){
+      const dx=pts[k][0]-before[k*3], dy=pts[k][1]-before[k*3+1], dz=pts[k][2]-before[k*3+2];
+      const dl=Math.hypot(dx,dy,dz);
+      if(dl>capTot){const f=capTot/dl;
+        pts[k][0]=before[k*3]+dx*f; pts[k][1]=before[k*3+1]+dy*f; pts[k][2]=before[k*3+2]+dz*f;}
+    }
+  }
   // back off anything that would tear the surface
   const scale=new Float32Array(n).fill(1);
   const put=()=>{for(let k=0;k<n;k++){const s=scale[k];
@@ -1470,6 +1494,44 @@ function bottomSkinTris(positions,indices,opts){
     const gy=Math.max(0,Math.min(GY-1,Math.floor(((ay+positions[b*3+1]+positions[c*3+1])/3-y0)*sy)));
     const low=minZ[gy*GX+gx];
     if(low===Infinity || cz<=low+tol) flag[t]=1;                // nothing below it -> underside
+  }
+  /* SMOOTH THE DECISION, NOT JUST THE SURFACE. The depth test votes one triangle at a time,
+     and on a steep arch wall or a curvy sill neighbouring triangles land on opposite sides of
+     the tolerance — flag, keep, flag, keep — so the opening's edge comes out as a staircase.
+     That staircase is what the eye reads as a sawtooth around the wheel arches, and the rim
+     stitched along it (measured: 3,534mm of boundary where a fair curve needs ~800mm) is the
+     zig-zag curtain that shows through the arch as a plank. Majority vote over each triangle's
+     edge-neighbours settles the flicker: a flagged triangle boxed in by kept ones is kept, a
+     kept one boxed in by flagged ones opens — but an up-facing triangle is NEVER pulled into
+     the opening, so visible top skin cannot be eaten. Votes are counted per pass on a frozen
+     copy, so the boundary settles instead of marching. */
+  {
+    const em2=new Map(), k2=(a,b)=>a<b?a+"_"+b:b+"_"+a;
+    for(let q=0,t=0;q<indices.length;q+=3,t++){
+      const a=indices[q],b=indices[q+1],c=indices[q+2];
+      for(const[u,v]of[[a,b],[b,c],[c,a]]){const kk=k2(u,v);let arr=em2.get(kk);if(!arr){arr=[];em2.set(kk,arr);}arr.push(t);}
+    }
+    const adj=Array.from({length:nTri},()=>[]);
+    for(const ts of em2.values())for(let i=0;i<ts.length;i++)for(let j=i+1;j<ts.length;j++){adj[ts[i]].push(ts[j]);adj[ts[j]].push(ts[i]);}
+    const up=new Uint8Array(nTri);                       // never open a face the sky can see
+    for(let q=0,t=0;q<indices.length;q+=3,t++){
+      const a=indices[q],b=indices[q+1],c=indices[q+2];
+      const ax=positions[a*3],ay=positions[a*3+1],az=positions[a*3+2];
+      const ux=positions[b*3]-ax,uy=positions[b*3+1]-ay,uz=positions[b*3+2]-az;
+      const vx=positions[c*3]-ax,vy=positions[c*3+1]-ay,vz=positions[c*3+2]-az;
+      const fz=ux*vy-uy*vx, fl=Math.hypot(uy*vz-uz*vy,uz*vx-ux*vz,fz)||1;
+      if(fz/fl>0.05)up[t]=1;
+    }
+    for(let pass=0;pass<3;pass++){
+      const prev=flag.slice(); let changed=0;
+      for(let t=0;t<nTri;t++){
+        let on=0,off=0;
+        for(const n of adj[t]){ if(prev[n])on++; else off++; }
+        if(prev[t] && off>=2 && on<off){ flag[t]=0; changed++; }
+        else if(!prev[t] && on>=2 && off<on && !up[t]){ flag[t]=1; changed++; }
+      }
+      if(!changed)break;
+    }
   }
   /* Keep only substantial openings. A stray triangle here and there also satisfies "nothing
      below me" — on a ribbed surface a single speck can qualify — and removing one isolated
@@ -1925,6 +1987,46 @@ function makeVisualHull(p){
     }
     const trimmed = outerIdx!==indices; openedBottom=trimmed;   // did we actually open the underside?
     const vc=V.length;
+    /* FAIR THE OPENING'S EDGE. The trim follows triangle boundaries on a grid, so even after
+       the flag is settled the edge is a staircase at grid scale. Relax each boundary vertex
+       toward the average of its neighbours ALONG the loop — a curve fairing, nothing off the
+       loop moves — capped so no vertex strays more than ~1.75 grid cells from where the mesher
+       put it (the staircase's own amplitude). The SAME displacement is applied to plainSkin,
+       so the inner wall and the stitched rim follow the faired edge instead of the old jagged
+       one; the rim stays a clean wall-height band all the way round. */
+    if(trimmed){
+      const ec3=new Map(), u3=(a,b)=>a<b?a+"_"+b:b+"_"+a;
+      for(let q=0;q<outerIdx.length;q+=3){const t=[outerIdx[q],outerIdx[q+1],outerIdx[q+2]];
+        for(const[u,v]of[[t[0],t[1]],[t[1],t[2]],[t[2],t[0]]])ec3.set(u3(u,v),(ec3.get(u3(u,v))||0)+1);}
+      const loop=new Map();                                  // boundary vertex -> loop neighbours
+      for(const[k,c]of ec3){ if(c!==1)continue; const p2=k.indexOf("_"),a=+k.slice(0,p2),b=+k.slice(p2+1);
+        let A=loop.get(a); if(!A){A=[];loop.set(a,A);} A.push(b);
+        let B=loop.get(b); if(!B){B=[];loop.set(b,B);} B.push(a); }
+      if(loop.size>2){
+        const orig=new Map(); for(const s of loop.keys())orig.set(s,[positions[s*3],positions[s*3+1],positions[s*3+2]]);
+        const capD=cell*2.5;                       // just past the staircase's own amplitude
+        for(let pass=0;pass<6;pass++){
+          const snap=new Map(); for(const s of loop.keys())snap.set(s,[positions[s*3],positions[s*3+1],positions[s*3+2]]);
+          for(const[s,nbs]of loop){
+            if(nbs.length<2)continue;
+            let ax=0,ay=0,az=0; for(const n of nbs){const q=snap.get(n)||[positions[n*3],positions[n*3+1],positions[n*3+2]];ax+=q[0];ay+=q[1];az+=q[2];}
+            ax/=nbs.length; ay/=nbs.length; az/=nbs.length;
+            const cur=snap.get(s);
+            let px=cur[0]+(ax-cur[0])*0.5, py=cur[1]+(ay-cur[1])*0.5, pz=cur[2]+(az-cur[2])*0.5;
+            const o=orig.get(s); let dx=px-o[0],dy=py-o[1],dz=pz-o[2];
+            const dl=Math.hypot(dx,dy,dz);
+            if(dl>capD){const f=capD/dl; dx*=f;dy*=f;dz*=f; px=o[0]+dx;py=o[1]+dy;pz=o[2]+dz;}
+            positions[s*3]=px; positions[s*3+1]=py; positions[s*3+2]=pz;
+          }
+        }
+        if(plainSkin!==positions)for(const s of loop.keys()){   // inner wall follows the faired edge
+          const o=orig.get(s);
+          plainSkin[s*3]  +=positions[s*3]  -o[0];
+          plainSkin[s*3+1]+=positions[s*3+1]-o[1];
+          plainSkin[s*3+2]+=positions[s*3+2]-o[2];
+        }
+      }
+    }
     const inner=innerOffsets(plainSkin,outerIdx,wall,vc);   // clean inside, no stamped detail
     const pos2=new Float32Array(vc*6); pos2.set(positions,0); pos2.set(inner,vc*3);
     const idx2=Array.from(outerIdx);
@@ -2486,7 +2588,7 @@ traceCanvas.addEventListener("pointerdown",e=>{
   const {x:cx,y:cy}=tcXY(e);
   if(traceMode==="cal"){calPts.push(canvas2img(cx,cy));drawTrace();if(calPts.length===2)openModal();return;}
   const v=cv();
-  if(typeof featDeselect==="function" && featSel>=0 && !featDraft)featDeselect();
+  if(typeof featDeselect==="function" && (featSel>=0||featMulti.size) && !featDraft)featDeselect();
   if(featTool==="join"){
     const B=featBounds(activeView);
     if(!B){toast("Trace the body outline on this view first — a join is placed against it.");return;}
@@ -2836,7 +2938,17 @@ function featCap(){ return Math.max(0.2, Math.min(S.wallPerFace?S.wallTop:S.wall
    model, so the thing you're adjusting stays visible while you adjust it. The
    left rail keeps only what the whole object is: its shape and its size.
    ========================================================================= */
-let featSel=-1;                       // which feature is selected (index into features)
+/* Selection is a SET, not one index. A car's detail comes in whole faces at a time — 36
+   vents down the front, 24 across the rear — and setting the same depth on all of them one
+   box at a time is not editing, it's data entry. featSel stays as the LEAD of the selection:
+   the one whose outline points you can pull about, and the only one when the set holds one.
+   Everything else in the set follows the sliders. */
+let featSel=-1;                       // the lead feature (index into features), -1 for none
+let featMulti=new Set();              // every selected feature, lead included
+function featSelList(){               // valid, in order, lead first
+  const out=[...featMulti].filter(i=>features[i]).sort((a,b)=>a-b);
+  return out;
+}
 
 // a feature's box in the view's 0..1 frame, whatever kind it is
 function featBox(f){
@@ -2878,7 +2990,7 @@ function featRenderGizmos(){
     if(f.view!==activeView)return;
     const r=featToScreen(f); if(!r||r.w<2||r.h<2)return;
     const el=document.createElement("div");
-    el.className="fbox"+(f.depth>=0?" out":"")+(i===featSel?" sel":"");
+    el.className="fbox"+(f.depth>=0?" out":"")+(i===featSel?" sel":(featMulti.has(i)?" gsel":""));
     el.style.cssText=`left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px;color:${f.depth<0?"#46B7D9":"#5BD6A0"}`;
     // only the selected one gets a name tag and handles. A hundred features each shouting
     // their name is not information, it's a wall — you couldn't see the drawing underneath.
@@ -2891,9 +3003,24 @@ function featRenderGizmos(){
     let drag=null;
     el.addEventListener("pointerdown",e=>{
       e.stopPropagation(); e.preventDefault();
-      featSelect(i);
+      /* While a group is up, a box is something you tick, not something you shove — one
+         stray thumb would otherwise fling a feature across the drawing while you meant to
+         add it to the set. Shift/⌘/Ctrl starts a group from a single selection. */
+      const wantsToggle = featMulti.size>1 || e.shiftKey || e.metaKey || e.ctrlKey;
+      if(wantsToggle){ featSelectToggle(i); return; }
+      /* Select WITHOUT tearing the layer down. featSelect rebuilds every gizmo, which throws
+         this very element out of the document — and a removed node loses pointer capture and
+         stops receiving moves, so the box you just grabbed would sit still while your finger
+         went on without it. Freeze the layer for the length of the gesture, mark the selection
+         on the elements already there, and let the release rebuild it properly (handles and
+         outline points included). */
+      featDragging=true;
+      featMulti=new Set([i]); featSel=i;
+      layer.querySelectorAll(".fbox").forEach(b=>b.classList.remove("sel","gsel"));
+      el.classList.add("sel");
+      featPanelRender(); featSelSync(); drawTrace();
       const h=e.target.classList.contains("fh")?[...e.target.classList].find(c=>["nw","ne","sw","se"].includes(c)):null;
-      drag={h, sx:e.clientX, sy:e.clientY, r:{...r}}; featDragging=true;
+      drag={h, sx:e.clientX, sy:e.clientY, r:{...r}};
       try{el.setPointerCapture(e.pointerId);}catch(_){}
     });
     el.addEventListener("pointermove",e=>{
@@ -2963,17 +3090,127 @@ function featRenderGizmos(){
 }
 
 /* ---- the floating inspector: only the selected feature's own controls ---- */
-function featSelect(i){
-  featSel=i;
-  featRenderGizmos();
-  featPanelRender();
-  drawTrace();
+function featSelRefresh(){ featRenderGizmos(); featPanelRender(); featSelSync(); drawTrace(); }
+function featSelect(i){                       // one feature, on its own
+  featMulti=new Set([i]); featSel=i; featSelRefresh();
 }
-function featDeselect(){ featSel=-1; featRenderGizmos(); featPanelRender(); drawTrace(); }
+function featSelectMany(list){                // a whole face, or the lot
+  featMulti=new Set(list); featSel=list.length?list[0]:-1; featSelRefresh();
+}
+function featSelectToggle(i){                 // add to / take out of the group
+  if(featMulti.has(i)){
+    featMulti.delete(i);
+    if(featSel===i)featSel=featMulti.size?featSelList()[0]:-1;
+  } else { featMulti.add(i); featSel=i; }
+  featSelRefresh();
+}
+function featDeselect(){ featMulti=new Set(); featSel=-1; featSelRefresh(); }
+// which features live on a face (indices into the list you hand it)
+function featOnView(list,view){ const out=[]; (list||[]).forEach((f,i)=>{ if((f.view||"side")===view)out.push(i); }); return out; }
+/* What a group of features has in common. The sliders open at the AVERAGE rather than at
+   the first member's value, so opening the panel on a set that disagrees doesn't quietly
+   present one member's number as the group's; "mixed" is reported alongside so the panel can
+   say out loud that moving the slider will flatten a range. */
+function featGroupStats(list){
+  const n=(list||[]).length;
+  if(!n)return {n:0,depth:0,soft:0.12,mixedDepth:false,mixedSoft:false,through:0,allThrough:false};
+  const num=(f,k,d)=>{const v=+f[k]; return isFinite(v)?v:d;};
+  const dep=list.map(f=>num(f,"depth",0)), sof=list.map(f=>num(f,"soft",0.12));
+  const near=(a,b)=>Math.abs(a-b)<=1e-6;
+  const through=list.filter(f=>!!f.through).length;
+  return {
+    n,
+    depth: dep.reduce((s,v)=>s+v,0)/n,
+    soft:  sof.reduce((s,v)=>s+v,0)/n,
+    mixedDepth: dep.some(v=>!near(v,dep[0])),
+    mixedSoft:  sof.some(v=>!near(v,sof[0])),
+    through, allThrough: through===n
+  };
+}
+/* The select buttons carry their own counts, because "Face" on its own doesn't tell you
+   whether this face has three features or thirty-six. Hidden entirely until there's
+   something to select — an empty toolbar button is just clutter. */
+function featSelSync(){
+  const row=document.getElementById("featSelRow"); if(!row)return;
+  const face=featOnView(features,activeView).length, all=features.length;
+  row.style.display = all ? "inline-flex" : "none";
+  const bF=document.getElementById("featSelFace"), bA=document.getElementById("featSelAll"),
+        bN=document.getElementById("featSelNone");
+  if(bF){ bF.textContent=`Face · ${face}`; bF.style.opacity=face?"":"0.45"; }
+  if(bA) bA.textContent=`All · ${all}`;
+  if(bN) bN.style.display=featMulti.size?"":"none";
+}
+
+/* ---- the same inspector, driving a whole group ----
+   One slider, every selected feature. The slider opens at the group's AVERAGE and each row
+   says "mixed" when the members disagree, so you can see you're about to flatten a range
+   before you do it. Values are written as you drag (the readout and the box colours track),
+   but the model is only rebuilt when you let go — dragging a depth slider across 96 features
+   would otherwise queue 96-feature rebuilds every 40ms and lock the tab up. */
+function featPanelGroup(panel,body){
+  const idx=featSelList(), list=idx.map(i=>features[i]);
+  if(list.length<2){ featSel=idx.length?idx[0]:-1; featMulti=new Set(idx); featPanelRender(); return; }
+  panel.style.display="";
+  const $=id=>document.getElementById(id);
+  const st=featGroupStats(list);
+  const dAvg=st.depth, sAvg=st.soft, thruOn=st.through;
+  const cap=featCap(), anyThru=thruOn>0;
+  const mixed=k=>k==="depth"?st.mixedDepth:st.mixedSoft;
+  const byFace={}; list.forEach(f=>{const v=f.view||"side"; byFace[v]=(byFace[v]||0)+1;});
+  const faces=Object.entries(byFace).map(([v,n])=>`${v} ${n}`).join(" · ");
+  const tag=on=>on?` <span style="opacity:.6;font-weight:400">· mixed</span>`:"";
+  $("fpTitle").textContent=`${list.length} features`;
+  body.innerHTML=`
+    <div class="hint" style="margin:0 0 7px">${faces}</div>
+    <div class="field"><label>Depth${tag(mixed("depth"))} <span class="val"><span id="gpDv"></span> mm</span></label>
+      <input type="range" id="gpDepth" min="${anyThru?-40:-cap}" max="12" step="0.1" value="${dAvg.toFixed(1)}"></div>
+    <div class="field"><label>Soft edge${tag(mixed("soft"))} <span class="val"><span id="gpSv"></span></span></label>
+      <input type="range" id="gpSoft" min="0.01" max="0.4" step="0.01" value="${sAvg.toFixed(2)}"></div>
+    <label style="display:flex;align-items:center;gap:6px;font-size:10.5px;cursor:pointer;margin:2px 0 7px">
+      <input type="checkbox" id="gpThru"${thruOn===list.length?" checked":""}> Cut clean through${thruOn&&thruOn<list.length?" <span style='opacity:.6'>· mixed</span>":""}</label>
+    <div class="hint" id="gpNote" style="margin:0 0 7px"></div>
+    <div class="hint" style="margin:0 0 7px;opacity:.7">Every slider sets <b>all ${list.length}</b> to the same value. Tap a box to take it out of the group; <b>None</b> clears it. Boxes only move when one is selected on its own.</div>
+    <button class="btn ghost" id="gpDel" style="width:100%">⌫ Delete all ${list.length}</button>`;
+  $("gpDv").textContent=dAvg.toFixed(1);
+  $("gpSv").textContent=sAvg.toFixed(2);
+  const note=()=>{
+    const el=$("gpNote"); if(!el)return;
+    const d=+$("gpDepth").value, thru=$("gpThru").checked;
+    if(thru&&d<0) el.innerHTML=(S.mode==="projection")
+      ? "<b style='color:var(--good)'>Real openings.</b> Cut clean through, all of them."
+      : "<b style='color:var(--warn)'>Smooth can only dent these.</b> Switch <b>Shape style</b> to <b>Follow my drawing</b>.";
+    else if(d<0 && Math.abs(d)>=cap-0.05) el.innerHTML=`Pressed in as far as the <b>${cap.toFixed(1)} mm</b> frame allows.`;
+    else if(d<0) el.textContent="Pressed into the surface.";
+    else if(d>0) el.textContent="Raised out of the surface.";
+    else el.textContent="No depth — these do nothing yet.";
+  };
+  const commit=()=>{ requestRebuild(); featRenderGizmos(); };
+  $("gpDepth").oninput=e=>{ const d=+e.target.value; $("gpDv").textContent=d.toFixed(1);
+    list.forEach(f=>{ f.depth=d; if(d>=0)f.through=false; }); note(); };
+  $("gpDepth").onchange=commit;
+  $("gpSoft").oninput=e=>{ const s=+e.target.value; $("gpSv").textContent=s.toFixed(2);
+    list.forEach(f=>{ f.soft=s; }); };
+  $("gpSoft").onchange=commit;
+  $("gpThru").onchange=e=>{ const on=e.target.checked;
+    list.forEach(f=>{ f.through=on && f.depth<0; });
+    $("gpDepth").min=on?-40:-featCap(); note(); commit(); };
+  /* Deleting ninety-six features on a mis-tap, with no undo behind it, is not something a
+     button should do first time it's touched. */
+  let armed=false;
+  $("gpDel").onclick=e=>{
+    if(!armed){ armed=true; e.target.textContent=`Delete ${list.length}? Tap again`;
+      setTimeout(()=>{ if(armed&&document.getElementById("gpDel")){armed=false;e.target.textContent=`⌫ Delete all ${list.length}`;} },3500); return; }
+    idx.slice().sort((a,b)=>b-a).forEach(i=>features.splice(i,1));   // high to low, or the rest shift
+    featDeselect(); featRender(); requestRebuild();
+    toast(`Deleted <b>${list.length}</b> features.`);
+  };
+  note();
+}
 
 function featPanelRender(){
   const panel=document.getElementById("featPanel"), body=document.getElementById("fpBody");
   if(!panel||!body)return;
+  if(featMulti.size>1){ featPanelGroup(panel,body); return; }
   const f=features[featSel];
   if(!f){panel.style.display="none";return;}
   panel.style.display="";
@@ -3008,7 +3245,7 @@ function featPanelRender(){
   $("fpSoft").oninput=e=>{f.soft=+e.target.value; $("fpSv").textContent=f.soft.toFixed(2); requestRebuild();};
   const th=$("fpThru"); if(th)th.onchange=e=>{f.through=e.target.checked;
     $("fpDepth").min=f.through?-40:-featCap(); featNote(); requestRebuild(); featRenderGizmos();};
-  $("fpDel").onclick=()=>{features.splice(featSel,1); featDeselect(); requestRebuild();};
+  $("fpDel").onclick=()=>{features.splice(featSel,1); featDeselect(); featRender(); requestRebuild();};
   featNote();
 }
 // say plainly what this feature will actually do, given the mode and the frame
@@ -3028,10 +3265,30 @@ function featNote(){
   else el.textContent="No depth — this does nothing yet.";
 }
 
+/* How many shapes THIS face's drawing is offering. It has to be worked out per face and
+   cleared when you leave one: the count belongs to the drawing in front of you, and a button
+   still reading "Take all 24" on a face whose drawing holds none is a straight lie about what
+   pressing it will do. Nothing is counted while the tool is elsewhere — svgDetails scans the
+   whole image the first time it's asked, and that isn't work to do on every tab of a view. */
+function featSvgAllSync(){
+  const all=document.getElementById("featSvgAll"); if(!all)return 0;
+  if(featTool!=="svg"){ all.textContent="Take all"; return 0; }
+  const have=(typeof svgDetails==="function")?svgDetails(activeView).length:0;
+  all.textContent=have?`Take all ${have}`:"Take all";
+  return have;
+}
+// Features are numbered within their own face. A global counter meant the top view started
+// at "detail 13" because the side view happened to have twelve — a number about the model's
+// history, not about the drawing you're looking at.
+function featNextName(list,view,base){
+  let n=0; for(const f of (list||[])) if((f.view||"side")===view)n++;
+  return base+" "+(n+1);
+}
 function featRender(){
-  featRenderGizmos(); featPanelRender();
+  featRenderGizmos(); featPanelRender(); featSelSync();
   const c=document.getElementById("featCount");
-  if(c)c.textContent=features.length?`${features.length} on this model`:"none yet";
+  const face=featOnView(features,activeView).length;
+  if(c)c.textContent=features.length?`${features.length} on this model · ${face} on ${activeView}`:"none yet";
 }
 // The SVG already contains every line in the drawing. The biggest path becomes the body
 // outline; everything else — windows, lights, scoops, badges — is detail sitting unused.
@@ -3113,7 +3370,7 @@ function featAddSvgPoly(view,poly,quiet){
   const span=Math.max(Math.max(...us)-Math.min(...us), Math.max(...vs)-Math.min(...vs));
   let norm=simplifyPoly(dense, Math.max(0.002, span*0.018));
   if(norm.length>34)norm=simplifyPoly(dense, Math.max(0.004, span*0.035));   // still busy? relax it
-  features.push({kind:"poly",view,poly:norm,depth:-2.5,soft:0.08,name:"detail "+(features.length+1)});
+  features.push({kind:"poly",view,poly:norm,depth:-2.5,soft:0.08,name:featNextName(features,view,"detail")});
   if(!quiet){featSelect(features.length-1);requestRebuild();
     toast(`Taken straight from your drawing — <span class="mono">${features[features.length-1].poly.length} points</span> you can drag to reshape it.`);}
   return true;
@@ -3169,7 +3426,7 @@ function featFinish(){
   if(featDraft.pts.length<need){toast(tool==="poly"?"A shape needs at least 3 points.":"Click two opposite corners.");return;}
   const norm=featNormalize(featDraft.view,featDraft.pts);
   if(!norm){toast("Trace the body outline on this view first.");featCancelDraft();return;}
-  const nm=n=>({poly:"feature",box:"box",text:"text"})[tool]+" "+(features.length+1);
+  const nm=()=>featNextName(features,featDraft.view,({poly:"feature",box:"box",text:"text"})[tool]);
   if(tool==="poly"){
     features.push({kind:"poly",view:featDraft.view,poly:norm,depth:-2.5,soft:0.12,name:nm()});
   } else {
@@ -3528,13 +3785,11 @@ document.querySelectorAll("#featTool button").forEach(b=>b.onclick=()=>{
   if(featTool==="join")toast("Click where the join goes. A <b>peg</b> and a <b>socket</b> of the same size are made to fit once printed.");
   if(featDraft)featCancelDraft();
   if(featTool==="svg"){
-    const have=(typeof svgDetails==="function")?svgDetails(activeView).length:0;
+    const have=featSvgAllSync();
     const kind=(V[activeView]&&V[activeView].svgPolys&&V[activeView].svgPolys.length)?"vector line":"shape";
-    const all=document.getElementById("featSvgAll");
-    if(all)all.textContent=have?`Take all ${have}`:"Take all";
     toast(have?`${have} ${kind}(s) found in this drawing — click one to take it.`
               :"No shapes found in this view's drawing. Load a drawing, or use Shape/Box/Text.");
-  }
+  } else featSvgAllSync();
   drawTrace();
 });
 document.getElementById("featSvgAll").onclick=()=>{
@@ -3553,6 +3808,21 @@ document.getElementById("featSvgAll").onclick=()=>{
     ? `Took the <b>${added}</b> biggest shapes of ${list.length}. Every feature costs time on every rebuild, and a hundred boxes can't be edited — click any others you want individually.`
     : `Took <b>${added}</b> shape(s) straight from your drawing.`);
 };
+document.getElementById("featSelFace").onclick=()=>{
+  const idx=featOnView(features,activeView);
+  if(!idx.length){toast(`No features on the <b>${activeView}</b> view yet.`);return;}
+  featSelectMany(idx);
+  toast(idx.length>1
+    ? `All <b>${idx.length}</b> features on <b>${activeView}</b> selected — the sliders now drive every one.`
+    : `The one feature on <b>${activeView}</b> is selected.`);
+};
+document.getElementById("featSelAll").onclick=()=>{
+  if(!features.length){toast("No features on this model yet.");return;}
+  featSelectMany(features.map((_,i)=>i));
+  const faces=[...new Set(features.map(f=>f.view||"side"))].length;
+  toast(`All <b>${features.length}</b> features selected across <b>${faces}</b> face(s). Boxes for the other faces are still there — switch views to see them.`);
+};
+document.getElementById("featSelNone").onclick=()=>featDeselect();
 document.getElementById("railBtn").onclick=railToggle;
 document.getElementById("railScrim").onclick=()=>railOpen(false);
 document.getElementById("fpClose").onclick=()=>featDeselect();
@@ -3610,6 +3880,10 @@ document.querySelectorAll("#viewSeg button").forEach(b=>b.onclick=()=>{
   if(typeof syncViewSize==="function")setTimeout(syncViewSize,0);
   document.getElementById("bCal").classList.remove("active");
   document.getElementById("imgOpField").style.display=cv().img?"inline-flex":"none";
+  /* This face's own numbers, not the last one's. A GROUP, though, survives the switch on
+     purpose: "all features" is meant to span faces, the panel names the faces it holds, and
+     its members light up as you arrive on each one. None clears it. */
+  featSvgAllSync(); featSelSync();
   updateEdgeLabels();fitTrace();setTraceStatus();
 });
 
