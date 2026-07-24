@@ -1558,3 +1558,4 @@ console.log(fail
     ? "RESULT: ✅ PASS — geometry watertight, trace maths sound, library clean (with housekeeping notes above)"
     : "RESULT: ✅ PASS — geometry watertight, trace maths sound, library clean");
 process.exit(fail ? 1 : 0);
+
