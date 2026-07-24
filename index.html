@@ -1647,7 +1647,7 @@ function makeVisualHull(p){
   const F=(x,y,z)=>{
     const Es=look(Eside,x,z), Et=look(Etop,x,y), Ef=look(Efront,y,z);
     let hull=Math.max(Es,Et,Ef);                       // the body, notches filled in
-    if(!p.notchThrough){
+    if(p.notchFaceOnly){   // opt-in: a notch stops short of the far side (leaves a block behind it)
       // a notch cuts inward from its OWN face only, never through the frame
       const Ts=look(Tside,x,z);  if(Ts>0 && Es<=0 && -Et<notch) hull=Math.max(hull,Ts);
       const Tt=look(Ttop,x,y);   if(Tt>0 && Et<=0 && -Es<notch) hull=Math.max(hull,Tt);
