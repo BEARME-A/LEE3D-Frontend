@@ -50,6 +50,7 @@ const NAMES = ["outlineEnvelope", "anchorPxPerMm", "makeRevolve", "pointInPoly",
   "rasterRegions", "otsuThreshold", "lumOf", "regionOutline", "dilateMask", "labelBlobs", "outlineBBox", "sdPoly",
   "wallSpec", "wallAt", "minWall",
   "connDiameter", "connWarn", "connPoly", "simplifyPoly",
+  "featOnView", "featNextName", "featGroupStats",
   "applyHullStrokes", "applyStroke", "hullVertexNormals", "hullAdjacency", "bottomSkinTris", "innerOffsets", "embossHull", "viewSkinVerts", "dropStrayShells", "sampleMask", "distToPoly", "viewUV"];
 const found = [];
 const src = PRELUDE + NAMES.map(n => {
@@ -1536,6 +1537,65 @@ t("shell: a thicker wall means more material, and it tracks the slider", () => {
   // roughly surface area x wall, so doubling the wall roughly doubles the material
   ok(b / a > 1.6 && b / a < 2.4, `2mm should be ~2x the material of 1mm, got ${(b/a).toFixed(2)}x`);
 });
+t("detail: nested outlines shade the panel, they never excavate it", () => {
+  // Traced detail nests — a vent inside a panel inside a door. Each stamp is capped, but
+  // stamps used to ADD: five nested outlines pressed one vertex 12mm from drawings 2.5mm
+  // deep, crushing the hood and folding rocker skin into the arches. Behaviour pinned:
+  // however deep the nesting, no vertex may travel meaningfully past one full stamp.
+  const ring = (cx, cy, r) => Array.from({length:16},(_,i)=>{
+    const a = i/16*Math.PI*2; return [cx+Math.cos(a)*r, cy+Math.sin(a)*r]; });
+  const nest = [0.30,0.24,0.18,0.12,0.06].map(r =>
+    ({ view:"side", poly:ring(0.5,0.5,r), depth:-2.5 }));
+  const wall = 4;
+  const bare = API.makeBody({ ...SHELL, hullHollow:false, hullCrisp:1 });
+  const inked = API.makeBody({ ...SHELL, hullHollow:false, hullCrisp:1,
+    wallThickness:wall, features:nest });
+  ok(bare.positions.length === inked.positions.length, "same mesher output, features only stamp");
+  let maxD = 0;
+  for (let k = 0; k < bare.positions.length; k += 3) {
+    const d = Math.hypot(inked.positions[k]-bare.positions[k],
+      inked.positions[k+1]-bare.positions[k+1], inked.positions[k+2]-bare.positions[k+2]);
+    if (d > maxD) maxD = d;
+  }
+  ok(maxD > 0.3, `the detail must still press in (moved ${maxD.toFixed(2)}mm)`);
+  ok(maxD <= wall*0.5*1.35 + 0.05,
+     `five nested stamps may never dig past ~one: moved ${maxD.toFixed(2)}mm on a ${wall}mm wall`);
+});
+t("shell: the opened underside is floor, not wall", () => {
+  // The opening's edge is decided by majority vote now, so a staircase of flickering
+  // triangles can't ride up the sides. Pinned: on a plain box nearly all removed area
+  // faces the ground — the vote must never eat wall or roof.
+  const lump = API.makeBody({ ...SHELL, hullHollow:false });
+  const shell = API.makeBody({ ...SHELL, hullHollow:true, wallThickness:2 });
+  ok(shell.openBottom, "a box with no traced bottom opens its underside");
+  // removed skin = lump tris whose centroid isn't matched in the shell's outer surface
+  const keyOf = (P,I,q) => {
+    const a=I[q],b=I[q+1],c=I[q+2];
+    return [((P[a*3]+P[b*3]+P[c*3])/3).toFixed(2),
+            ((P[a*3+1]+P[b*3+1]+P[c*3+1])/3).toFixed(2),
+            ((P[a*3+2]+P[b*3+2]+P[c*3+2])/3).toFixed(2)].join(",");
+  };
+  const kept = new Set();
+  for (let q=0;q<shell.indices.length;q+=3) kept.add(keyOf(shell.positions,shell.indices,q));
+  let remArea=0, remDownArea=0, remZmax=0;
+  for (let q=0;q<lump.indices.length;q+=3) {
+    if (kept.has(keyOf(lump.positions,lump.indices,q))) continue;
+    const a=lump.indices[q],b=lump.indices[q+1],c=lump.indices[q+2],P=lump.positions;
+    const ux=P[b*3]-P[a*3],uy=P[b*3+1]-P[a*3+1],uz=P[b*3+2]-P[a*3+2];
+    const vx=P[c*3]-P[a*3],vy=P[c*3+1]-P[a*3+1],vz=P[c*3+2]-P[a*3+2];
+    const fz=ux*vy-uy*vx, fl=Math.hypot(uy*vz-uz*vy,uz*vx-ux*vz,fz);
+    if (!fl) continue;
+    remArea += fl/2; if (fz/fl < -0.3) remDownArea += fl/2;
+    const cz=(P[a*3+2]+P[b*3+2]+P[c*3+2])/3; if(cz>remZmax)remZmax=cz;
+  }
+  ok(remArea > 0, "something must actually be removed");
+  // a soft box rounds its bottom edge, and that rounded ring belongs to the opening —
+  // so "mostly floor" plus "never above the bottom fifth" is the honest pin
+  ok(remDownArea/remArea > 0.85,
+     `the opening should be ground-facing skin: ${(remDownArea/remArea*100).toFixed(0)}% faces down`);
+  ok(remZmax < 84*0.2,
+     `nothing removed above the bottom fifth of the box: highest at z=${remZmax.toFixed(1)}`);
+});
 t("shell: hollowing doesn't change the outside", () => {
   const bbox = g => { let x0=1e9,x1=-1e9,z0=1e9,z1=-1e9;
     for (let i=0;i<g.positions.length;i+=3){ x0=Math.min(x0,g.positions[i]); x1=Math.max(x1,g.positions[i]);
@@ -1545,6 +1605,57 @@ t("shell: hollowing doesn't change the outside", () => {
   const [sw, sh] = bbox(API.makeBody({ ...SHELL, hullHollow:true, wallThickness:3 }));
   near(sw, lw, 0.5, "the outside length must not shrink when you hollow it:");
   near(sh, lh, 0.5, "nor the height:");
+});
+
+// =====================  20. FEATURES BY THE HANDFUL  =====================
+// Detail arrives a face at a time — 36 vents across the front, 24 across the rear — so the
+// numbers on screen have to belong to the face in front of you, and the sliders have to be
+// able to drive a whole face at once.
+const FEATS = [
+  { view:"side",  depth:-2.5, soft:0.10 }, { view:"side",  depth:-2.5, soft:0.10 },
+  { view:"front", depth:-2.5, soft:0.10 }, { view:"front", depth:-1.0, soft:0.20 },
+  { view:"front", depth:-2.5, soft:0.10 }, { view:"rear",  depth: 1.5, soft:0.10, through:true },
+];
+
+t("features: a face's own features are the ones it hands back", () => {
+  ok(JSON.stringify(API.featOnView(FEATS, "front")) === "[2,3,4]",
+     "front should be indices 2,3,4, got " + JSON.stringify(API.featOnView(FEATS, "front")));
+  ok(API.featOnView(FEATS, "side").length === 2, "side holds two");
+  ok(API.featOnView(FEATS, "top").length === 0, "a face with nothing on it holds nothing");
+  ok(API.featOnView([], "side").length === 0, "and an empty model has nothing anywhere");
+});
+t("features: numbering starts again on each face", () => {
+  // the bug: twelve features on the side made the top view's first feature "detail 13" —
+  // a number about the model's history, not about the drawing you're looking at
+  ok(API.featNextName(FEATS, "top", "detail") === "detail 1",
+     `an untouched face starts at one, got "${API.featNextName(FEATS, "top", "detail")}"`);
+  ok(API.featNextName(FEATS, "front", "detail") === "detail 4",
+     `the front already has three, so the next is four, got "${API.featNextName(FEATS, "front", "detail")}"`);
+  ok(API.featNextName(FEATS, "side", "box") === "box 3", "and the base word carries through");
+});
+t("features: a group's sliders open at the average, and say when it's mixed", () => {
+  const front = API.featOnView(FEATS, "front").map(i => FEATS[i]);
+  const s = API.featGroupStats(front);
+  ok(s.n === 3, "three features in the group");
+  near(s.depth, -2, 0.001, "the depth slider opens at the group's average:");
+  ok(s.mixedDepth, "…and reports that they disagree");
+  ok(s.mixedSoft, "same for the soft edge");
+  const same = API.featGroupStats(API.featOnView(FEATS, "side").map(i => FEATS[i]));
+  near(same.depth, -2.5, 0.001, "a group that agrees opens on that value:");
+  ok(!same.mixedDepth && !same.mixedSoft, "…and doesn't cry mixed when nothing is mixed");
+});
+t("features: a group knows how many of it are cut through", () => {
+  const all = API.featGroupStats(FEATS);
+  ok(all.through === 1 && !all.allThrough, `one of six is through, got ${all.through}`);
+  const thru = API.featGroupStats([{depth:-3,soft:0.1,through:true},{depth:-3,soft:0.1,through:true}]);
+  ok(thru.allThrough, "a group where every one is through says so, so the tick can be solid");
+  const none = API.featGroupStats([{depth:-3,soft:0.1}]);
+  ok(none.through === 0 && !none.allThrough, "and one that has none says that too");
+});
+t("features: an empty group is harmless", () => {
+  const s = API.featGroupStats([]);
+  ok(s.n === 0 && isFinite(s.depth) && isFinite(s.soft),
+     "no selection must still give usable slider numbers, not NaN");
 });
 
 // --- report ---
