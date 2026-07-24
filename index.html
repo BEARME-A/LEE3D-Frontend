@@ -1615,7 +1615,16 @@ function makeVisualHull(p){
   // cross-section can never pinch below the resolution and tear the shell apart.
   const cY=W/2; let loftBox=null;
   const F=(x,y,z)=>{
-    const hull=Math.max(look(Tside,x,z), look(Ttop,x,y), look(Tfront,y,z));
+    const Es=look(Eside,x,z), Et=look(Etop,x,y), Ef=look(Efront,y,z);
+    let hull=Math.max(Es,Et,Ef);                       // the body, notches filled in
+    if(!p.notchThrough){
+      // a notch cuts inward from its OWN face only, never through the frame
+      const Ts=look(Tside,x,z);  if(Ts>0 && Es<=0 && -Et<notch) hull=Math.max(hull,Ts);
+      const Tt=look(Ttop,x,y);   if(Tt>0 && Et<=0 && -Es<notch) hull=Math.max(hull,Tt);
+      const Tf=look(Tfront,y,z); if(Tf>0 && Ef<=0 && Math.min(-Es,-Et)<notch) hull=Math.max(hull,Tf);
+    } else {
+      hull=Math.max(hull, look(Tside,x,z), look(Ttop,x,y), look(Tfront,y,z));
+    }
     let d;
     if(crisp>=0.999 || !loftBox){ d=hull; }
     else {
@@ -1642,6 +1651,20 @@ function makeVisualHull(p){
   Tside =mkTable(sideP ,L,H,nx*TB,nz*TB);
   Ttop  =mkTable(topP  ,L,W,nx*TB,ny*TB);
   Tfront=mkTable(frontP,W,H,ny*TB,nz*TB);
+  /* A traced outline says two different things at once: how big the body is, and where that
+     face is notched. The old build treated both as one shape and intersected them, so a wheel
+     arch drawn on the SIDE bored a tunnel clean through the full width of the car — material
+     removed from parts of the frame that view can't even see. The envelope (the outline with
+     its notches filled in) gives the body; the notches themselves are put back afterwards, and
+     only into the face they were drawn on. */
+  const envOf=(pts)=>{ try{ const e=outlineEnvelope(pts.map(q=>({x:q[0],y:q[1]})),56);
+      if(!e||!e.top||e.top.length<2)return pts;
+      const loop=e.top.map(q=>[q.x,q.y]).concat(e.bot.slice().reverse().map(q=>[q.x,q.y]));
+      return loop.length>2?loop:pts; }catch(err){ return pts; } };
+  const Eside =mkTable(envOf(sideP ),L,H,nx*TB,nz*TB);
+  const Etop  =mkTable(envOf(topP  ),L,W,nx*TB,ny*TB);
+  const Efront=mkTable(envOf(frontP),W,H,ny*TB,nz*TB);
+  const notch=Math.max(0.5, p.notchDepth ?? Math.min(W,H)*0.18);
   feats.forEach(f=>{
     f.T = f.kind==="xz" ? mkTable(f.pts,L,H,nx*TB,nz*TB)
         : f.kind==="xy" ? mkTable(f.pts,L,W,nx*TB,ny*TB)
@@ -2620,20 +2643,29 @@ function rasterRegions(imgData,maxOut){
   const lum=lumOf(imgData), thr=otsuThreshold(lum);
   const minPx=Math.max(20,Math.round(N*3e-5));
 
-  // (A) ink-enclosed regions, on a gap-closed fence
-  const ink=new Uint8Array(N); for(let i=0;i<N;i++)if(lum[i]<=thr)ink[i]=1;
-  const rad=Math.max(1,Math.round(Math.max(W,H)/700));
-  const fence=dilateMask(ink,W,H,rad);
-  const mark=new Int32Array(N); for(let i=0;i<N;i++)if(fence[i])mark[i]=-1;
-  const stack=[];
-  for(let x=0;x<W;x++){ if(mark[x]===0){mark[x]=-2;stack.push(x);} const b=(H-1)*W+x; if(mark[b]===0){mark[b]=-2;stack.push(b);} }
-  for(let y=0;y<H;y++){ const l=y*W,r=y*W+W-1; if(mark[l]===0){mark[l]=-2;stack.push(l);} if(mark[r]===0){mark[r]=-2;stack.push(r);} }
-  while(stack.length){const i=stack.pop(),x=i%W,y=(i/W)|0;
-    if(x>0&&mark[i-1]===0){mark[i-1]=-2;stack.push(i-1);}
-    if(x<W-1&&mark[i+1]===0){mark[i+1]=-2;stack.push(i+1);}
-    if(y>0&&mark[i-W]===0){mark[i-W]=-2;stack.push(i-W);}
-    if(y<H-1&&mark[i+W]===0){mark[i+W]=-2;stack.push(i+W);}}
-  const enclosed=labelBlobs(mark.map(v=>v===0?1:0),W,H,minPx,maxOut);
+  /* (A) regions fenced in by the line-work. A drawing can be dark lines on pale paper OR pale
+     lines on a dark silhouette — the side elevation of a blueprint is often a filled black
+     body. Reading only "dark = ink" made the whole car one solid blob with no pockets inside
+     it, so that view reported no shapes at all. Both readings are tried and the one that
+     actually fences something in wins. */
+  const fenceRegions=(dark)=>{
+    const ink=new Uint8Array(N);
+    for(let i=0;i<N;i++) if(dark ? lum[i]<=thr : lum[i]>thr) ink[i]=1;
+    const rad=Math.max(1,Math.round(Math.max(W,H)/700));
+    const fence=dilateMask(ink,W,H,rad);
+    const mark=new Int32Array(N); for(let i=0;i<N;i++)if(fence[i])mark[i]=-1;
+    const stack=[];
+    for(let x=0;x<W;x++){ if(mark[x]===0){mark[x]=-2;stack.push(x);} const b=(H-1)*W+x; if(mark[b]===0){mark[b]=-2;stack.push(b);} }
+    for(let y=0;y<H;y++){ const l=y*W,r=y*W+W-1; if(mark[l]===0){mark[l]=-2;stack.push(l);} if(mark[r]===0){mark[r]=-2;stack.push(r);} }
+    while(stack.length){const i=stack.pop(),x=i%W,y=(i/W)|0;
+      if(x>0&&mark[i-1]===0){mark[i-1]=-2;stack.push(i-1);}
+      if(x<W-1&&mark[i+1]===0){mark[i+1]=-2;stack.push(i+1);}
+      if(y>0&&mark[i-W]===0){mark[i-W]=-2;stack.push(i-W);}
+      if(y<H-1&&mark[i+W]===0){mark[i+W]=-2;stack.push(i+W);}}
+    return labelBlobs(mark.map(v=>v===0?1:0),W,H,minPx,maxOut);
+  };
+  const darkInk=fenceRegions(true), paleInk=fenceRegions(false);
+  const enclosed = darkInk.length>=paleInk.length ? darkInk : paleInk;
 
   // (B) vividly-coloured regions (chroma). Higher size floor keeps JPEG edge-fringe out.
   const col=new Uint8Array(N);
@@ -5492,4 +5524,3 @@ if(!window.THREE){
 </script>
 </body>
 </html>
-
