@@ -4241,14 +4241,66 @@ function refreshPublishUI(){
   btn.style.display=route?"":"none";
   btn.title=route==="backend"?"Goes through the backend — no token needed":"Uses the token saved in this browser";
 }
+/* What the backend can actually DO, not merely whether it answered.
+   "Connected" used to mean "/health returned 200" — which the light image does perfectly
+   while having no CAD kernel at all. So the studio said connected and then exact build
+   failed, with nothing tying the two together. The health route now reports its
+   capabilities and they're kept here. */
+let BE={reached:false, cad:false, image:null, libraryWritable:false};
+
+/* Read a failed response and say something true about it.
+   A backend that's running always answers in JSON, even when it's refusing: the light
+   image returns a JSON 503 explaining it has no CAD kernel. So HTML coming back means the
+   request never reached the app — it was answered by the host in front of it. On Render's
+   free tier that's nearly always the instance having gone to sleep (it spins down after
+   about 15 minutes idle and takes ~50s to wake), and dumping the raw markup into a toast
+   told you none of that. */
+async function beExplain(r){
+  const ct=(r.headers.get("content-type")||"").toLowerCase();
+  let body=""; try{ body=(await r.text()).trim(); }catch(_){}
+  const looksHTML = ct.includes("text/html") || /^<(!doctype|html)/i.test(body);
+  if(looksHTML){
+    return `the host answered instead of the app (HTTP ${r.status}). On Render's free tier `
+         + `that usually means the instance went to sleep — wait ~50s and try again. `
+         + `If it keeps happening, check the service is deployed and the URL has no path on the end.`;
+  }
+  if(ct.includes("application/json")){
+    try{ const j=JSON.parse(body); return (j.detail||j.message||body).toString().slice(0,180); }catch(_){}
+  }
+  return `HTTP ${r.status} ${body.slice(0,140)}`;
+}
+
 async function probeBackend(){
   const el=document.getElementById("beState");const base=beBase();
-  if(!base){el.textContent="—";el.style.color="var(--ink-faint)";return;}
+  BE={reached:false, cad:false, image:null, libraryWritable:false};
+  if(!base){el.textContent="—";el.style.color="var(--ink-faint)";refreshBuildBtn();return;}
+  if(!/^https?:\/\//i.test(base)){
+    el.textContent="needs http(s)://"; el.style.color="var(--warn)"; refreshBuildBtn(); return;
+  }
   try{
     const r=await fetch(base+"/health",{method:"GET"});
-    if(r.ok){el.textContent="online";el.style.color="var(--good)";}
-    else{el.textContent="error "+r.status;el.style.color="var(--warn)";}
+    if(!r.ok){el.textContent="error "+r.status;el.style.color="var(--warn)";refreshBuildBtn();return;}
+    let j={}; try{ j=await r.json(); }catch(_){ 
+      el.textContent="not a LEE3D backend"; el.style.color="var(--warn)"; refreshBuildBtn(); return; }
+    BE={reached:true, cad:!!j.cad, image:j.image||null, libraryWritable:!!j.library_writable};
+    if(j.cad===undefined){                      // older backend, before capabilities
+      el.textContent="online"; el.style.color="var(--good)";
+    } else if(j.cad){
+      el.textContent="online · CAD ready"; el.style.color="var(--good)";
+    } else {
+      el.textContent="online · light image"; el.style.color="var(--warn)";
+    }
   }catch(e){el.textContent="offline";el.style.color="var(--ink-faint)";}
+  refreshBuildBtn();
+}
+/* Say on the button itself what it will do, rather than letting it look ready and fail. */
+function refreshBuildBtn(){
+  const b=document.getElementById("buildServer"); if(!b)return;
+  const noCad = BE.reached && BE.image && !BE.cad;
+  b.title = noCad
+    ? "This backend runs the light image, which has no CAD kernel. Rebuild it from Dockerfile.full (and on Render, a paid plan — the image is multi-GB)."
+    : "Rebuild the same outlines with OpenCascade and download a STEP file.";
+  b.style.opacity = noCad ? "0.55" : "";
 }
 document.getElementById("backendUrl").addEventListener("change",probeBackend);
 
@@ -4277,19 +4329,30 @@ document.getElementById("saveLib").onclick=async ()=>{
 document.getElementById("buildServer").onclick=async ()=>{
   const prof=fullProfile(), name=slug(projName.value||"body"), base=beBase();
   if(!base){toast("Exact build needs the backend running — see SETUP.md. Everything else here works without it.");return;}
+  await probeBackend();                                  // ask before spending the upload
+  if(BE.reached && BE.image && !BE.cad){
+    toast("That backend is the <b>light image</b> — it has no CAD kernel, so it can't make a STEP. "
+        + "Rebuild it from <span class='mono'>Dockerfile.full</span>; on Render that also needs a paid plan, "
+        + "because the OpenCascade image is multi-GB.");
+    return;
+  }
+  if(!BE.reached){
+    toast("Can't reach that backend right now. On Render's free tier the instance sleeps after "
+        + "~15 minutes and takes about 50s to wake — open the URL in a tab, wait for it, then try again.");
+    return;
+  }
   const holes=(features||[]).filter(f=>f.through&&f.depth<0).length;
   toast(`Building exactly… <span class="mono">OpenCascade${holes?` · ${holes} real opening(s)`:""}</span>`);
   try{
     const r=await fetch(base+"/solid?fmt=step",{method:"POST",
       headers:{"Content-Type":"application/json"},body:JSON.stringify(prof)});
     if(r.status===503){toast("The backend is up but running the light image, which has no CAD kernel. Rebuild it with <span class='mono'>Dockerfile.full</span> for exact output.");return;}
-    if(r.status===400){toast("Exact build: "+((await r.json()).detail||"those outlines don't make a solid"));return;}
-    if(!r.ok)throw new Error("HTTP "+r.status+" "+(await r.text()).slice(0,120));
+    if(!r.ok){toast("Exact build: "+(await beExplain(r)));return;}
     const cut=r.headers.get("X-LEE3D-Through-Cuts")||"0";
     download(await r.blob(), name+".step");
     toast(`Exact build done ✓ <span class="mono">${name}.step</span>${+cut?` · ${cut} real opening(s) cut`:""} — opens in any CAD package.`);
   }catch(e){
-    toast("Exact build failed: "+e.message);
+    toast("Exact build failed: "+e.message+" — if the studio is on https, the backend must be too, or the browser blocks it.");
   }
 };
 
@@ -5801,7 +5864,26 @@ async function ghCommitCurrent(){
     const body={message:`studio: save ${name}`, content:b64utf8(JSON.stringify(doc,null,2)), branch};
     if(sha)body.sha=sha;
     const res=await fetch(url,{method:"PUT",headers:{...hdr,"Content-Type":"application/json"},body:JSON.stringify(body)});
-    if(!res.ok)throw new Error("HTTP "+res.status+" "+(await res.text()).slice(0,140));
+    if(!res.ok){
+      /* GitHub's own wording here is "Resource not accessible by personal access token",
+         which describes nothing you can act on. With a fine-grained token it means one of
+         exactly two things, and the first is the usual one: the token was scoped to a
+         DIFFERENT repository than the one being written to. A token made against the
+         backend repo cannot write to the library repo, and GitHub reports that as 403
+         rather than 404 so as not to confirm the repo exists. */
+      if(res.status===403||res.status===404){
+        ghState("token can't write here","var(--warn)");
+        toast(`GitHub refused (${res.status}). A fine-grained token has to name <b>${GHLIB.repo}</b> itself under `
+            + `<b>Repository access</b>, and grant <b>Contents: Read and write</b> — Metadata-only is the default `
+            + `and won't do. A token scoped to a different repo gives exactly this error.`);
+        return;
+      }
+      if(res.status===401){ ghState("bad token","var(--warn)");
+        toast("GitHub rejected the token itself (401) — it may be expired, or pasted with a character missing."); return; }
+      if(res.status===409){ ghState("out of date","var(--warn)");
+        toast("That file changed in the repo since this page loaded. Refresh the library list and save again."); return; }
+      throw new Error("HTTP "+res.status+" "+(await res.text()).slice(0,140));
+    }
     toast(`${sha?"Updated":"Saved"} “${name}” in ${GHLIB.repo} → ${path} ✓`);
     ghState("saved ✓","var(--good)"); ghRefresh(true);
   }catch(e){ghState("write error","var(--warn)");toast("Repo save failed: "+e.message);}
