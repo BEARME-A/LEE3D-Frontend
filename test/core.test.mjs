@@ -1658,6 +1658,74 @@ t("features: an empty group is harmless", () => {
      "no selection must still give usable slider numbers, not NaN");
 });
 
+t("origami: detail may dent the sheet, never cut it into extra pieces", () => {
+  // The three traced outlines define the solid: a point is material when it is inside all
+  // three at once, and nothing else gets a say. Stamped detail is allowed to move that
+  // surface, but a vertical line through the body must still pass through the SAME number
+  // of separate pieces afterwards. When it doesn't, the surface has folded through itself
+  // and the trapped sliver reads as a floating slab — the plank seen through a wheel arch.
+  // Root cause it guards: a stamp deeper than the distance between neighbouring vertices
+  // laps the sheet over, which the inside-out check can't see because each triangle stays
+  // correctly wound.
+  const L = 201, Hh = 84, Ww = 45;
+  const outline = [[0.06,0.06],[0.94,0.06],[0.94,0.94],[0.06,0.94]];
+  const ring = (cx,cy,r) => Array.from({length:14},(_,i)=>{
+    const a=i/14*Math.PI*2; return [cx+Math.cos(a)*r, cy+Math.sin(a)*r]; });
+  const feats = [];
+  for (const v of ["front","rear","side","top"])
+    for (const r of [0.30,0.22,0.14])
+      feats.push({ view:v, poly:ring(0.5,0.5,r), depth:-2.5, soft:0.08 });
+
+  const P = { mode:"projection", length:L, stations:48, hullCrisp:1, hullHollow:false,
+    wallThickness:5, sidePoly:outline, topPoly:outline, frontPoly:outline,
+    topProfile:[[0,Hh]], widthProfile:[[0,Ww/2]] };
+  const plain  = API.makeBody({ ...P });
+  const inked  = API.makeBody({ ...P, features:feats });
+
+  // how many separate runs of material a vertical line meets
+  const sections = (g,x,y) => {
+    const Q=g.positions, I=g.indices, hits=[];
+    for (let t=0;t<I.length;t+=3) {
+      const a=I[t],b=I[t+1],c=I[t+2];
+      const ax=Q[a*3],ay=Q[a*3+1],bx=Q[b*3],by=Q[b*3+1],cx=Q[c*3],cy=Q[c*3+1];
+      const den=(by-cy)*(ax-cx)+(cx-bx)*(ay-cy); if (Math.abs(den)<1e-12) continue;
+      const l1=((by-cy)*(x-cx)+(cx-bx)*(y-cy))/den;
+      const l2=((cy-ay)*(x-cx)+(ax-cx)*(y-cy))/den;
+      if (l1<0||l2<0||1-l1-l2<0) continue;
+      hits.push(l1*Q[a*3+2]+l2*Q[b*3+2]+(1-l1-l2)*Q[c*3+2]);
+    }
+    return Math.floor(hits.length/2);
+  };
+  let checked=0, extra=0;
+  for (let x=25;x<=175;x+=15) for (let y=-14;y<=14;y+=7) {
+    const base=sections(plain,x,y); if (!base) continue;
+    checked++;
+    if (sections(inked,x,y) > base) extra++;
+  }
+  ok(checked > 20, `the scan has to actually cover the body (${checked} columns)`);
+  ok(extra === 0,
+     `stamping cut ${extra} of ${checked} columns into extra pieces — the sheet folded through itself`);
+});
+t("origami: the detail is still really there", () => {
+  // The guard above is trivially satisfiable by stamping nothing at all, so pin the other
+  // side of it too: the surface must still MOVE where detail was drawn.
+  const outline = [[0.06,0.06],[0.94,0.06],[0.94,0.94],[0.06,0.94]];
+  const ring = (cx,cy,r) => Array.from({length:14},(_,i)=>{
+    const a=i/14*Math.PI*2; return [cx+Math.cos(a)*r, cy+Math.sin(a)*r]; });
+  const P = { mode:"projection", length:201, stations:48, hullCrisp:1, hullHollow:false,
+    wallThickness:5, sidePoly:outline, topPoly:outline, frontPoly:outline,
+    topProfile:[[0,84]], widthProfile:[[0,22]] };
+  const plain = API.makeBody({ ...P });
+  const inked = API.makeBody({ ...P, features:[{view:"side",poly:ring(0.5,0.5,0.3),depth:-2.5,soft:0.08}] });
+  let moved=0;
+  for (let k=0;k<plain.positions.length;k+=3) {
+    const d=Math.hypot(inked.positions[k]-plain.positions[k],
+      inked.positions[k+1]-plain.positions[k+1], inked.positions[k+2]-plain.positions[k+2]);
+    if (d>0.2) moved++;
+  }
+  ok(moved > 20, `detail must still press into the surface (${moved} vertices moved)`);
+});
+
 // --- report ---
 console.log("\nLEE3D core suite — functions read live from index.html\n");
 if (MISSING.length) console.log("  (not present yet: " + MISSING.join(", ") + ")\n");
