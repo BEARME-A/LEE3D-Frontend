@@ -329,8 +329,18 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
      which is what the `hidden` attribute does — the button simply did nothing on an iPhone.
      The input stays rendered (just parked off-screen) and the visible control is a real
      <label>, so tapping it activates the input natively with no scripted click at all. */
-  .filepick{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;
-    clip:rect(0 0 0 0);white-space:nowrap;border:0;padding:0;margin:-1px}
+  .filepick{position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;
+    border:0;padding:0;margin:0;pointer-events:none}
+  /* WHY FIXED, NOT ABSOLUTE, AND WHY NOT CLIPPED.
+     On phones the toolbars become horizontal scroll strips (overflow-x:auto,
+     overflow-y:hidden — see the 860px block below). A file input parked with
+     position:absolute and margin:-1px is a CHILD of that strip, so the overflow clips it
+     away entirely. Desktop browsers don't care: a label still activates an input it can't
+     see. iOS Safari does care — it will not open the picker for an input that isn't
+     rendered anywhere hittable, so the button does nothing and says nothing, on phones
+     only. position:fixed takes the input out of the scrolling ancestor so nothing can clip
+     it, and dropping clip/overflow leaves it genuinely rendered — one transparent pixel in
+     the corner, which pointer-events:none stops from ever swallowing a tap of its own. */
   label.btn{cursor:pointer}
 
   /* holographic full-model preview */
@@ -4661,18 +4671,32 @@ function loadSheet(file){
   if(!looksImage){toast("That file isn't an image or SVG. (PDF? screenshot a page, or use the backend's /import/pdf.)");return;}
   const url=URL.createObjectURL(file),img=new Image();
   img.onload=()=>{
-    impAddPage(img,url,(file.name||"page").replace(/\.[^.]+$/,"").slice(0,22));
-    document.getElementById("sheetImg").src=url;document.getElementById("iDrop").style.display="none";
-    switchTab("import");setTimeout(()=>{layoutSheet();renderCrops();updateImpStatus();impRenderPages();},60);
-    toast(IMP.pages.length>1
-      ? `Added <b>${IMP.cur.name}</b> — ${IMP.pages.length} pages. Give each view a role; <span class='mono'>Send</span> collects them all.`
-      : "Sheet loaded. <span class='mono'>Auto-detect views</span>, then set scale and send. Drop more files to add pages.");
+    /* Everything past here runs in a callback, so anything that throws used to vanish into
+       the console — the tap looked like it did nothing at all, which is indistinguishable
+       from a dead button and impossible to report usefully from a phone. Say what broke. */
+    try{
+      impAddPage(img,url,(file.name||"page").replace(/\.[^.]+$/,"").slice(0,22));
+      document.getElementById("sheetImg").src=url;document.getElementById("iDrop").style.display="none";
+      switchTab("import");setTimeout(()=>{
+        try{ layoutSheet();renderCrops();updateImpStatus();impRenderPages(); }
+        catch(err){ toast("Sheet loaded, but laying it out failed: "+err.message); }
+      },60);
+      toast(IMP.pages.length>1
+        ? `Added <b>${IMP.cur.name}</b> — ${IMP.pages.length} pages. Give each view a role; <span class='mono'>Send</span> collects them all.`
+        : "Sheet loaded. <span class='mono'>Auto-detect views</span>, then set scale and send. Drop more files to add pages.");
+    }catch(err){
+      toast("Couldn't add that sheet: "+err.message);
+    }
   };
-  img.onerror=()=>toast("Couldn't read that file.");
+  img.onerror=()=>toast(`Couldn't read <b>${nm||"that file"}</b> — the browser can't decode it. iPhone HEIC photos sometimes need converting; try a screenshot of the drawing instead.`);
   img.src=url;
 }
 function loadSheets(files){ [...files].forEach((f,i)=>setTimeout(()=>loadSheet(f), i*120)); }
-document.getElementById("sheetFile").onchange=e=>{const fs2=[...e.target.files]; e.target.value=""; if(fs2.length)loadSheets(fs2);};
+document.getElementById("sheetFile").onchange=e=>{
+  const fs2=[...e.target.files]; e.target.value="";
+  if(!fs2.length){toast("No file came back from the picker. If you chose an iCloud file, wait for it to download and try again.");return;}
+  try{ loadSheets(fs2); }catch(err){ toast("Load sheet failed: "+err.message); }
+};
 (function(){const host=document.getElementById("sheetHost");
   ["dragover","dragenter"].forEach(ev=>host.addEventListener(ev,e=>{e.preventDefault();host.style.outline="2px dashed var(--accent)";}));
   ["dragleave","drop"].forEach(ev=>host.addEventListener(ev,e=>{e.preventDefault();host.style.outline="none";}));
