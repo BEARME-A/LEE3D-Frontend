@@ -2119,6 +2119,42 @@ function makeVisualHull(p){
       }
     }
     const inner=innerOffsets(plainSkin,outerIdx,wall,vc);   // clean inside, no stamped detail
+    /* THE RIM IS THE ONE PLACE THE WALL IS ON SHOW.
+       Everywhere else the inside is hidden, so innerOffsets is free to relax it smooth and
+       only guarantees a MINIMUM thickness. Around the opening that freedom is visible: the
+       relaxation has neighbours on one side only, so the inner edge wanders, and measured on
+       this car at a 2mm setting the rim came out anywhere from 1.7mm to 6.8mm wide — a
+       four-to-one spread swinging back and forth around the arch. Seen edge-on through a
+       wheel arch that band IS the edge, and a band that keeps changing width reads as teeth.
+       Note the outer boundary curve itself is already fair (measured: 0.28mm p90 wobble) —
+       it was never the outline that looked ragged, it was the lip hanging off it.
+       So pin it: on the boundary the inner surface sits at exactly the asked-for thickness
+       along the direction it was already offset, and the ring just inside blends back to the
+       relaxed interior so there's no step where the two meet. */
+    if(trimmed){
+      const ec4=new Map(), u4=(a,b)=>a<b?a+"_"+b:b+"_"+a;
+      for(let q=0;q<outerIdx.length;q+=3){const t=[outerIdx[q],outerIdx[q+1],outerIdx[q+2]];
+        for(const[u,v]of[[t[0],t[1]],[t[1],t[2]],[t[2],t[0]]])ec4.set(u4(u,v),(ec4.get(u4(u,v))||0)+1);}
+      const edge=new Set(), ring=new Set();
+      for(const[k,c]of ec4){ if(c!==1)continue; const p2=k.indexOf("_");
+        edge.add(+k.slice(0,p2)); edge.add(+k.slice(p2+1)); }
+      for(let q=0;q<outerIdx.length;q+=3){const t=[outerIdx[q],outerIdx[q+1],outerIdx[q+2]];
+        if(t.some(v=>edge.has(v))) for(const v of t) if(!edge.has(v)) ring.add(v); }
+      /* Measured from the OUTER skin, not the clean copy the inside was built from. The rim
+         quads join positions[v] to inner[v], so that pair is the band you actually see; the
+         plain copy can be a stamp's depth away from it and pinning to the wrong one leaves
+         the lip varying by exactly that much (measured: it left some of the band at 0.9mm on
+         a 2mm setting). */
+      const setGap=(v,frac)=>{
+        const ox=positions[v*3], oy=positions[v*3+1], oz=positions[v*3+2];
+        let dx=inner[v*3]-ox, dy=inner[v*3+1]-oy, dz=inner[v*3+2]-oz;
+        const L=Math.hypot(dx,dy,dz); if(L<1e-6)return;
+        const want=wall/L, s=1+(want-1)*frac;
+        inner[v*3]=ox+dx*s; inner[v*3+1]=oy+dy*s; inner[v*3+2]=oz+dz*s;
+      };
+      for(const v of edge) setGap(v,1);              // the lip itself: exact
+      for(const v of ring) setGap(v,0.5);            // one ring in: half way back to relaxed
+    }
     const pos2=new Float32Array(vc*6); pos2.set(positions,0); pos2.set(inner,vc*3);
     const idx2=Array.from(outerIdx);
     for(let q=0;q<outerIdx.length;q+=3)idx2.push(vc+outerIdx[q], vc+outerIdx[q+2], vc+outerIdx[q+1]);  // wound inward
