@@ -1389,13 +1389,59 @@ function embossHull(p,positions,indices,crisp,wall){
      hands the underside detector a surface it can't read. Detail within detail still shows —
      each stamp keeps its own edge ramp — but the TOTAL travel of any vertex is now held to a
      whisker over one full stamp, so nesting can shade, never excavate. */
+  /* A FOLD IS NOT A DENT.
+     The mesher puts one vertex per grid cell, so on this car the surface is described about
+     every 2.8mm. A stamp that shoves one vertex 3.5mm while its neighbour barely moves lifts
+     the sheet clean over itself, and the trapped sliver — measured at one cell thick — is the
+     plank you see through a wheel arch. The existing back-off pass can't catch it: during a
+     lap like that every individual triangle stays correctly wound.
+
+     But the thing that folds a sheet is not how FAR it is pushed, it is how sharply the push
+     changes from one point to the next. Capping the distance alone throws away depth
+     everywhere to stop tearing in a few places — a broad, gently-sloped pocket is perfectly
+     safe at full depth. So the limit belongs on the DIFFERENCE between neighbours: no two
+     adjacent vertices may end up displaced by more than a fraction of the distance between
+     them. Relaxing that difference lets a wide feature keep its depth and only softens
+     detail finer than the grid can carry — which is detail the mesh was never able to
+     represent honestly in the first place. */
   {
+    const edges=[]; const eSeen=new Set();
+    for(let q=0;q<indices.length;q+=3){
+      const t=[indices[q],indices[q+1],indices[q+2]];
+      for(const [a,b] of [[t[0],t[1]],[t[1],t[2]],[t[2],t[0]]]){
+        const k=a<b?a+"_"+b:b+"_"+a; if(eSeen.has(k))continue; eSeen.add(k);
+        const dx=before[a*3]-before[b*3], dy=before[a*3+1]-before[b*3+1], dz=before[a*3+2]-before[b*3+2];
+        const L=Math.hypot(dx,dy,dz); if(L>1e-9)edges.push([a,b,L]);
+      }
+    }
+    const D=new Float64Array(n*3);
+    for(let k=0;k<n;k++){D[k*3]=pts[k][0]-before[k*3];D[k*3+1]=pts[k][1]-before[k*3+1];D[k*3+2]=pts[k][2]-before[k*3+2];}
+    const SLOPE=0.25;                       /* how sharply the push may change between neighbours.
+        Swept against the origami check: 0.62 tore 18 of 340 columns, 0.35 tore 8, and from
+        0.28 down nothing tears at all — while the deepest detail stays at the full 3.51mm
+        the cap allows, at every setting. So this costs no depth whatsoever; it only stops
+        the push changing faster than the mesh can describe. 0.25 sits below the knee with
+        room to spare, since a coarser grid or a bolder drawing moves that knee. */
+    for(let pass=0;pass<24;pass++){
+      let worst=0;
+      for(const [a,b,L] of edges){
+        const dx=D[a*3]-D[b*3], dy=D[a*3+1]-D[b*3+1], dz=D[a*3+2]-D[b*3+2];
+        const m=Math.hypot(dx,dy,dz), lim=L*SLOPE;
+        if(m<=lim)continue;
+        if(m-lim>worst)worst=m-lim;
+        const s=(m-lim)/(2*m);
+        D[a*3]-=dx*s; D[a*3+1]-=dy*s; D[a*3+2]-=dz*s;
+        D[b*3]+=dx*s; D[b*3+1]+=dy*s; D[b*3+2]+=dz*s;
+      }
+      if(worst<0.01)break;
+    }
+    // and the absolute ceiling still stands: nesting may shade a panel, never excavate it
     const capTot=Math.max(0.05,(wall||2)*0.5)*1.35;
     for(let k=0;k<n;k++){
-      const dx=pts[k][0]-before[k*3], dy=pts[k][1]-before[k*3+1], dz=pts[k][2]-before[k*3+2];
+      let dx=D[k*3],dy=D[k*3+1],dz=D[k*3+2];
       const dl=Math.hypot(dx,dy,dz);
-      if(dl>capTot){const f=capTot/dl;
-        pts[k][0]=before[k*3]+dx*f; pts[k][1]=before[k*3+1]+dy*f; pts[k][2]=before[k*3+2]+dz*f;}
+      if(dl>capTot){const f=capTot/dl; dx*=f;dy*=f;dz*=f;}
+      pts[k][0]=before[k*3]+dx; pts[k][1]=before[k*3+1]+dy; pts[k][2]=before[k*3+2]+dz;
     }
   }
   // back off anything that would tear the surface
@@ -1563,6 +1609,41 @@ function bottomSkinTris(positions,indices,opts){
   comps.sort((a,b)=>b.area-a.area);
   for(let i=1;i<comps.length;i++)                            // the biggest patch is always the opening
     if(comps[i].area < totArea*0.02) for(const x of comps[i].comp) flag[x]=0;   // a speck, not an opening
+  /* NOW THE OTHER HALF OF THE SAME PROBLEM — the tabs left behind INSIDE the opening.
+     The filter above throws away specks of opening stranded in the skin. The reverse happens
+     just as often and looks far worse: specks of SKIN stranded in the opening, where the
+     depth test kept a triangle here and there in the middle of a region that is otherwise
+     entirely open. Measured on this car: ten of them, from 2mm² to 208mm², against a real
+     skin of 45,677mm². Each is a little flap left dangling in the hole, and because every
+     one carries its own boundary loop, the rim gets stitched all the way around each — which
+     is the nibbled, jigsaw edge round the wheel arches, and the count of loops (13 where the
+     shape needs about 4) is exactly the count of those tabs plus the genuine openings.
+     A tab completely ringed by the opening belongs to the opening. Fill it in. The largest
+     unflagged region is the real skin and is never touched, so this can only ever tidy an
+     edge — it cannot eat the body. */
+  {
+    const seen2=new Uint8Array(nTri), regions=[];
+    for(let t=0;t<nTri;t++){
+      if(flag[t]||seen2[t])continue;
+      const comp=[t]; seen2[t]=1; let ar=triArea(t);
+      for(let i=0;i<comp.length;i++) for(const y of nb.get(comp[i])||[])
+        if(!flag[y] && !seen2[y]){seen2[y]=1;comp.push(y);ar+=triArea(y);}
+      regions.push({comp,area:ar});
+    }
+    if(regions.length>1){
+      regions.sort((a,b)=>b.area-a.area);
+      const skin=regions[0].area;                       // the body itself — never fill this
+      for(let i=1;i<regions.length;i++){
+        const r=regions[i];
+        if(r.area >= skin*0.02) continue;               // big enough to be real skin, leave it
+        const inside=new Set(r.comp);
+        let border=0, ringed=0;
+        for(const t of r.comp) for(const y of nb.get(t)||[]){
+          if(inside.has(y))continue; border++; if(flag[y])ringed++; }
+        if(border>0 && ringed===border) for(const t of r.comp) flag[t]=1;   // fully surrounded -> it's a tab
+      }
+    }
+  }
   return flag;
 }
 /* The inner wall: the outer skin pushed in by one wall thickness. Where the body turns a corner
