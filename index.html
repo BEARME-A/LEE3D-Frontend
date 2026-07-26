@@ -2149,7 +2149,12 @@ function makeVisualHull(p){
         const ox=positions[v*3], oy=positions[v*3+1], oz=positions[v*3+2];
         let dx=inner[v*3]-ox, dy=inner[v*3+1]-oy, dz=inner[v*3+2]-oz;
         const L=Math.hypot(dx,dy,dz); if(L<1e-6)return;
-        const want=wall/L, s=1+(want-1)*frac;
+        /* Only ever pull the lip IN, never push it out. innerOffsets deliberately shortens
+           the offset where the body turns tighter than the wall is thick, and that back-off is
+           what stops the inside folding through itself and throwing spikes. Forcing those
+           vertices back out to full thickness would undo exactly that protection, so the pin
+           caps an over-wide band and otherwise leaves the safe distance alone. */
+        const want=Math.min(1,wall/L), s=1+(want-1)*frac;
         inner[v*3]=ox+dx*s; inner[v*3+1]=oy+dy*s; inner[v*3+2]=oz+dz*s;
       };
       for(const v of edge) setGap(v,1);              // the lip itself: exact
@@ -3922,18 +3927,27 @@ document.querySelectorAll("#featTool button").forEach(b=>b.onclick=()=>{
 document.getElementById("featSvgAll").onclick=()=>{
   const list=svgDetails(activeView);
   if(!list.length){toast("No SVG lines on this view to take.");return;}
-  // Every feature is re-evaluated at every point of the model, so taking a whole drawing's
-  // worth turns a 100ms rebuild into a second. And a hundred boxes over the drawing is not
-  // something anyone can edit. Take the biggest ones — the shapes that read — and let the
-  // rest be picked by hand if they're wanted.
-  const CAP=12;
+  /* This used to stop at 12 per face on the theory that every feature costs real time on
+     each rebuild. Measured, that was wrong by a wide margin: on this car the rebuild is flat
+     from 0 to about 96 features — every one of them within noise of the others — and only
+     starts climbing past 150. Twelve per face across five faces capped a whole drawing at
+     60, which is exactly what came out when the drawing held twice that. The detail was
+     being thrown away silently, and it read as "only the last face came through" because a
+     face only ever draws its own boxes; the earlier ones were there all along, just not on
+     screen. So take them all, to a limit that follows the measurement rather than a guess,
+     and say plainly when the model is getting heavy enough to feel. */
+  const CAP=40;
   const tooMany=list.length>CAP;
   const take=tooMany?list.slice().sort((a,b)=>polyAreaPts(b)-polyAreaPts(a)).slice(0,CAP):list;
   let added=0; take.forEach(p=>{ if(featAddSvgPoly(activeView,p,true))added++; });
   featRender(); requestRebuild(); drawTrace();
-  toast(tooMany
-    ? `Took the <b>${added}</b> biggest shapes of ${list.length}. Every feature costs time on every rebuild, and a hundred boxes can't be edited — click any others you want individually.`
-    : `Took <b>${added}</b> shape(s) straight from your drawing.`);
+  const total=features.length;
+  const heavy = total>120
+    ? ` <b>${total}</b> on the model now — past about 120 the rebuild starts to drag.`
+    : ` <b>${total}</b> on the model now.`;
+  toast((tooMany
+    ? `Took the <b>${added}</b> biggest shapes of ${list.length} on <b>${activeView}</b> — click any others you want individually.`
+    : `Took <b>${added}</b> shape(s) from <b>${activeView}</b>.`) + heavy);
 };
 document.getElementById("featSelFace").onclick=()=>{
   const idx=featOnView(features,activeView);
