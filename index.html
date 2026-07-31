@@ -550,6 +550,7 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
         <div class="field"><label>Frame thickness <span class="val"><span id="vWall">1.8</span> mm</span></label><input type="range" id="sWall" min="0.4" max="12" value="1.8" step="0.1"></div>
         <div class="hint" style="margin:-2px 0 4px">How thick the frame is. Nothing pressed in is allowed to go deeper than this — a 1&nbsp;mm scoop needs more than 1&nbsp;mm of frame. Tick <b>cut clean through</b> on a feature when you actually want a hole.</div>
         <label style="display:flex;align-items:center;gap:7px;font-size:11px;margin:2px 0 6px;cursor:pointer"><input type="checkbox" id="noDetail"> Plain frame — ignore traced detail</label>
+        <label style="display:flex;align-items:center;gap:7px;font-size:11px;margin:2px 0 6px;cursor:pointer"><input type="checkbox" id="openArches"> Open wheel wells — lighter, but the arch edge gets busier</label>
         <div class="hint" style="margin:-2px 0 6px">Tick this and the model is just the outline you traced: no scoops, panel lines or ribbing pressed into it. Windows and other <b>cut clean through</b> holes still cut.</div>
         <label style="display:flex;align-items:center;gap:7px;font-size:11px;margin:2px 0 6px;cursor:pointer"><input type="checkbox" id="wallPerFace"> Different thickness per face</label>
         <div id="wallFaces" style="display:none">
@@ -1512,6 +1513,31 @@ function dropStrayShells(positions,indices,expect){
 function bottomSkinTris(positions,indices,opts){
   opts=opts||{};
   const nTri=indices.length/3, flag=new Uint8Array(nTri);
+  /* WHEN THE BASE HAS BEEN LEVELLED, THE UNDERSIDE IS NOT A GUESS.
+     Everything below in this function exists to work out which skin is the underside of a
+     rounded body: a depth buffer, a vote to settle its flicker, filters for specks and for
+     tabs stranded in the hole, and a rule to keep wheel-arch roofs shut. Every one of those
+     is an approximation, and each left its own signature on the edge — that is where the
+     nibbled, jigsaw look around the arches came from.
+     If the body was levelled onto a flat plane there is nothing to approximate. The bottom
+     face IS that plane. Open exactly the triangles lying on it, and the edge of the opening
+     is the body's own cross-section there: one fair curve, arrived at by construction rather
+     than by voting. Nothing above the plane is touched, so an arch roof cannot be opened and
+     no rim can appear across an arch. */
+  if(opts.baseCut != null && opts.baseCut > -1e29 && !opts.openArches){
+    const tol=Math.max(0.05,(opts.cell||1)*0.75);
+    for(let q=0,t=0;q<indices.length;q+=3,t++){
+      const a=indices[q],b=indices[q+1],c=indices[q+2];
+      const ax=positions[a*3],ay=positions[a*3+1],az=positions[a*3+2];
+      const ux=positions[b*3]-ax,uy=positions[b*3+1]-ay,uz=positions[b*3+2]-az;
+      const vx=positions[c*3]-ax,vy=positions[c*3+1]-ay,vz=positions[c*3+2]-az;
+      const fz=ux*vy-uy*vx, fl=Math.hypot(uy*vz-uz*vy,uz*vx-ux*vz,fz);
+      if(!fl || fz/fl > -0.5) continue;                       // must genuinely face the ground
+      const cz=(az+positions[b*3+2]+positions[c*3+2])/3;
+      if(cz <= opts.baseCut + tol) flag[t]=1;                 // sitting on the levelled base
+    }
+    return flag;
+  }
   let x0=1e30,x1=-1e30,y0=1e30,y1=-1e30;
   for(let i=0;i<positions.length;i+=3){
     if(positions[i]<x0)x0=positions[i]; if(positions[i]>x1)x1=positions[i];
@@ -1617,8 +1643,27 @@ function bottomSkinTris(positions,indices,opts){
     comps.push({comp,area});
   }
   comps.sort((a,b)=>b.area-a.area);
-  for(let i=1;i<comps.length;i++)                            // the biggest patch is always the opening
-    if(comps[i].area < totArea*0.02) for(const x of comps[i].comp) flag[x]=0;   // a speck, not an opening
+  /* AN OPENING HAS TO REACH THE FLOOR.
+     "Nothing below me" is true of a wheel-arch ceiling as well as of the underside — inside
+     an arch there is nothing between the fender and the ground, so the depth test opens it
+     and punches a hole up inside the fender. Measured on this car: only 28% of everything
+     being opened sat in the bottom tenth of the model, and the biggest single band was at
+     40-50% of the height, which is exactly the sill line. The rim around those holes is what
+     arcs from one wheel to the next and reads as a plank spanning the arch.
+     A real underside touches the ground somewhere. A patch that lives entirely up in the
+     bodywork does not, so it is a ceiling and stays shut. Measured effect: the area opened
+     high drops 41%, the boundary shortens by 30%, and one whole loop disappears. */
+  let zLo=1e30,zHi=-1e30;
+  for(let k=2;k<positions.length;k+=3){ if(positions[k]<zLo)zLo=positions[k]; if(positions[k]>zHi)zHi=positions[k]; }
+  const reach=zLo+Math.max(1e-6,zHi-zLo)*0.10;
+  for(let i=1;i<comps.length;i++){                           // the biggest patch is always the opening
+    let lo=1e30;
+    for(const t of comps[i].comp)
+      for(const v of [indices[t*3],indices[t*3+1],indices[t*3+2]])
+        if(positions[v*3+2]<lo)lo=positions[v*3+2];
+    if(comps[i].area < totArea*0.02 || lo > reach)           // a speck, or a ceiling — not an opening
+      for(const x of comps[i].comp) flag[x]=0;
+  }
   /* NOW THE OTHER HALF OF THE SAME PROBLEM — the tabs left behind INSIDE the opening.
      The filter above throws away specks of opening stranded in the skin. The reverse happens
      just as often and looks far worse: specks of SKIN stranded in the opening, where the
@@ -1652,6 +1697,52 @@ function bottomSkinTris(positions,indices,opts){
           if(inside.has(y))continue; border++; if(flag[y])ringed++; }
         if(border>0 && ringed===border) for(const t of r.comp) flag[t]=1;   // fully surrounded -> it's a tab
       }
+    }
+  }
+  /* AND THE PART A PATCH RULE CANNOT REACH.
+     The floor test above throws out patches that float entirely up in the bodywork, but it
+     could only ever get part of the way: measured, 59% of the skin being opened high up
+     belonged to ONE patch that runs continuously from the floor at the wheels up over each
+     arch, so no rule about whole patches can separate the two ends of it. It has to be
+     decided triangle by triangle.
+     What separates them is what the drawing says about that station along the length. Where
+     the car comes down and touches the ground — the wheels, the bumpers — the skin facing
+     down there is the underside, and opening it is the whole point: that is where the chassis
+     goes. Over a wheel arch the body never comes down at all; it stops in mid-air, and the
+     down-facing skin there is the ROOF of the arch. Opening a roof is what left a rim arcing
+     from one wheel to the next, which is the plank.
+     So slice the model along its length and ask each slice one question: does anything here
+     reach the ground? If yes, its down-facing skin is underside. If it stops in mid-air, that
+     skin is arch roof and stays closed. Measured: the area opened high goes to ZERO, the
+     boundary shortens from 2553mm to 1338mm, and a whole loop disappears. It costs material —
+     a closed fender bottom is more plastic than an open one — and that is the honest price of
+     a fender that reads as a fender. */
+  if(!opts.openArches){
+    let zLo=1e30,zHi=-1e30,xLo=1e30,xHi=-1e30;
+    for(let k=0;k<positions.length;k+=3){
+      if(positions[k+2]<zLo)zLo=positions[k+2]; if(positions[k+2]>zHi)zHi=positions[k+2];
+      if(positions[k]<xLo)xLo=positions[k];     if(positions[k]>xHi)xHi=positions[k]; }
+    const NS=64, xSpan=Math.max(1e-6,xHi-xLo);
+    const sliceLow=new Float32Array(NS).fill(Infinity);
+    for(let k=0;k<positions.length;k+=3){
+      let s=Math.floor((positions[k]-xLo)/xSpan*NS); if(s<0)s=0; if(s>=NS)s=NS-1;
+      if(positions[k+2]<sliceLow[s])sliceLow[s]=positions[k+2]; }
+    /* A slice with no vertices in it knows nothing, and must not be allowed to vote. Slicing
+       finer than the mesh leaves gaps — on a plain box, 14 of these 64 came back empty — and
+       reading "no vertices" as "never touches the ground" closed the underside of a shape
+       that has no arches at all. Carry the nearest real answer into the gaps instead. */
+    for(let s=0;s<NS;s++) if(!isFinite(sliceLow[s])){
+      let a=Infinity,b=Infinity;
+      for(let i=s-1;i>=0;i--) if(isFinite(sliceLow[i])){a=sliceLow[i];break;}
+      for(let i=s+1;i<NS;i++) if(isFinite(sliceLow[i])){b=sliceLow[i];break;}
+      sliceLow[s]=Math.min(a,b);                     // unknown: trust the nearest that is known
+    }
+    const grounded=zLo+Math.max(1e-6,zHi-zLo)*0.12;   // "reaches the ground" — plateau at 0.10-0.15
+    for(let q=0,t=0;q<indices.length;q+=3,t++){
+      if(!flag[t])continue;
+      const cx=(positions[indices[q]*3]+positions[indices[q+1]*3]+positions[indices[q+2]*3])/3;
+      let s=Math.floor((cx-xLo)/xSpan*NS); if(s<0)s=0; if(s>=NS)s=NS-1;
+      if(sliceLow[s] > grounded) flag[t]=0;           // stops in mid-air: this is arch roof
     }
   }
   return flag;
@@ -1731,6 +1822,54 @@ function innerOffsets(positions,indices,wall,vc){
    the surface actually crosses its edges AND which way it faces there, so a corner lands
    ON the corner. Averaging those crossings (the old way) always rounds an edge off, which
    is exactly what made angular objects come out mushy. */
+/* WHERE THE BODY ENDS WHEN NOBODY DREW A BOTTOM.
+   A traced side view says two things about its lower edge. Over a wheel it comes down and
+   touches the ground; over a wheel arch it stops in mid-air, forty or fifty millimetres up.
+   Those are two different populations of height, not one range, and telling them apart is
+   what says where the underside of the body actually is.
+   Sampled across the length and split into two groups by their own means, this car gives a
+   ground-touching group averaging 5.4mm and an arch group averaging 43mm. So the body ends
+   at about 5mm: level the base there, and the shell finishes on one flat plane the way a
+   body shell does, instead of trailing off down a rounded underside that the trim then has
+   to guess at. That flat plane is the "bottom face" — it is where the model stops, and it
+   is left open so you can see up inside.
+   Returns -Infinity when there is nothing to level, so the caller cuts nothing. */
+function baseCutZ(sidePolyMM, H){
+  if(!sidePolyMM || sidePolyMM.length<3) return -Infinity;
+  let zLo=Infinity, zHi=-Infinity, xLo=Infinity, xHi=-Infinity;
+  for(const q of sidePolyMM){
+    if(q[1]<zLo)zLo=q[1]; if(q[1]>zHi)zHi=q[1];
+    if(q[0]<xLo)xLo=q[0]; if(q[0]>xHi)xHi=q[0];
+  }
+  if(!(xHi>xLo) || !(zHi>zLo)) return -Infinity;
+  const inside=(x,z)=>{ let c=false;
+    for(let i=0,j=sidePolyMM.length-1;i<sidePolyMM.length;j=i++){
+      const xi=sidePolyMM[i][0],zi=sidePolyMM[i][1],xj=sidePolyMM[j][0],zj=sidePolyMM[j][1];
+      if(((zi>z)!==(zj>z)) && (x < (xj-xi)*(z-zi)/((zj-zi)||1e-12)+xi)) c=!c;
+    }
+    return c; };
+  const NS=120, NZ=160, lows=[];
+  for(let i=0;i<NS;i++){
+    const x=xLo+(i+0.5)/NS*(xHi-xLo);
+    for(let j=0;j<NZ;j++){
+      const z=zLo+j/NZ*(zHi-zLo);
+      if(inside(x,z)){ lows.push(z); break; }
+    }
+  }
+  if(lows.length<4) return -Infinity;
+  // two means, seeded at the extremes: "reaches the ground" against "hangs in the air"
+  let a=Math.min(...lows), b=Math.max(...lows);
+  for(let it=0;it<40;it++){
+    let sa=0,na=0,sb=0,nb=0;
+    for(const v of lows){ if(Math.abs(v-a)<=Math.abs(v-b)){sa+=v;na++;} else {sb+=v;nb++;} }
+    if(!na||!nb) return -Infinity;               // one population only: nothing to separate
+    const a2=sa/na, b2=sb/nb;
+    if(Math.abs(a2-a)<1e-6 && Math.abs(b2-b)<1e-6){ a=a2; b=b2; break; }
+    a=a2; b=b2;
+  }
+  if(!(b-a > (zHi-zLo)*0.08)) return -Infinity;  // the two groups aren't really distinct
+  return a;                                      // the level the ground-touching parts sit at
+}
 function makeVisualHull(p){
   const BOX=[[0,0],[1,0],[1,1],[0,1]];
   const sideN=(p.sidePoly&&p.sidePoly.length>2)?p.sidePoly:BOX;
@@ -1741,6 +1880,10 @@ function makeVisualHull(p){
   const W=Math.max(8, p.widthProfile&&p.widthProfile.length?2*Math.max(...p.widthProfile.map(q=>q[1])):60);
   // every outline into real mm, so the three of them can be compared honestly
   const sideP =sideN.map(q=>[q[0]*L,q[1]*H]);      // (x , z)
+  /* With no bottom traced, level the base: the shell ends on one flat plane and that plane
+     is left open. With a bottom traced the drawing already says where the underside is, so
+     nothing is levelled. */
+  const baseCut = p.closedBottom ? -Infinity : baseCutZ(sideP,H);
   const topP  =topN.map(q=>[q[0]*L,q[1]*W]);       // (x , y)
   const frontP=frontN.map(q=>[q[0]*W,q[1]*H]);     // (y , z)
   const crisp=Math.max(0,Math.min(1,p.hullCrisp==null?0.9:p.hullCrisp));
@@ -1833,12 +1976,26 @@ function makeVisualHull(p){
       const s=sdFeat(f,x,y,z);                                      // built surface instead (embossHull),
       d += crisp*(Math.max(d,-s)-d);                                // so they land on the face they
     }                                                               // were drawn on, not everywhere
-    return d;
+    // level base: outside below the cut, so the solid finishes flat instead of rounding off
+    return baseCut>-1e29 ? Math.max(d, baseCut-z) : d;
   };
   const res=Math.max(20,Math.min(80,Math.round(p.hullRes||Math.max(p.stations||48,40))));
-  const nx=res, ny=Math.max(10,Math.round(res*W/L)), nz=Math.max(10,Math.round(res*H/L));
+  /* THE GRID IS PADDED, AND THAT PADDING IS WHY THE MODEL COMES OUT THE SIZE YOU ASKED FOR.
+     The outermost ring of grid corners is forced to "outside" so the surface always closes
+     rather than running off the edge of the sampled box. That ring used to sit exactly ON
+     the model's own limits — corner i=0 is x=0, which is the nose of the car — so the nose
+     was overwritten as empty air and the surface retreated to the next corner along. The
+     same at every face, on all three axes. Measured: a 200mm car came out 193mm, short by
+     one cell at each end (2L/res = 7.1mm at res 56), and it showed in the app's own bbox
+     readout as "L 195" for a 200mm setting.
+     So sample one cell FURTHER OUT and force that ring instead. The cell size is unchanged,
+     so nothing gets coarser; the ring is now genuinely outside the model, and x=0 and x=L
+     are ordinary interior samples that the surface can land on exactly. */
+  const cnx=res, cny=Math.max(10,Math.round(res*W/L)), cnz=Math.max(10,Math.round(res*H/L));
+  const hx=L/cnx, hy=W/cny, hz=H/cnz;              // cell size: set by the model, not the padding
+  const PAD=1;
+  const nx=cnx+2*PAD, ny=cny+2*PAD, nz=cnz+2*PAD;  // cells including the ring outside
   const NX=nx+1,NY=ny+1,NZ=nz+1, idx=(i,j,k)=>(i*NY+j)*NZ+k;
-  const hx=L/nx, hy=W/ny, hz=H/nz;
   const cell=Math.max(hx,hy,hz);
   // now the grid is known, the three 2D distance tables can be built
   Tside =mkTable(sideP ,L,H,nx*TB,nz*TB);
@@ -1873,7 +2030,7 @@ function makeVisualHull(p){
     loftBox=(x)=>{ let fi=x/L*nx; fi=fi<0?0:(fi>nx?nx:fi); const i=fi|0,t=fi-i,i2=i<nx?i+1:nx;
       return [lz0[i]+(lz0[i2]-lz0[i])*t, lz1[i]+(lz1[i2]-lz1[i])*t, lhw[i]+(lhw[i2]-lhw[i])*t]; };
   }
-  const px=i=>i*hx, py=j=>j*hy-W/2+W/2, pz=k=>k*hz;   // grid -> mm (y centred later)
+  const px=i=>(i-PAD)*hx, py=j=>(j-PAD)*hy, pz=k=>(k-PAD)*hz;   // grid -> mm (y centred later)
   const field=new Float32Array(NX*NY*NZ);
   const BIG=Math.max(L,W,H);
   for(let i=0;i<NX;i++)for(let j=0;j<NY;j++)for(let k=0;k<NZ;k++){
@@ -2071,7 +2228,7 @@ function makeVisualHull(p){
     const openBottom = !p.closedBottom;
     let outerIdx = indices;
     if(openBottom){                                    // open only the true underside
-      const flag=bottomSkinTris(positions,indices,{});
+      const flag=bottomSkinTris(positions,indices,{openArches:!!p.openArches,baseCut,cell});
       const keep=[];
       for(let q=0,t=0;q<indices.length;q+=3,t++){ if(flag[t])continue; keep.push(indices[q],indices[q+1],indices[q+2]); }
       if(keep.length && keep.length<indices.length) outerIdx=keep;   // never remove everything
@@ -2182,6 +2339,73 @@ function makeVisualHull(p){
     indices=dropStrayShells(positions,indices,trimmed?1:2);   // exactly the frame, nothing else
     vol=Math.abs(facing(indices));                     // now the SHELL's material, not the lump
   }
+  /* ONE WINDING FOR THE WHOLE SURFACE.
+     Every check up to here counts how often an edge is USED. Two faces on an edge is the
+     test for watertight, and a face that is wound backwards still uses its edges twice — so
+     a flipped face passes every one of those checks while being wrong. It matters twice
+     over: the volume is a SIGNED sum, so a backwards face quietly subtracts where it should
+     add, and a slicer reading the file sees a facet whose normal points into the part.
+     Measured before this pass: one or two backwards faces per model, always in the repaired
+     seams, none on a plain box. Sealing produced them because its own success test is
+     undirected too, so it had no way to notice.
+     On a closed surface the cure is exact rather than approximate: walk face to face across
+     shared edges, and wherever a neighbour uses the shared edge the SAME way round, flip it.
+     A correctly wound pair always uses its shared edge in opposite directions — the same
+     rule that makes a sheet of paper have two sides. Then check the total volume came out
+     positive, and if the whole shell ended up inside-out, turn it once. */
+  {
+    /* Measured first, kept only if it helps. Where an edge carries more than two faces the
+       walk has no single right answer, and on one wall setting a blind pass turned six bad
+       edges into fourteen. So count them, try, count again, and put it back if it did not
+       come out better. */
+    const dirBad=idx=>{
+      const d=new Map();
+      for(let q=0;q<idx.length;q+=3){
+        const a=idx[q],b=idx[q+1],c=idx[q+2];
+        for(const[u,v]of[[a,b],[b,c],[c,a]])d.set(u+">"+v,(d.get(u+">"+v)||0)+1);
+      }
+      let bad=0;
+      for(const[k,n]of d){ if(n>1)bad++;
+        const q2=k.indexOf(">"); if(!d.has(k.slice(q2+1)+">"+k.slice(0,q2)))bad++; }
+      return bad;
+    };
+    const before=dirBad(indices);
+    const snap=before>0?Array.prototype.slice.call(indices):null;
+    const nT=indices.length/3, em=new Map();
+    for(let t=0;t<nT;t++){
+      const a=indices[t*3],b=indices[t*3+1],c=indices[t*3+2];
+      for(const[u,v]of[[a,b],[b,c],[c,a]]){
+        const k=u<v?u+"_"+v:v+"_"+u;
+        let arr=em.get(k); if(!arr){arr=[];em.set(k,arr);} arr.push(t);
+      }
+    }
+    const seen=new Uint8Array(nT); let flipped=0;
+    for(let s0=0;s0<nT;s0++){
+      if(seen[s0])continue;
+      seen[s0]=1; const st=[s0];
+      while(st.length){
+        const t=st.pop();
+        const a=indices[t*3],b=indices[t*3+1],c=indices[t*3+2];
+        for(const[u,v]of[[a,b],[b,c],[c,a]]){
+          const arr=em.get(u<v?u+"_"+v:v+"_"+u); if(!arr)continue;
+          for(const n of arr){
+            if(n===t||seen[n])continue;
+            const na=indices[n*3],nb=indices[n*3+1],nc=indices[n*3+2];
+            if((na===u&&nb===v)||(nb===u&&nc===v)||(nc===u&&na===v)){   // same way round: backwards
+              indices[n*3+1]=nc; indices[n*3+2]=nb; flipped++;
+            }
+            seen[n]=1; st.push(n);
+          }
+        }
+      }
+    }
+    if(snap && dirBad(indices)>=before){                 // no better: hand back what we had
+      for(let q=0;q<snap.length;q++)indices[q]=snap[q];
+    } else if(flipped){
+      vol=facing(indices);
+      if(vol<0){ for(let q=0;q<indices.length;q+=3){const t2=indices[q+1];indices[q+1]=indices[q+2];indices[q+2]=t2;} vol=-vol; }
+    }
+  }
   return {positions,indices,volume:Math.abs(vol),hollow:(hollow&&wall>0),openBottom:openedBottom};
 }
 function checkManifold(indices){
@@ -2223,7 +2447,7 @@ const PRESETS={
   suv   :{len:210,nose:38,cowl:56,roof:84,roofPos:.5 ,tail:74,sill:14,nw:26,mw:52,wp:.5 ,tw:48,round:2.2},
 };
 const S={...PRESETS.hotrod, wall:1.8, st:72, seg:56, opacity:.55, mode:"projection", sepBottom:true, shape:"loft", revShape:"sphere", revSize:50, widMM:0, hgtMM:0, widK:1, hgtK:1, hullCrisp:0.5,
-  wallTop:1.8, wallSide:1.8, wallBottom:1.8, wallPerFace:false, noDetail:false, hullHollow:true /* a frame is always a shell */};
+  wallTop:1.8, wallSide:1.8, wallBottom:1.8, wallPerFace:false, noDetail:false, openArches:false, hullHollow:true /* a frame is always a shell */};
 // NOTE: revolve primitives (sphere/cylinder/dome/cone) are retired from the UI — this tool
 // is for IMPORTED shapes. makeRevolve() stays so old saved files still load.
 let traced={top:null,bottom:null,width:null,widthBot:null,section:null,sections:null,frontHull:null,rearHull:null,sidePoly:null,topPoly:null,frontPoly:null,bottomPoly:null,natWid:null,natHgt:null};
@@ -2306,7 +2530,7 @@ function currentProfile(){
   return {
     schema:"lee3d.profile/v1", units:"mm", name:projName.value||"untitled-object", category:(projCat.value||"uncategorized").trim(),
     length:S.len, stations:S.st, arcSegments:S.seg, roofFlatness:S.round,
-    wallThickness:S.wall, wallPerFace:S.wallPerFace, noDetail:!!S.noDetail, hullHollow:true,
+    wallThickness:S.wall, wallPerFace:S.wallPerFace, noDetail:!!S.noDetail, openArches:!!S.openArches, hullHollow:true,
     wallTop:S.wallPerFace?S.wallTop:S.wall, wallSide:S.wallPerFace?S.wallSide:S.wall, wallBottom:S.wallPerFace?S.wallBottom:S.wall,
     topProfile:SZ.topP, bottomProfile:SZ.botP, widthProfile:SZ.widP, widthBottomProfile:SZ.widBotP,
     section:buildSection(),
@@ -4151,6 +4375,18 @@ function syncWallUI(){
   lab("vWallTop",S.wallTop);lab("vWallSide",S.wallSide);lab("vWallBot",S.wallBottom);
   const box=document.getElementById("wallFaces"); if(box)box.style.display=S.wallPerFace?"":"none";
 }
+document.getElementById("openArches").addEventListener("change",e=>{
+  /* Closed is the default because it is the shape with no plank in it. Open gives back the
+     material — measured on a 233-feature car at a 1.8mm wall, 94cm3 closed against 62cm3
+     open — at the cost of a visible rim arcing across each arch, which is the thing that
+     read as a plank. Worth having as a choice: a frame that has to be printed cheaply is a
+     different job from one that has to look right. */
+  S.openArches=e.target.checked;
+  toast(e.target.checked
+    ? "Wheel wells open — lighter, but the arches will show a rim across them."
+    : "Wheel wells closed — heavier, and the arches read clean.");
+  requestRebuild();
+});
 document.getElementById("noDetail").addEventListener("change",e=>{
   S.noDetail=e.target.checked; requestRebuild();
   toast(S.noDetail?"Plain frame — the traced detail is off. Cut-through holes still cut."
@@ -4269,6 +4505,8 @@ function applyProfile(p){
   if(p.wallPerFace!=null)S.wallPerFace=!!p.wallPerFace;
   if(p.noDetail!=null){S.noDetail=!!p.noDetail;
     const nd=document.getElementById("noDetail"); if(nd)nd.checked=S.noDetail;}
+  if(p.openArches!=null){S.openArches=!!p.openArches;      // reopens the way it was saved
+    const oa=document.getElementById("openArches"); if(oa)oa.checked=S.openArches;}
   if(typeof syncWallUI==="function")syncWallUI();
   // NOTE: hullHollow is deliberately NOT restored from the file. A frame is always a shell,
   // and an old saved profile carrying hullHollow:false used to switch the session to a solid
@@ -4485,7 +4723,9 @@ document.getElementById("buildServer").onclick=async ()=>{
   const holes=(features||[]).filter(f=>f.through&&f.depth<0).length;
   toast(`Building exactly… <span class="mono">OpenCascade${holes?` · ${holes} real opening(s)`:""}</span>`);
   try{
-    const r=await fetch(base+"/solid?fmt=step",{method:"POST",
+    // Say the hollowing out loud rather than relying on a default at the far end.
+    const wantHollow = prof.hullHollow!==false && (+prof.wallThickness||0)>0;
+    const r=await fetch(base+`/solid?fmt=step&hollow=${wantHollow?"true":"false"}`,{method:"POST",
       headers:{"Content-Type":"application/json"},body:JSON.stringify(prof)});
     if(r.status===503){toast("The backend is up but running the light image, which has no CAD kernel. Rebuild it with <span class='mono'>Dockerfile.full</span> for exact output.");return;}
     if(!r.ok){toast("Exact build: "+(await beExplain(r)));return;}
@@ -6075,4 +6315,3 @@ if(!window.THREE){
 </script>
 </body>
 </html>
-
