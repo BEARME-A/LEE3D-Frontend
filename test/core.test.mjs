@@ -50,7 +50,7 @@ const NAMES = ["outlineEnvelope", "anchorPxPerMm", "makeRevolve", "pointInPoly",
   "rasterRegions", "otsuThreshold", "lumOf", "regionOutline", "dilateMask", "labelBlobs", "outlineBBox", "sdPoly",
   "wallSpec", "wallAt", "minWall",
   "connDiameter", "connWarn", "connPoly", "simplifyPoly",
-  "featOnView", "featNextName", "featGroupStats",
+  "featOnView", "featNextName", "featGroupStats", "baseCutZ",
   "applyHullStrokes", "applyStroke", "hullVertexNormals", "hullAdjacency", "bottomSkinTris", "innerOffsets", "embossHull", "viewSkinVerts", "dropStrayShells", "sampleMask", "distToPoly", "viewUV"];
 const found = [];
 const src = PRELUDE + NAMES.map(n => {
@@ -1724,6 +1724,192 @@ t("origami: the detail is still really there", () => {
     if (d>0.2) moved++;
   }
   ok(moved > 20, `detail must still press into the surface (${moved} vertices moved)`);
+});
+
+t("wheel wells: closed by default, and closed means no roof is opened", () => {
+  // "Nothing below me" is true of a wheel-arch roof as well as of the underside, so the
+  // depth test used to open the roof and leave a rim arcing from one wheel to the next —
+  // the plank. Closed is the default because that is the shape with no plank in it. Open
+  // is offered because it gives the material back, and a frame printed cheaply is a
+  // different job from one that has to look right.
+  const arch = [                                    // a body on two feet, arch between them
+    [0.04,0.02],[0.22,0.02],[0.22,0.42],[0.30,0.60],[0.70,0.60],[0.78,0.42],
+    [0.78,0.02],[0.96,0.02],[0.96,0.96],[0.04,0.96]
+  ];
+  const box = [[0.05,0.05],[0.95,0.05],[0.95,0.95],[0.05,0.95]];
+  const P = { mode:"projection", length:200, stations:52, hullCrisp:1, hullHollow:true,
+    wallThickness:3, sidePoly:arch, topPoly:box, frontPoly:box,
+    topProfile:[[0,80]], widthProfile:[[0,26]] };
+  const shut = API.makeBody({ ...P });                       // default
+  const open = API.makeBody({ ...P, openArches:true });
+  ok(shut.volume > 0 && open.volume > 0, "both settings have to build something");
+  ok(API.checkManifold(shut.indices).watertight, "closed wells stay watertight");
+  ok(API.checkManifold(open.indices).watertight, "open wells stay watertight");
+  ok(shut.volume > open.volume,
+     `closing the wells is the heavier shape: ${(shut.volume/1000).toFixed(1)} vs ${(open.volume/1000).toFixed(1)} cm3`);
+  // and the thing that matters: with wells closed, nothing high up is left open
+  const solid = API.makeBody({ ...P, hullHollow:false });
+  const openedHigh = (flag) => {
+    const Q = solid.positions, J = solid.indices;
+    let z0=1e30,z1=-1e30;
+    for (let k=2;k<Q.length;k+=3){ if(Q[k]<z0)z0=Q[k]; if(Q[k]>z1)z1=Q[k]; }
+    let a=0;
+    for (let q=0,t=0;q<J.length;q+=3,t++) {
+      if (!flag[t]) continue;
+      const i=J[q],j=J[q+1],k=J[q+2];
+      const cz=(Q[i*3+2]+Q[j*3+2]+Q[k*3+2])/3;
+      if ((cz-z0)/(z1-z0) <= 0.35) continue;
+      const ux=Q[j*3]-Q[i*3],uy=Q[j*3+1]-Q[i*3+1],uz=Q[j*3+2]-Q[i*3+2];
+      const vx=Q[k*3]-Q[i*3],vy=Q[k*3+1]-Q[i*3+1],vz=Q[k*3+2]-Q[i*3+2];
+      a += Math.hypot(uy*vz-uz*vy, uz*vx-ux*vz, ux*vy-uy*vx)/2;
+    }
+    return a;
+  };
+  const hiShut = openedHigh(API.bottomSkinTris(solid.positions, solid.indices, {}));
+  const hiOpen = openedHigh(API.bottomSkinTris(solid.positions, solid.indices, {openArches:true}));
+  ok(hiOpen > hiShut, `opening the wells is what puts a hole up in the arch (${hiOpen.toFixed(0)} vs ${hiShut.toFixed(0)} mm2)`);
+  ok(hiShut < hiOpen * 0.35,
+     `by default almost nothing up in the bodywork is opened: ${hiShut.toFixed(0)} mm2 against ${hiOpen.toFixed(0)}`);
+});
+
+// =====================  21. THE NUMBERS THEMSELVES  =====================
+// Nothing here checked an ABSOLUTE dimension for a long time, and a real bug lived in that
+// gap: the outermost ring of grid samples is forced to "outside" so the surface always
+// closes, and that ring used to sit exactly on the model's own limits — so the nose of the
+// car was overwritten as empty air and every model came out one cell short at each end. A
+// 200mm car built at 193mm. Every test still passed, because they all compared the model
+// against itself. These compare it against arithmetic done outside the code.
+const FULL = [[0,0],[1,0],[1,1],[0,1]];
+const ring = (n, r, cx, cy) => Array.from({length:n},(_,i)=>{
+  const a = i/n*Math.PI*2; return [cx+Math.cos(a)*r, cy+Math.sin(a)*r]; });
+
+t("size: a model is the size you asked for, to the millimetre", () => {
+  for (const L of [50, 137, 200, 340]) {
+    const g = API.makeBody({ mode:"projection", length:L, stations:56, hullCrisp:1,
+      hullHollow:false, sidePoly:FULL, topPoly:FULL, frontPoly:FULL,
+      topProfile:[[0,80]], widthProfile:[[0,30]] });
+    let lo=1e30, hi=-1e30;
+    for (let k=0;k<g.positions.length;k+=3){ if(g.positions[k]<lo)lo=g.positions[k]; if(g.positions[k]>hi)hi=g.positions[k]; }
+    const got = hi-lo;
+    ok(Math.abs(got-L) < Math.max(0.5, L*0.005),
+       `${L}mm asked, ${got.toFixed(2)}mm built (${((got-L)/L*100).toFixed(2)}%)`);
+  }
+});
+t("size: it holds at every resolution, so it isn't the grid setting the size", () => {
+  // if the size depended on cell size, coarse and fine would disagree — that was the bug
+  const mk = st => {
+    const g = API.makeBody({ mode:"projection", length:200, stations:st, hullCrisp:1,
+      hullHollow:false, sidePoly:FULL, topPoly:FULL, frontPoly:FULL,
+      topProfile:[[0,80]], widthProfile:[[0,30]] });
+    let lo=1e30, hi=-1e30;
+    for (let k=0;k<g.positions.length;k+=3){ if(g.positions[k]<lo)lo=g.positions[k]; if(g.positions[k]>hi)hi=g.positions[k]; }
+    return hi-lo;
+  };
+  const a = mk(24), b = mk(72);
+  ok(Math.abs(a-b) < 1.0, `coarse ${a.toFixed(2)}mm and fine ${b.toFixed(2)}mm agree`);
+});
+t("volume: a cylinder measures pi r squared L", () => {
+  // side and top are full squares, the front is a circle, so the intersection is a cylinder
+  const L = 200, D = 80;
+  const g = API.makeBody({ mode:"projection", length:L, stations:64, hullCrisp:1,
+    hullHollow:false, sidePoly:FULL, topPoly:FULL, frontPoly:ring(180,0.5,0.5,0.5),
+    topProfile:[[0,D]], widthProfile:[[0,D/2]] });
+  let lo=[1e30,1e30,1e30], hi=[-1e30,-1e30,-1e30];
+  for (let k=0;k<g.positions.length;k+=3) for (let d=0;d<3;d++){
+    if(g.positions[k+d]<lo[d])lo[d]=g.positions[k+d]; if(g.positions[k+d]>hi[d])hi[d]=g.positions[k+d]; }
+  const r = ((hi[1]-lo[1])+(hi[2]-lo[2]))/4, exact = Math.PI*r*r*(hi[0]-lo[0]);
+  ok(Math.abs(g.volume-exact)/exact < 0.02,
+     `${(g.volume/1000).toFixed(2)}cm3 against pi*r^2*L = ${(exact/1000).toFixed(2)}cm3`);
+});
+t("volume: three circles make a Steinmetz solid, not a ball", () => {
+  // The intersection of three round silhouettes has an exact volume of 8(2-root2)r^3.
+  // A ball would be 4/3 pi r^3 — a fifth smaller. Landing on the first and not the second
+  // is what proves the body really is the three drawings intersected.
+  const D = 120;
+  // closedBottom so the base is NOT levelled: this test is about the intersection maths,
+  // and a round body with no bottom traced legitimately gets its base cut flat
+  const g = API.makeBody({ mode:"projection", length:D, stations:72, hullCrisp:1, hullHollow:false,
+    closedBottom:true,
+    sidePoly:ring(180,0.5,0.5,0.5), topPoly:ring(180,0.5,0.5,0.5), frontPoly:ring(180,0.5,0.5,0.5),
+    topProfile:[[0,D]], widthProfile:[[0,D/2]] });
+  let lo=[1e30,1e30,1e30], hi=[-1e30,-1e30,-1e30];
+  for (let k=0;k<g.positions.length;k+=3) for (let d=0;d<3;d++){
+    if(g.positions[k+d]<lo[d])lo[d]=g.positions[k+d]; if(g.positions[k+d]>hi[d])hi[d]=g.positions[k+d]; }
+  const r = ((hi[0]-lo[0])+(hi[1]-lo[1])+(hi[2]-lo[2]))/6;
+  const steinmetz = 8*(2-Math.SQRT2)*r*r*r, ball = 4/3*Math.PI*r*r*r;
+  ok(Math.abs(g.volume-steinmetz)/steinmetz < 0.03,
+     `${(g.volume/1000).toFixed(2)}cm3 against 8(2-root2)r^3 = ${(steinmetz/1000).toFixed(2)}cm3`);
+  ok(Math.abs(g.volume-steinmetz) < Math.abs(g.volume-ball),
+     "and it is nearer the Steinmetz solid than a ball, so the three views really do intersect");
+});
+t("surface: every edge is walked once each way", () => {
+  // checkManifold counts how often an edge is USED, which a flipped patch survives: both
+  // its edges are still used twice. Volume is a signed sum, so one flipped patch quietly
+  // subtracts instead of adding. This checks direction, which is what actually matters.
+  for (const [label, extra] of [["solid",{hullHollow:false}],["hollow",{hullHollow:true,wallThickness:3}]]) {
+    const g = API.makeBody({ mode:"projection", length:160, stations:56, hullCrisp:1,
+      sidePoly:ring(120,0.5,0.5,0.5), topPoly:FULL, frontPoly:FULL,
+      topProfile:[[0,80]], widthProfile:[[0,30]], ...extra });
+    const dir = new Map();
+    for (let k=0;k<g.indices.length;k+=3) {
+      const t3=[g.indices[k],g.indices[k+1],g.indices[k+2]];
+      for (const [u,v] of [[t3[0],t3[1]],[t3[1],t3[2]],[t3[2],t3[0]]])
+        dir.set(u+">"+v, (dir.get(u+">"+v)||0)+1);
+    }
+    let doubled=0, unpaired=0;
+    for (const [k,n] of dir) {
+      if (n>1) doubled++;
+      const [u,v]=k.split(">");
+      if (!dir.has(v+">"+u)) unpaired++;
+    }
+    ok(doubled===0 && unpaired===0,
+       `${label}: ${doubled} edges walked twice the same way, ${unpaired} with no partner`);
+    ok(g.volume>0, `${label}: the volume comes out positive, so the surface faces outward`);
+  }
+});
+
+t("base: with no bottom traced, the body ends on one flat plane", () => {
+  // The ask, in his words: make it look like it ends when the bottom face would be reached,
+  // and leave that face open. A traced side view says where that is — over a wheel its lower
+  // edge comes down to the ground, over an arch it stops in mid-air forty millimetres up.
+  // Those are two populations, and the lower one is where the body ends.
+  const arch = [
+    [0.04,0.03],[0.24,0.03],[0.26,0.34],[0.34,0.50],[0.66,0.50],[0.74,0.34],
+    [0.76,0.03],[0.96,0.03],[0.96,0.94],[0.04,0.94]
+  ];
+  const H = 90;
+  const sideMM = arch.map(q => [q[0]*200, q[1]*H]);
+  const cut = API.baseCutZ(sideMM, H);
+  ok(isFinite(cut), `a body on two feet has a base to level (cut at ${cut.toFixed(1)}mm)`);
+  ok(cut > 0 && cut < H*0.20,
+     `and it sits down at the feet, not up in the arch: ${cut.toFixed(1)}mm of ${H}mm`);
+
+  // a shape with one flat bottom has nothing to separate, so nothing is levelled
+  const flat = [[0.05,0.05],[0.95,0.05],[0.95,0.95],[0.05,0.95]].map(q=>[q[0]*200,q[1]*H]);
+  ok(!isFinite(API.baseCutZ(flat, H)), "a plain box is left alone");
+  ok(!isFinite(API.baseCutZ([], H)), "and an empty outline is handled without throwing");
+
+  // and the built body really is flat down there
+  const box = [[0.03,0.03],[0.97,0.03],[0.97,0.97],[0.03,0.97]];
+  const g = API.makeBody({ mode:"projection", length:200, stations:60, hullCrisp:1,
+    hullHollow:false, sidePoly:arch, topPoly:box, frontPoly:box,
+    topProfile:[[0,H]], widthProfile:[[0,30]] });
+  let zMin = 1e30;
+  for (let k=2;k<g.positions.length;k+=3) if (g.positions[k]<zMin) zMin=g.positions[k];
+  // count how much surface sits within a whisker of the lowest level — a levelled base is a
+  // real flat face, a rounded one has almost nothing there
+  let flatArea = 0, total = 0;
+  for (let q=0;q<g.indices.length;q+=3) {
+    const a=g.indices[q]*3,b=g.indices[q+1]*3,c=g.indices[q+2]*3,P=g.positions;
+    const ux=P[b]-P[a],uy=P[b+1]-P[a+1],uz=P[b+2]-P[a+2];
+    const vx=P[c]-P[a],vy=P[c+1]-P[a+1],vz=P[c+2]-P[a+2];
+    const ar=Math.hypot(uy*vz-uz*vy,uz*vx-ux*vz,ux*vy-uy*vx)/2;
+    total += ar;
+    const cz=(P[a+2]+P[b+2]+P[c+2])/3;
+    if (cz < zMin+1.5) flatArea += ar;
+  }
+  ok(flatArea/total > 0.04,
+     `the base is a real flat face, not a rounded-off edge (${(flatArea/total*100).toFixed(1)}% of the surface sits on it)`);
 });
 
 // --- report ---
