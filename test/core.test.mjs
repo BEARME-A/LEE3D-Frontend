@@ -1347,8 +1347,16 @@ t("speed: the hull's field is tabled, not recomputed per sample", () => {
   ok(src.includes("mkTable"), "no distance tables — this is the crash");
   ok(!/const F=\(x,y,z\)=>\{[^}]*sdPoly\(sideP/.test(src),
      "F() must not walk the outlines on every sample");
-  ok(src.includes("look(Tside") && src.includes("look(Ttop") && src.includes("look(Tfront"),
-     "the field should be three lookups and a max");
+  // Pin the PROPERTY, not the spelling: the field reads prebuilt tables and never walks a
+  // polygon per sample. The earlier version looked for the literal "look(Tside", which broke
+  // the moment the side lookup was wrapped to sweep between two outlines — the code was
+  // still tabled, the test was just reading for a word.
+  ok(/look\(\s*T/.test(src), "the field should read distance tables");
+  ok(!/sdPoly\(\s*(sideP|topP|frontP|sidePR)\b/.test(
+       src.slice(src.indexOf("const F=(x,y,z)=>{"), src.indexOf("const F=(x,y,z)=>{")+4000)),
+     "and never walk an outline inside the sampled field");
+  for (const t of ["Tside", "Ttop", "Tfront"])
+    ok(new RegExp(t + "\\s*=\\s*mkTable").test(src), `${t} must still be built from a table`);
 });
 t("speed: a slider drag builds coarse, then sharpens when you let go", () => {
   ok(script.includes("qFast"), "no coarse-while-dragging mode");
@@ -1910,6 +1918,50 @@ t("base: with no bottom traced, the body ends on one flat plane", () => {
   }
   ok(flatArea/total > 0.04,
      `the base is a real flat face, not a rounded-off edge (${(flatArea/total*100).toFixed(1)}% of the surface sits on it)`);
+});
+
+t("two sides: one outline is symmetric, two are not", () => {
+  // Top/Bottom, Front/Rear — the missing pair of the standard six views is Left/Right. Trace
+  // one and the body is symmetric, which is what almost everything wants. Trace the second
+  // and the two flanks are allowed to differ, sweeping across the width rather than stepping
+  // at the centreline.
+  const BOXP = [[0.04,0.04],[0.96,0.04],[0.96,0.96],[0.04,0.96]];
+  const tall = [[0.05,0.05],[0.95,0.05],[0.95,0.95],[0.05,0.95]];
+  const step = [[0.05,0.05],[0.95,0.05],[0.95,0.40],[0.50,0.40],[0.50,0.95],[0.05,0.95]];
+  const base = { mode:"projection", length:200, stations:60, hullCrisp:1, hullHollow:false,
+    closedBottom:true, topPoly:BOXP, frontPoly:BOXP, topProfile:[[0,90]], widthProfile:[[0,40]] };
+
+  const roof = (g, sign) => {
+    const P = g.positions, N = 20, top = new Array(N).fill(-1e9);
+    for (let k = 0; k < P.length; k += 3) {
+      if (Math.sign(P[k+1]) !== sign || Math.abs(P[k+1]) < 12) continue;
+      const i = Math.max(0, Math.min(N-1, Math.floor(P[k]/200*N)));
+      if (P[k+2] > top[i]) top[i] = P[k+2];
+    }
+    return top;
+  };
+  const spread = g => {
+    const L = roof(g,-1), R = roof(g,1);
+    let w = 0;
+    for (let i = 0; i < L.length; i++)
+      if (L[i] > -1e8 && R[i] > -1e8) w = Math.max(w, Math.abs(L[i]-R[i]));
+    return w;
+  };
+
+  const one = API.makeBody({ ...base, sidePoly: tall });
+  ok(spread(one) < 1.5, `one outline gives matching flanks (${spread(one).toFixed(2)}mm apart)`);
+
+  const two = API.makeBody({ ...base, sidePoly: tall, sidePolyR: step });
+  ok(spread(two) > 12,
+     `two outlines give different flanks (${spread(two).toFixed(1)}mm apart) — the second drawing is really used`);
+  ok(API.checkManifold(two.indices).watertight, "and the asymmetric body is still watertight");
+  ok(two.volume < one.volume*0.95, "and the second outline actually removes material");
+
+  // The far side of a symmetric object is drawn on a mirrored page. Mirroring it back into
+  // the shared frame has to give the same outline again, or the body would fight itself.
+  const mir = API.makeBody({ ...base, sidePoly: tall, sidePolyR: tall.map(q => [1-q[0], q[1]]) });
+  ok(Math.abs(mir.volume-one.volume)/one.volume < 1e-9,
+     "tracing the far side of a symmetric object changes nothing");
 });
 
 // --- report ---
