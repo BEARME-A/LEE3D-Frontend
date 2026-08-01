@@ -1778,6 +1778,41 @@ t("wheel wells: closed by default, and closed means no roof is opened", () => {
   ok(hiOpen > hiShut, `opening the wells is what puts a hole up in the arch (${hiOpen.toFixed(0)} vs ${hiShut.toFixed(0)} mm2)`);
   ok(hiShut < hiOpen * 0.35,
      `by default almost nothing up in the bodywork is opened: ${hiShut.toFixed(0)} mm2 against ${hiOpen.toFixed(0)}`);
+
+  // Opening the wells must open each ceiling WHOLE. A hole punched in the middle of one
+  // leaves a band of wall hanging inboard of the arch, and from the side that band is the
+  // plank. Whole regions only, and no pinholes under the panel lines: the count of separate
+  // openings has to stay in single figures.
+  const openings = (flag) => {
+    const J = solid.indices, Q = solid.positions;
+    const ec = new Map(), k = (a,b) => a<b ? a+"_"+b : b+"_"+a;
+    for (let q=0,t=0;q<J.length;q+=3,t++) {
+      if (flag[t]) continue;
+      const T=[J[q],J[q+1],J[q+2]];
+      for (const [u,v] of [[T[0],T[1]],[T[1],T[2]],[T[2],T[0]]])
+        ec.set(k(u,v), (ec.get(k(u,v))||0)+1);
+    }
+    const adj = new Map();
+    for (const [kk,c] of ec) {
+      if (c!==1) continue;
+      const i=kk.indexOf("_"), a=+kk.slice(0,i), b=+kk.slice(i+1);
+      if(!adj.has(a))adj.set(a,[]); if(!adj.has(b))adj.set(b,[]);
+      adj.get(a).push(b); adj.get(b).push(a);
+    }
+    const seen=new Set(); let n=0;
+    for (const s0 of adj.keys()) {
+      if (seen.has(s0)) continue;
+      n++; const st=[s0]; seen.add(s0);
+      while(st.length){const v=st.pop(); for(const w of adj.get(v)||[]) if(!seen.has(w)){seen.add(w);st.push(w);}}
+    }
+    return n;
+  };
+  const nOpen = openings(API.bottomSkinTris(solid.positions, solid.indices, {openArches:true}));
+  const nShut = openings(API.bottomSkinTris(solid.positions, solid.indices, {}));
+  ok(nShut <= 6, `closed wells leave few clean openings (${nShut})`);
+  ok(nOpen <= 12, `open wells stay whole rather than fragmenting into pinholes (${nOpen} openings)`);
+  ok(API.checkManifold(open.indices).watertight && API.checkManifold(shut.indices).watertight,
+     "and both settings stay watertight");
 });
 
 // =====================  21. THE NUMBERS THEMSELVES  =====================
