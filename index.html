@@ -1525,17 +1525,110 @@ function bottomSkinTris(positions,indices,opts){
      is the body's own cross-section there: one fair curve, arrived at by construction rather
      than by voting. Nothing above the plane is touched, so an arch roof cannot be opened and
      no rim can appear across an arch. */
-  if(opts.baseCut != null && opts.baseCut > -1e29 && !opts.openArches){
+  if(opts.baseCut != null && opts.baseCut > -1e29){
     const tol=Math.max(0.05,(opts.cell||1)*0.75);
+    /* OPEN WELLS MEANS THE WHOLE CEILING, NOT A HOLE IN IT.
+       Any hole cut in a shell carries a band of wall around its edge. Punch that hole in the
+       middle of a wheel-arch ceiling and the band is left hanging inboard of the arch, and
+       seen through the arch from the side it reads as a slab spanning between the wheels —
+       the plank. It is not stray material: the arch void measures completely empty, and the
+       body matches the drawing. It is the rim of a badly placed hole.
+       So do not place the hole in the middle. Open every face that looks at the ground, all
+       the way out to where the surface turns and starts facing sideways. Then the edge of the
+       opening lands on the arch's own silhouette — the line where a fender visibly ends —
+       instead of floating in the middle of the ceiling, and the wheel well is genuinely open
+       the way the underside of a real body shell is. */
+    const down=new Uint8Array(nTri), tarea=new Float64Array(nTri), tz=new Float64Array(nTri);
     for(let q=0,t=0;q<indices.length;q+=3,t++){
       const a=indices[q],b=indices[q+1],c=indices[q+2];
       const ax=positions[a*3],ay=positions[a*3+1],az=positions[a*3+2];
       const ux=positions[b*3]-ax,uy=positions[b*3+1]-ay,uz=positions[b*3+2]-az;
       const vx=positions[c*3]-ax,vy=positions[c*3+1]-ay,vz=positions[c*3+2]-az;
       const fz=ux*vy-uy*vx, fl=Math.hypot(uy*vz-uz*vy,uz*vx-ux*vz,fz);
-      if(!fl || fz/fl > -0.5) continue;                       // must genuinely face the ground
-      const cz=(az+positions[b*3+2]+positions[c*3+2])/3;
-      if(cz <= opts.baseCut + tol) flag[t]=1;                 // sitting on the levelled base
+      tarea[t]=fl/2; tz[t]=Math.min(az,positions[b*3+2],positions[c*3+2]);
+      if(fl && fz/fl < -0.5) down[t]=1;                       // genuinely faces the ground
+    }
+    if(!opts.openArches){
+      for(let t=0;t<nTri;t++)
+        if(down[t] && tz[t] <= opts.baseCut + tol) flag[t]=1; // just the levelled base
+      return flag;
+    }
+    /* Open wells: the whole ceiling of each well, not a hole in the middle of it.
+       Down-facing skin comes in a handful of real regions and a scatter of specks. Measured
+       on this car: two wheel-arch ceilings at 34% and 31% of the down-facing area, three
+       pieces of levelled base at 9-13%, and then twenty-nine specks of half a percent or
+       less — the little dips under each stamped panel line. Opening the specks puts thirty
+       pinholes in the bodywork; opening only part of a ceiling leaves a band of wall hanging
+       inboard of the arch, which seen from the side is the plank. So take the real regions
+       whole and leave the specks alone. The gap between the smallest region kept and the
+       largest speck is nineteenfold, so this is not a close call. */
+    const em=new Map(), ek=(a,b)=>a<b?a+"_"+b:b+"_"+a;
+    for(let q=0,t=0;q<indices.length;q+=3,t++){
+      if(!down[t])continue;
+      const T=[indices[q],indices[q+1],indices[q+2]];
+      for(const[u,v]of[[T[0],T[1]],[T[1],T[2]],[T[2],T[0]]]){
+        const kk=ek(u,v); let ar=em.get(kk); if(!ar){ar=[];em.set(kk,ar);} ar.push(t);
+      }
+    }
+    const nbT=new Map();
+    for(const ts of em.values())
+      for(let i=0;i<ts.length;i++)for(let j=i+1;j<ts.length;j++){
+        if(!nbT.has(ts[i]))nbT.set(ts[i],[]); if(!nbT.has(ts[j]))nbT.set(ts[j],[]);
+        nbT.get(ts[i]).push(ts[j]); nbT.get(ts[j]).push(ts[i]);
+      }
+    const seenD=new Uint8Array(nTri), regions=[]; let totD=0;
+    for(let t=0;t<nTri;t++){
+      if(!down[t]||seenD[t])continue;
+      seenD[t]=1; const st=[t], comp=[t]; let ar=0;
+      while(st.length){ const u=st.pop();
+        for(const v of nbT.get(u)||[]) if(down[v]&&!seenD[v]){seenD[v]=1;st.push(v);comp.push(v);} }
+      for(const u of comp)ar+=tarea[u];
+      totD+=ar; regions.push({comp,ar});
+    }
+    for(const r of regions)
+      if(r.ar >= totD*0.02) for(const t of r.comp) flag[t]=1;
+    /* And close the tabs left stranded inside those openings. A stamped panel line can leave
+       a scrap of skin in the middle of an arch ceiling that isn't itself facing the ground,
+       so it survives the pass above and hangs in the hole. Every one carries its own rim, so
+       each is a small plank of its own and each adds a loop to the edge. A scrap completely
+       ringed by the opening belongs to the opening. The largest un-opened region is the body
+       and is never touched, so this can only tidy an edge — it cannot eat the model. */
+    {
+      const emA=new Map(), ak=(a,b)=>a<b?a+"_"+b:b+"_"+a;
+      for(let q=0,t=0;q<indices.length;q+=3,t++){
+        const T=[indices[q],indices[q+1],indices[q+2]];
+        for(const[u,v]of[[T[0],T[1]],[T[1],T[2]],[T[2],T[0]]]){
+          const kk=ak(u,v); let ar=emA.get(kk); if(!ar){ar=[];emA.set(kk,ar);} ar.push(t);
+        }
+      }
+      const nbA=new Map();
+      for(const ts of emA.values())
+        for(let i=0;i<ts.length;i++)for(let j=i+1;j<ts.length;j++){
+          if(!nbA.has(ts[i]))nbA.set(ts[i],[]); if(!nbA.has(ts[j]))nbA.set(ts[j],[]);
+          nbA.get(ts[i]).push(ts[j]); nbA.get(ts[j]).push(ts[i]);
+        }
+      const seenK=new Uint8Array(nTri), kept=[];
+      for(let t=0;t<nTri;t++){
+        if(flag[t]||seenK[t])continue;
+        seenK[t]=1; const st=[t], comp=[t]; let ar=0;
+        while(st.length){ const u=st.pop();
+          for(const v of nbA.get(u)||[]) if(!flag[v]&&!seenK[v]){seenK[v]=1;st.push(v);comp.push(v);} }
+        for(const u of comp)ar+=tarea[u];
+        kept.push({comp,ar});
+      }
+      if(kept.length>1){
+        kept.sort((a,b)=>b.ar-a.ar);
+        const body=kept[0].ar;
+        for(let i=1;i<kept.length;i++){
+          const r=kept[i];
+          if(r.ar >= body*0.02) continue;                 // big enough to be real skin
+          const inside=new Set(r.comp);
+          let border=0, ringed=0;
+          for(const t of r.comp) for(const v of nbA.get(t)||[]){
+            if(inside.has(v))continue; border++; if(flag[v])ringed++; }
+          if(border>0 && ringed===border) for(const t of r.comp) flag[t]=1;
+        }
+      }
     }
     return flag;
   }
