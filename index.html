@@ -4224,7 +4224,10 @@ function dxfPolys(e,blocks,depth){
   }
   return [];
 }
-async function loadDXFFile(file){
+/* Read a DXF and give back a canvas of it, plus how many lines were in it. Both ways into
+   the studio need exactly this — the Reference & Trace tab traces it directly, the Import
+   Sheet tab adds it as a page — so it lives in one place rather than being written twice. */
+async function dxfToCanvas(file){
   const {blocks,model}=dxfParse(await file.text());
   const src=model.length?model:(blocks["*Model_Space"]||[]);
   let polys=[];
@@ -4253,6 +4256,10 @@ async function loadDXFFile(file){
     for(let i=1;i<q.length;i++)g.lineTo(PX(q[i]),PY(q[i]));
   }
   g.stroke();
+  return {canvas:cnv, lines:polys.length};
+}
+async function loadDXFFile(file){
+  const {canvas:cnv, lines}=await dxfToCanvas(file);
   const v=cv();
   setRefImage(v,cnv);
   v.svgPolys=null; v.svgArea=0; v.svgPick=0;   // raster path: Auto-trace finds the silhouette
@@ -4264,7 +4271,7 @@ async function loadDXFFile(file){
   const auto=document.getElementById("bAuto");
   if(auto&&auto.onclick){ try{ auto.onclick(); }catch(err){ toast("Loaded, but auto-trace failed: "+err.message); } }
   requestRebuild();
-  toast(`Read <b>${polys.length}</b> lines from the DXF. <b>Auto-trace</b> picks the outline — `
+  toast(`Read <b>${lines}</b> lines from the DXF. <b>Auto-trace</b> picks the outline — `
       + `press it again to step to a different shape. Set the real size with <span class="mono">Set scale</span>.`);
 }
 async function loadSVGFile(file){
@@ -5254,7 +5261,33 @@ function loadSheet(file){
         (file.type&&file.type.startsWith("image/")) ||
         /\.(svg|png|jpe?g|heic|heif|webp|gif|bmp|tiff?|avif)$/i.test(nm) ||
         !file.type);
-  if(!looksImage){toast("That file isn't an image or SVG. (PDF? screenshot a page, or use the backend's /import/pdf.)");return;}
+  /* A DXF is not something the browser can decode as a picture, so it has to be turned into
+     one first. This branch was missing: the picker offered .dxf, the file arrived here, an
+     Image was pointed at it, and the decoder quite correctly refused — which surfaced as
+     "the browser can't decode it" and looked like the reader was broken when in fact it was
+     never reached. Both ways in now go through the same renderer. */
+  if(/\.dxf$/i.test(nm)){
+    dxfToCanvas(file).then(({canvas,lines})=>{
+      const url2=canvas.toDataURL("image/png");
+      const im=new Image();
+      im.onload=()=>{
+        try{
+          impAddPage(im,url2,(nm||"page").replace(/\.[^.]+$/,"").slice(0,22));
+          document.getElementById("sheetImg").src=url2;
+          document.getElementById("iDrop").style.display="none";
+          switchTab("import");
+          setTimeout(()=>{ try{ layoutSheet();renderCrops();updateImpStatus();impRenderPages(); }
+            catch(err){ toast("Sheet loaded, but laying it out failed: "+err.message); } },60);
+          toast(`Added <b>${nm}</b> — <b>${lines}</b> lines from the DXF, now page ${IMP.pages.length}. `
+              + `Give each view a role, then <span class='mono'>Send</span>.`);
+        }catch(err){ toast("Couldn't add that sheet: "+err.message); }
+      };
+      im.onerror=()=>toast("The DXF was read but its drawing couldn't be shown.");
+      im.src=url2;
+    }).catch(err=>toast(`Couldn't read <b>${nm}</b>: ${err.message}`));
+    return;
+  }
+  if(!looksImage){toast("That file isn't an image, SVG or DXF. (PDF? screenshot a page, or use the backend's /import/pdf.)");return;}
   const url=URL.createObjectURL(file),img=new Image();
   img.onload=()=>{
     /* Everything past here runs in a callback, so anything that throws used to vanish into
@@ -5274,7 +5307,7 @@ function loadSheet(file){
       toast("Couldn't add that sheet: "+err.message);
     }
   };
-  img.onerror=()=>toast(`Couldn't read <b>${nm||"that file"}</b> — the browser can't decode it. iPhone HEIC photos sometimes need converting; try a screenshot of the drawing instead.`);
+  img.onerror=()=>toast(`Couldn't read <b>${nm||"that file"}</b> — the browser can't decode it as a picture. iPhone HEIC photos sometimes need converting; try a screenshot of the drawing instead.`);
   img.src=url;
 }
 function loadSheets(files){ [...files].forEach((f,i)=>setTimeout(()=>loadSheet(f), i*120)); }
