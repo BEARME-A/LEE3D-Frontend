@@ -670,7 +670,7 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
       <div class="trace-wrap">
         <div class="trace-bar wrap">
           <label class="btn" id="iLoad" for="sheetFile">⤓ Load sheet</label>
-          <input type="file" id="sheetFile" class="filepick" accept="image/*,image/svg+xml,.svg,.png,.jpg,.jpeg,.heic,.webp" multiple>
+          <input type="file" id="sheetFile" class="filepick" accept="image/*,image/svg+xml,.svg,.dxf,.png,.jpg,.jpeg,.heic,.webp" multiple>
           <div class="seg" id="unitSeg" style="margin:0;width:172px;flex:0 0 auto">
             <button data-u="mm" class="on">mm</button>
             <button data-u="cm">cm</button>
@@ -730,7 +730,8 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
       <div class="trace-wrap">
         <div class="trace-bar">
           <div class="seg" id="viewSeg">
-            <button data-v="side" class="on">Side</button>
+            <button data-v="side" class="on">Left</button>
+            <button data-v="sideR">Right</button>
             <button data-v="top">Top</button>
             <button data-v="bottom">Bottom</button>
             <button data-v="front">Front</button>
@@ -772,7 +773,7 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
           </span>
           <button class="btn ghost" id="bRot" title="Rotate this view 90° — use it if the object is drawn sideways">⟳ 90°</button>
           <label class="btn ghost" id="pickImg" for="imgFile">Drawing</label>
-          <input type="file" id="imgFile" class="filepick" accept="image/*,image/svg+xml,.svg,.png,.jpg,.jpeg,.heic,.webp">
+          <input type="file" id="imgFile" class="filepick" accept="image/*,image/svg+xml,.svg,.dxf,.png,.jpg,.jpeg,.heic,.webp">
           <span id="imgOpField" style="display:none;align-items:center;gap:6px;font-size:11px;color:var(--ink-dim)">
             <span>fade</span><input type="range" id="sOp" min="10" max="100" value="55" style="width:70px"><span id="vOp" class="mono">55</span>
             <button class="btn ghost" id="refInv" title="Flip the drawing's light/dark if the auto-contrast guessed wrong" style="padding:3px 7px">◐</button>
@@ -1884,6 +1885,17 @@ function makeVisualHull(p){
      is left open. With a bottom traced the drawing already says where the underside is, so
      nothing is levelled. */
   const baseCut = p.closedBottom ? -Infinity : baseCutZ(sideP,H);
+  /* THE OTHER SIDE, IF THERE IS ONE.
+     Trace one side and the body is symmetric — that outline is what you see from either
+     hand, which is what almost everything wants. Trace the second and the two are allowed
+     to differ.
+     The second is stored mirrored along the length, for the same reason the rear view is:
+     you stand on the opposite side to draw it, so the nose is on the other end of the page.
+     Flipping it puts both drawings in one frame, and then left and right mean the same x. */
+  const sideRN = (p.sidePolyR && p.sidePolyR.length>2)
+    ? resamplePoly(p.sidePolyR.map(q=>[1-q[0],q[1]]), Math.max(64,p.sidePolyR.length))
+    : null;
+  const sidePR = sideRN ? sideRN.map(q=>[q[0]*L,q[1]*H]) : null;
   const topP  =topN.map(q=>[q[0]*L,q[1]*W]);       // (x , y)
   const frontP=frontN.map(q=>[q[0]*W,q[1]*H]);     // (y , z)
   const crisp=Math.max(0,Math.min(1,p.hullCrisp==null?0.9:p.hullCrisp));
@@ -1925,7 +1937,7 @@ function makeVisualHull(p){
     const top=a+(b-a)*tu, bot=c+(e-c)*tu;
     return top+(bot-top)*tv;
   };
-  let Tside,Ttop,Tfront;                        // filled once the grid size is known
+  let Tside,TsideR,Ttop,Tfront;                 // filled once the grid size is known
   const sdFeat=(f,x,y,z)=> f.kind==="xz"?look(f.T,x,z) : f.kind==="xy"?look(f.T,x,y) : look(f.T,y,z);
 
   // inside all three outlines = the largest of the three distances, then features applied
@@ -1940,16 +1952,31 @@ function makeVisualHull(p){
   // with crisp — none at the smooth end. Semi-axes are floored to a grid cell so a thin
   // cross-section can never pinch below the resolution and tear the shell apart.
   const cY=W/2; let loftBox=null;
+  /* What the side view says at this point. With one outline that is a plain lookup and the
+     body comes out symmetric. With two, the answer sweeps across the width: the left drawing
+     governs the left flank, the right drawing the right, and in between they cross over
+     smoothly. It has to be a sweep rather than a switch — a hard changeover at the centreline
+     would leave a step running the length of the body. */
+  const halfW = W*0.5;
+  // smoothstep here takes ONE argument. Called as smoothstep(0,1,t) it silently reads the
+  // first — a constant 0 — so the blend weight never moved off zero and the second drawing
+  // was collected, tabled, and then ignored. Nothing threw; the model just came out
+  // symmetric, which is exactly what it looks like when the feature isn't wired at all.
+  const sweep=(TA,TB2)=>TB2
+    ? (x,y,z)=>{ const t=smoothstep(clamp((y+halfW)/(W||1),0,1));
+                 const a2=look(TA,x,z), b2=look(TB2,x,z); return a2+(b2-a2)*t; }
+    : (x,y,z)=>look(TA,x,z);
+  let sideAt=null, envSideAt=null;   // bound once the tables exist
   const F=(x,y,z)=>{
-    const Es=look(Eside,x,z), Et=look(Etop,x,y), Ef=look(Efront,y,z);
+    const Es=envSideAt(x,y,z), Et=look(Etop,x,y), Ef=look(Efront,y,z);
     let hull=Math.max(Es,Et,Ef);                       // the body, notches filled in
     if(p.notchFaceOnly){   // opt-in: a notch stops short of the far side (leaves a block behind it)
       // a notch cuts inward from its OWN face only, never through the frame
-      const Ts=look(Tside,x,z);  if(Ts>0 && Es<=0 && -Et<notch) hull=Math.max(hull,Ts);
+      const Ts=sideAt(x,y,z);    if(Ts>0 && Es<=0 && -Et<notch) hull=Math.max(hull,Ts);
       const Tt=look(Ttop,x,y);   if(Tt>0 && Et<=0 && -Es<notch) hull=Math.max(hull,Tt);
       const Tf=look(Tfront,y,z); if(Tf>0 && Ef<=0 && Math.min(-Es,-Et)<notch) hull=Math.max(hull,Tf);
     } else {
-      hull=Math.max(hull, look(Tside,x,z), look(Ttop,x,y), look(Tfront,y,z));
+      hull=Math.max(hull, sideAt(x,y,z), look(Ttop,x,y), look(Tfront,y,z));
     }
     let d;
     if(crisp>=0.999 || !loftBox){ d=hull; }
@@ -1968,7 +1995,7 @@ function makeVisualHull(p){
          zero in mid-air and manufactures a flat plane through the middle — the slab that showed
          up from underneath. Clamping the smooth field to the same traced side outline the hull
          uses keeps the wheel arches in BOTH, so the blend can only round the cross-section. */
-      const sSide=look(Tside,x,z);
+      const sSide=sideAt(x,y,z);
       d = (1-crisp)*Math.max(soft,sSide) + crisp*hull;
     }
     if(crisp>0.001) for(let q=0;q<feats.length;q++){
@@ -1999,6 +2026,7 @@ function makeVisualHull(p){
   const cell=Math.max(hx,hy,hz);
   // now the grid is known, the three 2D distance tables can be built
   Tside =mkTable(sideP ,L,H,nx*TB,nz*TB);
+  TsideR= sidePR ? mkTable(sidePR,L,H,nx*TB,nz*TB) : null;
   Ttop  =mkTable(topP  ,L,W,nx*TB,ny*TB);
   Tfront=mkTable(frontP,W,H,ny*TB,nz*TB);
   /* A traced outline says two different things at once: how big the body is, and where that
@@ -2012,8 +2040,12 @@ function makeVisualHull(p){
       const loop=e.top.map(q=>[q.x,q.y]).concat(e.bot.slice().reverse().map(q=>[q.x,q.y]));
       return loop.length>2?loop:pts; }catch(err){ return pts; } };
   const Eside =mkTable(envOf(sideP ),L,H,nx*TB,nz*TB);
+  // the envelope has to sweep too, or the second side gets clipped by the first one's body
+  const EsideR= sidePR ? mkTable(envOf(sidePR),L,H,nx*TB,nz*TB) : null;
   const Etop  =mkTable(envOf(topP  ),L,W,nx*TB,ny*TB);
   const Efront=mkTable(envOf(frontP),W,H,ny*TB,nz*TB);
+  sideAt    = sweep(Tside , TsideR);
+  envSideAt = sweep(Eside , EsideR);
   const notch=Math.max(0.5, p.notchDepth ?? Math.min(W,H)*0.18);
   feats.forEach(f=>{
     f.T = f.kind==="xz" ? mkTable(f.pts,L,H,nx*TB,nz*TB)
@@ -2450,7 +2482,7 @@ const S={...PRESETS.hotrod, wall:1.8, st:72, seg:56, opacity:.55, mode:"projecti
   wallTop:1.8, wallSide:1.8, wallBottom:1.8, wallPerFace:false, noDetail:false, openArches:false, hullHollow:true /* a frame is always a shell */};
 // NOTE: revolve primitives (sphere/cylinder/dome/cone) are retired from the UI — this tool
 // is for IMPORTED shapes. makeRevolve() stays so old saved files still load.
-let traced={top:null,bottom:null,width:null,widthBot:null,section:null,sections:null,frontHull:null,rearHull:null,sidePoly:null,topPoly:null,frontPoly:null,bottomPoly:null,natWid:null,natHgt:null};
+let traced={top:null,bottom:null,width:null,widthBot:null,section:null,sections:null,frontHull:null,rearHull:null,sidePoly:null,sidePolyR:null,topPoly:null,frontPoly:null,bottomPoly:null,natWid:null,natHgt:null};
 let features=[];   // [{view,poly:[[u,v]…],depth,soft,name}] // mm-space / normalized profiles when traced
 
 function buildTop(){
@@ -2482,7 +2514,7 @@ function imgToDataURL(im){try{
 // Full editable tracing state: raw points, scale, and the reference image per view
 function buildTrace(){
   const out={};
-  for(const v of ["side","top","bottom","front","rear"]){
+  for(const v of ["side","sideR","top","bottom","front","rear"]){
     const V0=V[v]; if(!V0)continue;
     const hasPts=(V0.A&&V0.A.length)||(V0.B&&V0.B.length);
     if(hasPts||V0.img){
@@ -2536,7 +2568,7 @@ function currentProfile(){
     section:buildSection(),
     sections:(traced.sections&&traced.sections.length?traced.sections:null),
     mode:S.mode, frontHull:(S.mode==="projection"?traced.frontHull:null), sepBottom:S.sepBottom,
-    sidePoly:traced.sidePoly, topPoly:traced.topPoly, frontPoly:traced.frontPoly, hullCrisp:S.hullCrisp,
+    sidePoly:traced.sidePoly, sidePolyR:traced.sidePolyR, topPoly:traced.topPoly, frontPoly:traced.frontPoly, hullCrisp:S.hullCrisp,
     plainFrame:!!S.noDetail,
     closedBottom:!!traced.bottomPoly,
     hullRes:(qFast?hullDragRes:null), hullFast:qFast,   // self-tuning mid-drag, full on release
@@ -2822,7 +2854,13 @@ const tctx=traceCanvas.getContext("2d");
 let fit={s:1,ox:0,oy:0};
 // Per-view tracing state. side: A=roof/top edge, B=sill/lower edge.
 //                          top:  A=left edge,     B=right edge.
-const V={ side:{img:null,imgRaw:null,inv:null,scale:null,A:[],B:[]}, top:{img:null,imgRaw:null,inv:null,scale:null,A:[],B:[]}, front:{img:null,imgRaw:null,inv:null,scale:null,A:[],B:[]}, rear:{img:null,imgRaw:null,inv:null,scale:null,A:[],B:[]}, bottom:{img:null,imgRaw:null,inv:null,scale:null,A:[],B:[]} };
+/* Six views, the standard orthographic set: Left, Right, Top, Bottom, Front, Rear. The
+   first side keeps the internal name "side" so every model saved before this still loads;
+   what changed is that it is now LABELLED Left, and a Right joined it. Left/Right rather
+   than driver/passenger because this has to describe a bracket and a building as readily as
+   a car. Leave Right untraced and the body is symmetric about its centreline, which is what
+   almost everything wants. */
+const V={ side:{img:null,imgRaw:null,inv:null,scale:null,A:[],B:[]}, sideR:{img:null,imgRaw:null,inv:null,scale:null,A:[],B:[]}, top:{img:null,imgRaw:null,inv:null,scale:null,A:[],B:[]}, front:{img:null,imgRaw:null,inv:null,scale:null,A:[],B:[]}, rear:{img:null,imgRaw:null,inv:null,scale:null,A:[],B:[]}, bottom:{img:null,imgRaw:null,inv:null,scale:null,A:[],B:[]} };
 let activeView="side";
 let traceMode="trace";          // 'trace' (outline) | 'cal'
 let calPts=[];                   // canvas px
@@ -3941,6 +3979,8 @@ function commitTrace(){
     const minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys),sx=Math.max(1,maxX-minX),sy=Math.max(1,maxY-minY);
     return pts.map(p=>[(p.x-minX)/sx, flipY?(maxY-p.y)/sy:(p.y-minY)/sy]);};
   traced.sidePoly =normPoly(V.side.A,true);
+  // only when the second side was actually drawn — otherwise the body stays symmetric
+  traced.sidePolyR=(V.sideR&&V.sideR.A&&V.sideR.A.length>2)?normPoly(V.sideR.A,true):null;
   traced.topPoly  =normPoly(V.top.A,false);
   traced.frontPoly=normPoly(V.front.A,true);
   traced.bottomPoly=V.bottom?normPoly(V.bottom.A,false):null;
@@ -3987,6 +4027,153 @@ function pickSilhouette(polys,fullArea,rank){
   return list[((rank||0)%list.length+list.length)%list.length];
 }
 function resamplePoly(p,N){if(p.length<=N)return p;const o=[];for(let i=0;i<N;i++)o.push(p[Math.round(i*(p.length-1)/(N-1))]);return o;}
+/* ============================ DXF =============================================
+   A CAD drawing is a better source than a photograph: the lines are exact, and there is no
+   perspective, no lens, no lighting to argue with. What arrives is line art though — a few
+   hundred separate strokes that share endpoints — not a filled shape, so the silhouette has
+   to be recovered from it.
+   The strokes are drawn onto a canvas and handed to the same auto-trace the studio already
+   uses for images. That path is tested, it already knows how to find the outer edge and let
+   you step through inner shapes, and it means a DXF behaves like every other reference once
+   it is loaded. Measured on the files this was built against: at 520 across, all five views
+   close into a solid silhouette, and the answer stops moving as the pen gets fatter, which
+   is how you know the outline is genuinely closed rather than nearly closed.
+   Handles LINE, LWPOLYLINE, POLYLINE, ARC, CIRCLE, SPLINE and nested INSERTs into BLOCKS —
+   which is where the geometry actually lives in a file exported from most CAD packages. */
+function dxfParse(text){
+  const L=text.replace(/\r\n/g,"\n").split("\n").map(t=>t.trim());
+  const P=[]; for(let i=0;i+1<L.length;i+=2)P.push([L[i],L[i+1]]);
+  const blocks={}, model=[];
+  let sec=null, bucket=null, ent=null, curName=null, awaitingName=false;
+  const flush=()=>{ if(ent&&bucket)bucket.push(ent); ent=null; };
+  const KEEP={SPLINE:1,LINE:1,LWPOLYLINE:1,POLYLINE:1,ARC:1,CIRCLE:1,INSERT:1,VERTEX:1};
+  for(let i=0;i<P.length;i++){
+    const c=P[i][0], v=P[i][1];
+    if(c==="0"&&v==="SECTION"){ flush(); sec=(P[i+1]&&P[i+1][0]==="2")?P[i+1][1]:null; bucket=null; continue; }
+    if(c==="0"&&v==="ENDSEC"){ flush(); sec=null; bucket=null; continue; }
+    if(sec==="BLOCKS"){
+      if(c==="0"&&v==="BLOCK"){ flush(); awaitingName=true; curName=null; continue; }
+      if(awaitingName&&c==="2"){ curName=v; blocks[curName]=blocks[curName]||[]; bucket=blocks[curName]; awaitingName=false; continue; }
+      if(c==="0"&&v==="ENDBLK"){ flush(); bucket=null; curName=null; continue; }
+    }
+    if(sec==="ENTITIES"&&!bucket)bucket=model;
+    if(c==="0"){ flush(); if(bucket&&KEEP[v])ent={t:v,C:{}}; continue; }
+    if(ent){ (ent.C[c]=ent.C[c]||[]).push(v); }
+  }
+  flush();
+  return {blocks,model};
+}
+function dxfBspline(ctrl,knots,deg,samples){
+  const n=ctrl.length; if(n<2)return ctrl.slice();
+  deg=Math.max(1,Math.min(deg||3,n-1));
+  if(!knots||knots.length!==n+deg+1){
+    knots=[]; for(let i=0;i<=deg;i++)knots.push(0);
+    for(let i=1;i<n-deg;i++)knots.push(i/(n-deg));
+    for(let i=0;i<=deg;i++)knots.push(1);
+  }
+  const t0=knots[deg], t1=knots[n];
+  if(!(t1>t0))return ctrl.slice();
+  const out=[];
+  for(let s=0;s<=samples;s++){
+    let t=t0+(t1-t0)*s/samples; if(t>=t1)t=t1-1e-9;
+    let k=deg; while(k<n-1&&t>=knots[k+1])k++;
+    const d=[]; for(let j=k-deg;j<=k;j++)d.push([ctrl[j][0],ctrl[j][1]]);
+    for(let r=1;r<=deg;r++)for(let j=deg;j>=r;j--){
+      const idx=k-deg+j, den=knots[idx+deg-r+1]-knots[idx];
+      const a=den===0?0:(t-knots[idx])/den;
+      d[j][0]=(1-a)*d[j-1][0]+a*d[j][0];
+      d[j][1]=(1-a)*d[j-1][1]+a*d[j][1];
+    }
+    out.push([d[deg][0],d[deg][1]]);
+  }
+  return out;
+}
+function dxfPolys(e,blocks,depth){
+  depth=depth||0; if(depth>6)return [];
+  const C=e.C, num=(k,d)=>(C[k]&&C[k].length?parseFloat(C[k][0]):d);
+  const arr=k=>(C[k]||[]).map(parseFloat);
+  if(e.t==="LINE")return [[[num("10",0),num("20",0)],[num("11",0),num("21",0)]]];
+  if(e.t==="LWPOLYLINE"||e.t==="POLYLINE"){
+    const xs=arr("10"), ys=arr("20"), pts=[];
+    for(let i=0;i<Math.min(xs.length,ys.length);i++)pts.push([xs[i],ys[i]]);
+    if((num("70",0)&1)&&pts.length)pts.push(pts[0]);
+    return pts.length>1?[pts]:[];
+  }
+  if(e.t==="SPLINE"){
+    const xs=arr("10"), ys=arr("20"), ctrl=[];
+    for(let i=0;i<Math.min(xs.length,ys.length);i++)ctrl.push([xs[i],ys[i]]);
+    if(ctrl.length<2){
+      const fx=arr("11"), fy=arr("21"), fit=[];
+      for(let i=0;i<Math.min(fx.length,fy.length);i++)fit.push([fx[i],fy[i]]);
+      return fit.length>1?[fit]:[];
+    }
+    return [dxfBspline(ctrl,arr("40"),Math.round(num("71",3)),Math.max(12,Math.min(96,ctrl.length*6)))];
+  }
+  if(e.t==="ARC"||e.t==="CIRCLE"){
+    const cx=num("10",0), cy=num("20",0), r=num("40",1);
+    let a0=e.t==="CIRCLE"?0:num("50",0), a1=e.t==="CIRCLE"?360:num("51",360);
+    if(a1<=a0)a1+=360;
+    const n=Math.max(8,Math.round((a1-a0)/6)), pts=[];
+    for(let i=0;i<=n;i++){const a=(a0+(a1-a0)*i/n)*Math.PI/180;
+      pts.push([cx+r*Math.cos(a),cy+r*Math.sin(a)]);}
+    return [pts];
+  }
+  if(e.t==="INSERT"){
+    const nm=C["2"]&&C["2"][0]; if(!nm||!blocks[nm])return [];
+    const ox=num("10",0), oy=num("20",0), sx=num("41",1), sy=num("42",1);
+    const rot=num("50",0)*Math.PI/180, ca=Math.cos(rot), sa=Math.sin(rot);
+    const out=[];
+    for(const sub of blocks[nm])
+      for(const poly of dxfPolys(sub,blocks,depth+1))
+        out.push(poly.map(q=>{const X=q[0]*sx, Y=q[1]*sy;
+          return [ox+X*ca-Y*sa, oy+X*sa+Y*ca];}));
+    return out;
+  }
+  return [];
+}
+async function loadDXFFile(file){
+  const {blocks,model}=dxfParse(await file.text());
+  const src=model.length?model:(blocks["*Model_Space"]||[]);
+  let polys=[];
+  for(const e of src)polys=polys.concat(dxfPolys(e,blocks));
+  polys=polys.filter(q=>q.length>1);
+  if(!polys.length)throw new Error("no drawable geometry — the file may use entities this reader doesn't know");
+  let x0=Infinity,x1=-Infinity,y0=Infinity,y1=-Infinity;
+  for(const q of polys)for(const pt of q){
+    if(pt[0]<x0)x0=pt[0]; if(pt[0]>x1)x1=pt[0];
+    if(pt[1]<y0)y0=pt[1]; if(pt[1]>y1)y1=pt[1];
+  }
+  const wU=(x1-x0)||1, hU=(y1-y0)||1;
+  /* 1000 across is what the image path already uses, and the outline closes reliably there:
+     the recovered silhouette stops changing as the pen thickens, which it does not at half
+     this. DXF is unitless in general, so nothing is claimed about scale — set that with
+     Set scale the same as any drawing. */
+  const RW=1000, RH=Math.max(1,Math.round(RW*hU/wU));
+  const cnv=document.createElement("canvas"); cnv.width=RW; cnv.height=RH;
+  const g=cnv.getContext("2d");
+  g.fillStyle="#fff"; g.fillRect(0,0,RW,RH);
+  g.strokeStyle="#111"; g.lineWidth=Math.max(1.2,RW/620); g.lineJoin="round"; g.lineCap="round";
+  const PX=q=>(q[0]-x0)/wU*(RW-4)+2, PY=q=>RH-2-(q[1]-y0)/hU*(RH-4);   // DXF y runs up, canvas down
+  g.beginPath();
+  for(const q of polys){
+    g.moveTo(PX(q[0]),PY(q[0]));
+    for(let i=1;i<q.length;i++)g.lineTo(PX(q[i]),PY(q[i]));
+  }
+  g.stroke();
+  const v=cv();
+  setRefImage(v,cnv);
+  v.svgPolys=null; v.svgArea=0; v.svgPick=0;   // raster path: Auto-trace finds the silhouette
+  v.A=[]; v.B=[];
+  drawTrace(); updateViewDots();
+  /* Trigger the studio's own Auto-trace rather than a second copy of it. It lives on the
+     button, so press the button — one implementation, one behaviour, and pressing it again
+     steps to the next shape exactly as it does for any other drawing. */
+  const auto=document.getElementById("bAuto");
+  if(auto&&auto.onclick){ try{ auto.onclick(); }catch(err){ toast("Loaded, but auto-trace failed: "+err.message); } }
+  requestRebuild();
+  toast(`Read <b>${polys.length}</b> lines from the DXF. <b>Auto-trace</b> picks the outline — `
+      + `press it again to step to a different shape. Set the real size with <span class="mono">Set scale</span>.`);
+}
 async function loadSVGFile(file){
   const text=await file.text();
   const holder=document.createElement("div");
@@ -4087,6 +4274,10 @@ function setRefImage(v,raw,keepVector){ v.imgRaw=raw; if(v.inv===undefined)v.inv
 function loadImageFile(file){
   if(!file)return;
   if(/\.svg$/i.test(file.name||"")||file.type==="image/svg+xml"){loadSVGFile(file);return;}   // vector path
+  if(/\.dxf$/i.test(file.name||"")){                                                        // CAD drawing
+    loadDXFFile(file).catch(err=>toast("Couldn't read that DXF: "+err.message));
+    return;
+  }
   if(/\.json$/i.test(file.name||"")||file.type==="application/json"){                       // a saved model
     const r=new FileReader();
     r.onload=()=>{ try{ const d=JSON.parse(r.result);
@@ -4516,7 +4707,7 @@ function applyProfile(p){
   traced.width=p.widthProfile&&p.widthProfile.length?p.widthProfile:null;
   traced.section=p.section&&p.section.length>1?p.section:null;
   traced.frontHull=p.frontHull&&p.frontHull.length>1?p.frontHull:null;
-  traced.sidePoly=p.sidePoly&&p.sidePoly.length>2?p.sidePoly:null; traced.topPoly=p.topPoly&&p.topPoly.length>2?p.topPoly:null; traced.frontPoly=p.frontPoly&&p.frontPoly.length>2?p.frontPoly:null;
+  traced.sidePoly=p.sidePoly&&p.sidePoly.length>2?p.sidePoly:null; traced.sidePolyR=p.sidePolyR&&p.sidePolyR.length>2?p.sidePolyR:null; traced.topPoly=p.topPoly&&p.topPoly.length>2?p.topPoly:null; traced.frontPoly=p.frontPoly&&p.frontPoly.length>2?p.frontPoly:null;
   traced.rearHull=null;
   traced.sections=(p.sections&&p.sections.length)?p.sections.map(x=>({at:x.at,prof:x.prof,src:x.src||'manual'})):null;
   if(p.mode==="loft"||p.mode==="projection"){S.mode=p.mode;
@@ -4530,9 +4721,9 @@ function applyProfile(p){
   if(p.shape==="loft"||p.shape==="revolve")S.shape=p.shape; if(p.revShape)S.revShape=p.revShape; if(p.revSize)S.revSize=p.revSize;
   if(p.widMM)S.widMM=p.widMM; if(p.hgtMM)S.hgtMM=p.hgtMM; if(p.hullCrisp!=null)S.hullCrisp=p.hullCrisp;
   // restore full editable tracing state: points, scale, and reference images
-  for(const v of ["side","top","bottom","front","rear"]){ if(!V[v])continue; V[v].A=[];V[v].B=[];V[v].img=null;V[v].imgRaw=null;V[v].inv=null; }
+  for(const v of ["side","sideR","top","bottom","front","rear"]){ if(!V[v])continue; V[v].A=[];V[v].B=[];V[v].img=null;V[v].imgRaw=null;V[v].inv=null; }
   if(p.trace){
-    for(const v of ["side","top","bottom","front","rear"]){
+    for(const v of ["side","sideR","top","bottom","front","rear"]){
       const T=p.trace[v]; if(!T||!V[v])continue;
       V[v].A=(T.A||[]).map(pt=>({x:pt.x,y:pt.y}));
       V[v].B=(T.B||[]).map(pt=>({x:pt.x,y:pt.y}));
@@ -4542,7 +4733,19 @@ function applyProfile(p){
     }
     // Re-derive silhouette/width/sections from the RAW points with the current math,
     // so profiles saved by older derivations load correctly (trace is authoritative).
-    if(["side","top","bottom","front","rear"].some(v=>V[v]&&V[v].A.length>=3))commitTrace();
+    if(["side","sideR","top","bottom","front","rear"].some(v=>V[v]&&V[v].A.length>=3)){
+      commitTrace();
+      /* commitTrace rebuilds every outline from the traced POINTS, which is right — the
+         points are the source of truth and the derivation may have improved since the file
+         was saved. But a profile can carry an outline with no points behind it: one imported
+         from a DXF that was auto-traced elsewhere, or handed over by someone else. Rebuilding
+         then wipes it to null and the model silently loses that view. So put back any outline
+         the file carried that the points could not re-derive. */
+      const keep=(k,src)=>{ if(!traced[k] && src && src.length>2) traced[k]=src; };
+      keep("sidePoly",p.sidePoly); keep("sidePolyR",p.sidePolyR);
+      keep("topPoly",p.topPoly);   keep("frontPoly",p.frontPoly);
+      keep("bottomPoly",p.bottomPoly);
+    }
   }
   if(p.name){projName.value=p.name;} if(p.category){projCat.value=p.category;}
   if(traced.top||traced.bottom){
@@ -4903,7 +5106,7 @@ function renderCrops(){
     div.style.left=a.x+"px";div.style.top=a.y+"px";div.style.width=(c.x-a.x)+"px";div.style.height=(c.y-a.y)+"px";
     div.style.borderColor=ROLE_COLOR[b.role]||"#71839A";
     div.innerHTML=`<div class="cb-bar" style="background:${ROLE_COLOR[b.role]||"#71839A"}">
-        <select class="cb-role">${["side","top","bottom","front","rear","ignore"].map(r=>`<option value="${r}" ${r===b.role?"selected":""}>${r}</option>`).join("")}</select>
+        <select class="cb-role">${["side","sideR","top","bottom","front","rear","ignore"].map(r=>`<option value="${r}" ${r===b.role?"selected":""}>${r}</option>`).join("")}</select>
         <span class="cb-del">×</span></div>
       <span class="h nw"></span><span class="h ne"></span><span class="h sw"></span><span class="h se"></span>`;
     layer.appendChild(div);
@@ -5078,7 +5281,7 @@ document.getElementById("iBuild").onclick=()=>{
     }
     for(const bx of pg.boxes){
       const role=bx.role;
-      if(["side","top","bottom","front","rear"].includes(role)){
+      if(["side","sideR","top","bottom","front","rear"].includes(role)){
         const {canvas,cf,topPts,botPts}=cropToViewTrace(bx);
         if(topPts.length<2)continue;
         const view=V[role];
