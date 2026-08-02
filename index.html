@@ -385,7 +385,8 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
   .cb-bar{position:absolute;top:-21px;left:-2px;height:19px;display:flex;align-items:center;gap:3px;
     padding:0 4px;border-radius:4px 4px 0 0;font-size:11px;color:#140c03;white-space:nowrap}
   .cb-role{font-size:10px;border:none;background:rgba(255,255,255,.9);border-radius:3px;color:#111;padding:1px 2px;cursor:pointer}
-  .cb-del{cursor:pointer;font-weight:700;padding:0 3px}
+  .cb-del{cursor:pointer;font-weight:700;padding:0 7px;min-width:20px;text-align:center;
+    line-height:19px;touch-action:none}
   .cropbox .h{position:absolute;width:11px;height:11px;background:#fff;border:2px solid #111;border-radius:2px;box-sizing:border-box}
   .cropbox .h.nw{left:-6px;top:-6px;cursor:nwse-resize}
   .cropbox .h.ne{right:-6px;top:-6px;cursor:nesw-resize}
@@ -680,6 +681,12 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
           <button class="btn" id="iScale">⊹ Set scale</button>
           <button class="btn" id="iDetect">Auto-detect views</button>
           <button class="btn" id="iAdd">＋ Add box</button>
+          <span class="seg" style="margin:0;width:auto;flex:0 0 auto">
+            <button id="iZoomOut" title="Zoom out">−</button>
+            <button id="iZoomFit" title="Fit the whole sheet on screen">Fit</button>
+            <button id="iZoomIn" title="Zoom in">＋</button>
+          </span>
+          <span class="tag mono" id="iZoomLbl" style="align-self:center">100%</span>
           <button class="btn primary" id="iBuild" style="width:auto">▶ Send views to Reference &amp; Trace</button>
           <span class="hint" id="iStatus" style="margin:0 0 0 4px"></span>
         </div>
@@ -737,21 +744,23 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
             <button data-v="front">Front</button>
             <button data-v="rear">Rear</button>
           </div>
-          <span id="vSizeRow" style="display:flex;align-items:center;gap:4px;font-size:10.5px;color:var(--ink-dim)">
+          <span id="vSizeRow" style="display:none;align-items:center;gap:4px;font-size:10.5px;color:var(--ink-dim)">
             <span id="vSizeLbl">across</span>
             <input id="vSizeW" class="proj-name mono" style="width:56px;font-size:11px;padding:4px 5px" placeholder="mm" title="How wide this view really is, in mm">
             <span>×</span>
             <input id="vSizeH" class="proj-name mono" style="width:56px;font-size:11px;padding:4px 5px" placeholder="mm" title="How tall this view really is, in mm">
           </span>
           <button class="btn" id="bCal">⊹ Set scale</button>
-          <button class="btn primary" id="bAuto">Auto-trace</button>
           <span style="width:1px;height:18px;background:var(--line-2);margin:0 2px"></span>
-          <div class="seg" id="featTool">
+          <button class="btn primary" id="bAuto">Auto-trace shape</button>
+          <button class="btn primary" id="bAutoDetail">Auto-trace detail</button>
+          <button class="btn ghost" id="manualToggle" title="Draw features by hand when the automatic pass misses something">Manual ▾</button>
+          <div class="seg" id="featTool" style="display:none">
             <button data-t="poly" class="on">Shape</button>
             <button data-t="box">Box</button>
             <button data-t="text">Text</button>
             <button data-t="join">Join</button>
-            <button data-t="svg">From drawing</button>
+            <button data-t="svg">Pick detail</button>
           </div>
           <div id="featJoinRow" style="display:none;align-items:center;gap:6px">
             <div class="seg" style="margin:0;width:130px;flex:0 0 auto">
@@ -772,14 +781,21 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
             <button class="btn ghost" id="featSelNone" style="display:none">None</button>
           </span>
           <button class="btn ghost" id="bRot" title="Rotate this view 90° — use it if the object is drawn sideways">⟳ 90°</button>
-          <label class="btn ghost" id="pickImg" for="imgFile">Drawing</label>
+          <label class="btn ghost" id="pickImg" for="imgFile" style="display:none">Drawing</label>
           <input type="file" id="imgFile" class="filepick" accept="image/*,image/svg+xml,.svg,.dxf,.png,.jpg,.jpeg,.heic,.webp">
           <span id="imgOpField" style="display:none;align-items:center;gap:6px;font-size:11px;color:var(--ink-dim)">
             <span>fade</span><input type="range" id="sOp" min="10" max="100" value="55" style="width:70px"><span id="vOp" class="mono">55</span>
             <button class="btn ghost" id="refInv" title="Flip the drawing's light/dark if the auto-contrast guessed wrong" style="padding:3px 7px">◐</button>
           </span>
+          <span class="seg" style="margin:0;width:auto;flex:0 0 auto">
+            <button id="trZoomOut" title="Zoom out">−</button>
+            <button id="trZoomFit" title="Back to the whole view">Fit</button>
+            <button id="trZoomIn" title="Zoom in to trace fine detail">＋</button>
+          </span>
+          <span class="tag mono" id="tZoomLbl" style="align-self:center">100%</span>
+          <button class="btn ghost" id="featBoxes" title="Show every feature as a draggable box, or only the ones you\u2019ve selected">Boxes: auto</button>
           <button class="btn ghost" id="bUndo">Undo</button>
-          <button class="btn ghost" id="bClear">⌫ clear view</button>
+          <button class="btn ghost" id="bClear">⌫ Clear tracings</button>
           <button class="btn" id="bSave">Save</button>
           <button class="btn primary" id="b3D" style="width:auto">→ 3D Preview</button>
           <span class="hint" id="traceStatus" style="margin:0 0 0 4px"></span>
@@ -791,7 +807,7 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
             <div class="fp-bar" id="fpDrag"><span id="fpTitle">feature</span><span class="fp-x" id="fpClose">×</span></div>
             <div class="fp-body" id="fpBody"></div>
           </div>
-          <div class="drop-note" id="dropNote"><div class="box"><b id="dropTitle">Drop a side-view drawing</b><span id="dropSub">Side view = the profile. Switch views to trace top (width) and front/rear (end cross-sections). Set scale, then trace.</span></div></div>
+          <div class="drop-note" id="dropNote"><div class="box"><b id="dropTitle">Drop a side-view drawing</b><span id="dropSub">Load your drawings in <b>Import Sheet</b>, give each one a view, then <b>Send views to Reference &amp; Trace</b>. Or drop a file straight onto this panel.</span></div></div>
         </div>
         <div class="hint" style="padding:6px 12px 0;user-select:none">Drop an <b>SVG</b> and it traces itself from the real lines — press <b>Auto-trace</b> again to step to the next shape if it grabbed the wrong one. Otherwise trace <b>one closed outline</b> around the silhouette — click points all the way around; it connects automatically (no gaps). Drag a point to move it · right-click to delete · then open 3D Preview.</div>
       </div>
@@ -2944,7 +2960,10 @@ window.addEventListener("resize",()=>{resize();});
    ========================================================================= */
 const traceCanvas=document.getElementById("trace");
 const tctx=traceCanvas.getContext("2d");
-let fit={s:1,ox:0,oy:0};
+/* The trace view can be zoomed and panned. Without it, the smallest thing you can trace is
+   whatever a fingertip covers at fit-to-screen — which is fine for a wheel arch and hopeless
+   for a badge. z is the zoom over fit-to-screen, px/py the pan in screen pixels. */
+let fit={s:1,ox:0,oy:0,z:1,px:0,py:0};
 // Per-view tracing state. side: A=roof/top edge, B=sill/lower edge.
 //                          top:  A=left edge,     B=right edge.
 /* Six views, the standard orthographic set: Left, Right, Top, Bottom, Front, Rear. The
@@ -2954,6 +2973,12 @@ let fit={s:1,ox:0,oy:0};
    a car. Leave Right untraced and the body is symmetric about its centreline, which is what
    almost everything wants. */
 const V={ side:{img:null,imgRaw:null,inv:null,scale:null,A:[],B:[]}, sideR:{img:null,imgRaw:null,inv:null,scale:null,A:[],B:[]}, top:{img:null,imgRaw:null,inv:null,scale:null,A:[],B:[]}, front:{img:null,imgRaw:null,inv:null,scale:null,A:[],B:[]}, rear:{img:null,imgRaw:null,inv:null,scale:null,A:[],B:[]}, bottom:{img:null,imgRaw:null,inv:null,scale:null,A:[],B:[]} };
+/* What a view is CALLED, as opposed to what it is keyed by. The keys are frozen — "side" is
+   in every model anyone has already saved — but nobody should ever be shown "sideR". One map,
+   used everywhere a view name reaches the screen, so the two can never drift apart. */
+const VIEW_NAME={side:"Left side", sideR:"Right side", top:"Top", bottom:"Bottom",
+                 front:"Front", rear:"Rear", ignore:"Ignore"};
+const viewName=v=>VIEW_NAME[v]||v;
 let activeView="side";
 let traceMode="trace";          // 'trace' (outline) | 'cal'
 let calPts=[];                   // canvas px
@@ -3001,12 +3026,36 @@ function fitTrace(){
   traceCanvas.style.width=w+"px";traceCanvas.style.height=h+"px";
   tctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
   const v=cv();
-  if(v.img){const sc=Math.min(w/v.img.width,h/v.img.height)*0.92;
-    fit.s=sc;fit.ox=(w-v.img.width*sc)/2;fit.oy=(h-v.img.height*sc)/2;}
+  if(v.img){const sc=Math.min(w/v.img.width,h/v.img.height)*0.92*(fit.z||1);
+    fit.s=sc;
+    fit.ox=(w-v.img.width*sc)/2 + (fit.px||0);
+    fit.oy=(h-v.img.height*sc)/2 + (fit.py||0);}
   drawTrace();
+}
+function traceZoom(mult){
+  const host=document.getElementById("canvasHost"); if(!host)return;
+  const w=host.clientWidth, h=host.clientHeight;
+  const before=canvas2img(w/2,h/2);          // what is in the middle right now
+  fit.z=Math.max(1,Math.min(14,(fit.z||1)*mult));
+  fitTrace();                                 // recompute scale at the new zoom
+  const after=canvas2img(w/2,h/2);
+  fit.px=(fit.px||0)+(after.x-before.x)*fit.s;   // put it back in the middle
+  fit.py=(fit.py||0)+(after.y-before.y)*fit.s;
+  fitTrace();
+  const lbl=document.getElementById("tZoomLbl"); if(lbl)lbl.textContent=Math.round(fit.z*100)+"%";
+}
+function traceZoomReset(){
+  fit.z=1; fit.px=0; fit.py=0; fitTrace();
+  const lbl=document.getElementById("tZoomLbl"); if(lbl)lbl.textContent="100%";
 }
 function img2canvas(p){return {x:fit.ox+p.x*fit.s, y:fit.oy+p.y*fit.s};}
 function canvas2img(cx,cy){return {x:(cx-fit.ox)/fit.s, y:(cy-fit.oy)/fit.s};}
+/* How many feature boxes to put on screen at once. "auto" shows them all while there are
+   few and drops to the selected ones once a drawing is dense — eighty dashed rectangles over
+   a drawing is not information, it is a curtain, and you cannot see the thing you are trying
+   to trace underneath it. The features are still drawn, faintly, so nothing disappears. */
+let featBoxMode="auto";
+const featBoxLimit=24;
 let featDragging=false;   // rebuilding every gizmo mid-drag is what made this crawl
 function drawTrace(){ if(typeof featRenderGizmos==="function" && !featDragging)setTimeout(featRenderGizmos,0);
   const v=cv();
@@ -3062,6 +3111,27 @@ function drawTrace(){ if(typeof featRenderGizmos==="function" && !featDragging)s
   if(calPts.length){tctx.strokeStyle="#E5B45B";tctx.setLineDash([6,5]);tctx.lineWidth=2;
     tctx.beginPath();calPts.forEach((p,i)=>{const c=img2canvas(p);i?tctx.lineTo(c.x,c.y):tctx.moveTo(c.x,c.y);});tctx.stroke();tctx.setLineDash([]);
     tctx.fillStyle="#E5B45B";calPts.forEach(p=>{const c=img2canvas(p);tctx.beginPath();tctx.arc(c.x,c.y,5,0,7);tctx.fill();});}
+  /* When the boxes are quietened, the features are still shown — just drawn, thinly, instead
+     of each being a draggable rectangle with handles. You can see every one of them against
+     the drawing, which is the point; you just aren't fighting them. */
+  if(typeof featToScreen==="function" && featBounds(activeView)){
+    const onView=features.reduce((n,f)=>n+(f.view===activeView?1:0),0);
+    if(featBoxMode==="sel" || (featBoxMode==="auto" && onView>featBoxLimit)){
+      tctx.save(); tctx.lineWidth=1;
+      features.forEach((f,i)=>{
+        if(f.view!==activeView || i===featSel || featMulti.has(i))return;
+        const r=featToScreen(f); if(!r||r.w<2||r.h<2)return;
+        tctx.strokeStyle=f.depth<0?"rgba(70,183,217,.55)":"rgba(91,214,160,.55)";
+        if(f.poly&&f.poly.length>2){                   // trace its real shape, not a box
+          tctx.beginPath();
+          f.poly.forEach((q,k)=>{const c=featPtToScreen(f,q); if(!c)return;
+            k?tctx.lineTo(c.x,c.y):tctx.moveTo(c.x,c.y);});
+          tctx.closePath(); tctx.stroke();
+        } else tctx.strokeRect(r.x,r.y,r.w,r.h);
+      });
+      tctx.restore();
+    }
+  }
 }
 function tcXY(e){const r=traceCanvas.getBoundingClientRect();return {x:e.clientX-r.left,y:e.clientY-r.top};}
 function nearestPoint(v,cx,cy){
@@ -3070,7 +3140,17 @@ function nearestPoint(v,cx,cy){
   return best;
 }
 let pointDrag=null;
+let tracePan=null;
 traceCanvas.addEventListener("pointerdown",e=>{
+  /* Panning has to be something a stray tap can never be, because a plain tap on this canvas
+     places a trace point. Right or middle button on a desktop, two fingers on a phone — the
+     same gestures the 3D view already uses, so there is nothing new to learn. */
+  if(e.button===2||e.button===1||(e.pointerType==="touch"&&e.isPrimary===false)){
+    e.preventDefault();
+    tracePan={x:e.clientX,y:e.clientY,px:fit.px||0,py:fit.py||0};
+    try{traceCanvas.setPointerCapture(e.pointerId);}catch(_){}
+    return;
+  }
   if(!traceMode)return; e.preventDefault();
   const {x:cx,y:cy}=tcXY(e);
   if(traceMode==="cal"){calPts.push(canvas2img(cx,cy));drawTrace();if(calPts.length===2)openModal();return;}
@@ -3111,10 +3191,19 @@ traceCanvas.addEventListener("pointerdown",e=>{
   drawTrace();commitTrace();
 });
 traceCanvas.addEventListener("pointermove",e=>{
+  if(tracePan){ fit.px=tracePan.px+(e.clientX-tracePan.x); fit.py=tracePan.py+(e.clientY-tracePan.y);
+    fitTrace(); return; }
   if(!pointDrag)return;const {x:cx,y:cy}=tcXY(e);
   cv()[pointDrag.edge][pointDrag.idx]=canvas2img(cx,cy);drawTrace();
 });
-traceCanvas.addEventListener("pointerup",()=>{if(pointDrag){pointDrag=null;commitTrace();}});
+traceCanvas.addEventListener("pointerup",e=>{
+  if(tracePan){tracePan=null;return;}
+  if(pointDrag){pointDrag=null;commitTrace();}});
+traceCanvas.addEventListener("pointercancel",()=>{tracePan=null;});
+traceCanvas.addEventListener("wheel",e=>{        // desktop: wheel zooms, as everywhere else
+  if(!cv().img)return; e.preventDefault();
+  traceZoom(e.deltaY<0?1.15:1/1.15);
+},{passive:false});
 traceCanvas.addEventListener("contextmenu",e=>{
   if(!traceMode||traceMode==="cal")return;e.preventDefault();
   const {x:cx,y:cy}=tcXY(e);const hit=nearestPoint(cv(),cx,cy);
@@ -3461,6 +3550,13 @@ function featToScreen(f){
   const p1=img2canvas({x:B.minX+b[2]*B.sx, y:B.maxY-b[1]*B.sy});
   return {x:Math.min(p0.x,p1.x), y:Math.min(p0.y,p1.y), w:Math.abs(p1.x-p0.x), h:Math.abs(p1.y-p0.y)};
 }
+/* One point of a feature's own outline, in screen pixels. Same mapping featToScreen uses for
+   the corners of its box, applied to a point instead — so a traced shape can be drawn as the
+   shape it is rather than as the rectangle around it. */
+function featPtToScreen(f,q){
+  const B=featBounds(activeView); if(!B||!q)return null;
+  return img2canvas({x:B.minX+q[0]*B.sx, y:B.maxY-q[1]*B.sy});
+}
 function featFromScreen(x,y,w,h){
   const B=featBounds(activeView); if(!B)return null;
   const a=canvas2img(x,y), c=canvas2img(x+w,y+h);
@@ -3473,8 +3569,11 @@ function featRenderGizmos(){
   const layer=document.getElementById("featLayer"); if(!layer)return;
   layer.innerHTML="";
   if(!featBounds(activeView))return;
+  const onView=features.reduce((n,f)=>n+(f.view===activeView?1:0),0);
+  const quiet = featBoxMode==="sel" || (featBoxMode==="auto" && onView>featBoxLimit);
   features.forEach((f,i)=>{
     if(f.view!==activeView)return;
+    if(quiet && i!==featSel && !featMulti.has(i))return;   // drawn on the canvas instead
     const r=featToScreen(f); if(!r||r.w<2||r.h<2)return;
     const el=document.createElement("div");
     el.className="fbox"+(f.depth>=0?" out":"")+(i===featSel?" sel":(featMulti.has(i)?" gsel":""));
@@ -3644,7 +3743,7 @@ function featPanelGroup(panel,body){
   const cap=featCap(), anyThru=thruOn>0;
   const mixed=k=>k==="depth"?st.mixedDepth:st.mixedSoft;
   const byFace={}; list.forEach(f=>{const v=f.view||"side"; byFace[v]=(byFace[v]||0)+1;});
-  const faces=Object.entries(byFace).map(([v,n])=>`${v} ${n}`).join(" · ");
+  const faces=Object.entries(byFace).map(([v,n])=>`${viewName(v)} ${n}`).join(" · ");
   const tag=on=>on?` <span style="opacity:.6;font-weight:400">· mixed</span>`:"";
   $("fpTitle").textContent=`${list.length} features`;
   body.innerHTML=`
@@ -3775,7 +3874,7 @@ function featRender(){
   featRenderGizmos(); featPanelRender(); featSelSync();
   const c=document.getElementById("featCount");
   const face=featOnView(features,activeView).length;
-  if(c)c.textContent=features.length?`${features.length} on this model · ${face} on ${activeView}`:"none yet";
+  if(c)c.textContent=features.length?`${features.length} on this model · ${face} on ${viewName(activeView)}`:"none yet";
 }
 // The SVG already contains every line in the drawing. The biggest path becomes the body
 // outline; everything else — windows, lights, scoops, badges — is detail sitting unused.
@@ -3795,6 +3894,7 @@ function polyAreaPts(p){let a=0;for(let i=0,j=p.length-1;i<p.length;j=i++)a+=(p[
 function viewShapes(view){
   const v=V[view]; if(!v)return [];
   if(v.svgPolys&&v.svgPolys.length)return v.svgPolys;      // vector: exact, nothing to work out
+  if(v.dxfPolys&&v.dxfPolys.length)return v.dxfPolys;      // a CAD file's own curves
   if(!v.img)return [];
   if(v._shapes && v._shapesFor===v.img)return v._shapes;    // cached against this drawing
   try{
@@ -3903,8 +4003,8 @@ function featStart(){
   document.getElementById("featCancel").style.display="";
   setTraceStatus();drawTrace();
   toast(featTool==="poly"
-    ? `Click around the shape on the <b>${activeView}</b> view, then <b>Finish</b>.`
-    : `Click <b>two opposite corners</b> on the <b>${activeView}</b> view to place the ${featTool==="text"?"wording":"box"}.`);
+    ? `Click around the shape on the <b>${viewName(activeView)}</b> view, then <b>Finish</b>.`
+    : `Click <b>two opposite corners</b> on the <b>${viewName(activeView)}</b> view to place the ${featTool==="text"?"wording":"box"}.`);
 }
 function featFinish(){
   if(!featDraft)return;
@@ -3971,7 +4071,7 @@ function applyViewSize(){
   }
   commitTrace(); setTraceStatus();
   const m=viewSizeMeans(activeView);
-  toast(v.sizeW?`This ${activeView} view is <b>${v.sizeW}mm</b> ${m.w}${v.sizeH?` × <b>${v.sizeH}mm</b> ${m.h}`:""} — everything else is measured from that.`
+  toast(v.sizeW?`This ${viewName(activeView)} view is <b>${v.sizeW}mm</b> ${m.w}${v.sizeH?` × <b>${v.sizeH}mm</b> ${m.h}`:""} — everything else is measured from that.`
                :"Cleared this view's size.");
 }
 function commitTrace(){
@@ -4256,13 +4356,20 @@ async function dxfToCanvas(file){
     for(let i=1;i<q.length;i++)g.lineTo(PX(q[i]),PY(q[i]));
   }
   g.stroke();
-  return {canvas:cnv, lines:polys.length};
+  /* Hand back the strokes in the SAME pixel space as the canvas. The outline is still found
+     from the rendered pixels — DXF line art is a few hundred open strokes with no single
+     closed one to pick — but the DETAIL comes from these, exactly as drawn. Re-finding a
+     badge from pixels when the file already contains its curve is throwing away the reason
+     to use a CAD file at all. */
+  const asPts=polys.map(q=>q.map(pt=>({x:PX(pt), y:PY(pt)})));
+  return {canvas:cnv, lines:polys.length, polys:asPts, area:RW*RH};
 }
 async function loadDXFFile(file){
-  const {canvas:cnv, lines}=await dxfToCanvas(file);
+  const {canvas:cnv, lines, polys:vec, area}=await dxfToCanvas(file);
   const v=cv();
   setRefImage(v,cnv);
-  v.svgPolys=null; v.svgArea=0; v.svgPick=0;   // raster path: Auto-trace finds the silhouette
+  v.svgPolys=null; v.svgPick=0;                // Auto-trace still reads pixels for the outline
+  v.dxfPolys=vec; v.svgArea=area;              // …but the detail comes from the real curves
   v.A=[]; v.B=[];
   drawTrace(); updateViewDots();
   /* Trigger the studio's own Auto-trace rather than a second copy of it. It lives on the
@@ -4316,7 +4423,7 @@ async function loadSVGFile(file){
     if(physMM)v.scale=RW/physMM;                    // real units in the file -> exact scale
     document.getElementById("imgOpField").style.display="inline-flex";
     switchTab("trace"); fitTrace(); drawTrace(); commitTrace(); updateViewDots();
-    toast(`SVG → <b>${activeView}</b> view · <span class="mono">${outline.length} exact points</span>${physMM?` · scale from the file (${physMM.toFixed(0)}mm)`:" · <span class='mono'>Set scale</span> once, or leave it standard"}`);
+    toast(`SVG → <b>${viewName(activeView)}</b> view · <span class="mono">${outline.length} exact points</span>${physMM?` · scale from the file (${physMM.toFixed(0)}mm)`:" · <span class='mono'>Set scale</span> once, or leave it standard"}`);
   }catch(err){toast("SVG import failed: "+err.message);}
   finally{document.body.removeChild(holder);}
 }
@@ -4395,7 +4502,7 @@ function loadImageFile(file){
 }
 document.getElementById("bAuto").onclick=()=>{
   const v=cv();
-  if(!v.img){toast("Load a drawing into this view first (Drawing), then Auto-trace.");return;}
+  if(!v.img){toast("No drawing on this view yet \u2014 load one in <b>Import Sheet</b> and press <b>Send views to Reference &amp; Trace</b>.");return;}
   // An SVG already contains the real lines. Reading its pixels back would be throwing away
   // exact geometry to guess at it, so re-use the paths and just step to the next shape if
   // the first pick wasn't the one you wanted.
@@ -4419,7 +4526,7 @@ document.getElementById("bAuto").onclick=()=>{
     v.A=pts; v.B=[];
     const turned=autoOrientView(activeView);       // blueprint drew it sideways? straighten it
     fitTrace(); drawTrace(); commitTrace(); updateViewDots();
-    toast(`Auto-traced the <b>${activeView}</b> view — <span class="mono">${pts.length} points</span>${turned?" · turned it upright (it was drawn sideways)":""}. Drag any point to fix it.`);
+    toast(`Auto-traced the <b>${viewName(activeView)}</b> view — <span class="mono">${pts.length} points</span>${turned?" · turned it upright (it was drawn sideways)":""}. Drag any point to fix it.`);
   }catch(e){toast("Auto-trace failed: "+e.message);}
 };
 document.querySelectorAll("#featTool button").forEach(b=>b.onclick=()=>{
@@ -4461,16 +4568,16 @@ document.getElementById("featSvgAll").onclick=()=>{
     ? ` <b>${total}</b> on the model now — past about 120 the rebuild starts to drag.`
     : ` <b>${total}</b> on the model now.`;
   toast((tooMany
-    ? `Took the <b>${added}</b> biggest shapes of ${list.length} on <b>${activeView}</b> — click any others you want individually.`
-    : `Took <b>${added}</b> shape(s) from <b>${activeView}</b>.`) + heavy);
+    ? `Took the <b>${added}</b> biggest shapes of ${list.length} on <b>${viewName(activeView)}</b> — click any others you want individually.`
+    : `Took <b>${added}</b> shape(s) from <b>${viewName(activeView)}</b>.`) + heavy);
 };
 document.getElementById("featSelFace").onclick=()=>{
   const idx=featOnView(features,activeView);
-  if(!idx.length){toast(`No features on the <b>${activeView}</b> view yet.`);return;}
+  if(!idx.length){toast(`No features on the <b>${viewName(activeView)}</b> view yet.`);return;}
   featSelectMany(idx);
   toast(idx.length>1
-    ? `All <b>${idx.length}</b> features on <b>${activeView}</b> selected — the sliders now drive every one.`
-    : `The one feature on <b>${activeView}</b> is selected.`);
+    ? `All <b>${idx.length}</b> features on <b>${viewName(activeView)}</b> selected — the sliders now drive every one.`
+    : `The one feature on <b>${viewName(activeView)}</b> is selected.`);
 };
 document.getElementById("featSelAll").onclick=()=>{
   if(!features.length){toast("No features on this model yet.");return;}
@@ -4506,7 +4613,7 @@ document.getElementById("bRot").onclick=()=>{
   const v=cv();
   if(!v.img&&!(v.A&&v.A.length)){toast("Nothing in this view to rotate yet.");return;}
   rotateView(activeView,1); fitTrace(); drawTrace(); commitTrace(); updateViewDots();
-  toast(`Rotated the <b>${activeView}</b> view 90°.`);
+  toast(`Rotated the <b>${viewName(activeView)}</b> view 90°.`);
 };
 document.getElementById("refInv").onclick=()=>{
   const v=cv(); if(!v.imgRaw){toast("Load a drawing into this view first.");return;}
@@ -4547,7 +4654,76 @@ document.querySelectorAll("#viewSeg button").forEach(b=>b.onclick=()=>{
 function setMode(m){traceMode=(traceMode===m)?"trace":m;
   document.getElementById("bCal").classList.toggle("active",traceMode==="cal");
   setTraceStatus();}
-document.getElementById("bCal").onclick=()=>{calPts=[];calTarget="trace";setMode("cal");};
+/* Setting the scale is one job, so it lives behind one button. The width/height boxes used
+   to sit out on the bar the whole time, asking a question nobody had got to yet — you have to
+   load a drawing and trace it before its real size means anything. They appear when you say
+   you want to set the scale, and go away again when you're done. */
+function showScaleFields(on){
+  const row=document.getElementById("vSizeRow");
+  if(row)row.style.display = on ? "flex" : "none";
+  const b=document.getElementById("bCal");
+  if(b)b.classList.toggle("primary", !!on);
+}
+document.getElementById("bCal").onclick=()=>{
+  const row=document.getElementById("vSizeRow");
+  const open = row && row.style.display==="none";
+  showScaleFields(open);
+  if(open){
+    calPts=[];calTarget="trace";setMode("cal");
+    const v=cv();
+    const w=document.getElementById("vSizeW"), h=document.getElementById("vSizeH");
+    if(w)w.value=v.sizeW||""; if(h)h.value=v.sizeH||"";
+    toast("Type how big this view really is, or <b>click two points</b> a known distance apart.");
+  } else { calPts=[]; setMode("trace"); }
+};
+/* Auto-trace detail is the same machinery the "From drawing" tool drove, with the tool
+   selection and the take-all press folded into one button — because that was three steps to
+   express one intention. */
+document.getElementById("bAutoDetail").onclick=()=>{
+  const v=cv();
+  if(!v.img){toast("Load a drawing into this view first.");return;}
+  const have=(typeof svgDetails==="function")?svgDetails(activeView).length:0;
+  if(!have){
+    toast("No separate lines found inside this view to take. If you traced it from a photo "
+        + "rather than a drawing, use <b>Manual</b> to draw the details you want.");
+    return;
+  }
+  // press the real tool button rather than reimplementing what it does
+  const tool=document.querySelector('#featTool button[data-t="svg"]');
+  if(tool&&tool.onclick)tool.onclick();
+  const all=document.getElementById("featSvgAll");
+  if(all&&all.onclick)all.onclick();
+  /* Taking the details leaves you in the pick-a-detail mode, which is genuinely useful — tap
+     any shape to add that one too. But a mode you can't see is a trap, so open the Manual row
+     so the active tool is on screen. */
+  const seg=document.getElementById("featTool");
+  if(seg&&seg.style.display==="none"){
+    seg.style.display="flex";
+    document.getElementById("manualToggle").textContent="Manual \u25b4";
+  }
+};
+document.getElementById("manualToggle").onclick=()=>{
+  const seg=document.getElementById("featTool");
+  const on = seg.style.display==="none";
+  seg.style.display = on ? "flex" : "none";
+  document.getElementById("manualToggle").textContent = on ? "Manual \u25b4" : "Manual \u25be";
+  if(on)toast("<b>Shape</b> traces a free outline \u00b7 <b>Box</b> a rectangle \u00b7 "
+            + "<b>Text</b> raised or cut wording \u00b7 <b>Join</b> a peg or socket. "
+            + "Zoom in first for small detail.");
+};
+document.getElementById("featBoxes").onclick=()=>{
+  featBoxMode = featBoxMode==="auto" ? "all" : featBoxMode==="all" ? "sel" : "auto";
+  document.getElementById("featBoxes").textContent="Boxes: "+featBoxMode;
+  const onView=features.reduce((n,f)=>n+(f.view===activeView?1:0),0);
+  toast(featBoxMode==="all" ? `Every feature on this view is a box now \u2014 <b>${onView}</b> of them.`
+      : featBoxMode==="sel" ? "Only the selected features get a box. The rest stay drawn."
+      : `Auto \u2014 boxes while there are few, outlines past ${featBoxLimit} on a view.`);
+  drawTrace();
+};
+document.getElementById("trZoomIn").onclick =()=>traceZoom(1.4);
+document.getElementById("trZoomOut").onclick=()=>traceZoom(1/1.4);
+document.getElementById("trZoomFit").onclick=()=>{ traceZoomReset();
+  toast("Back to the whole view. Zoom in and <b>two fingers</b> (or right-drag) moves around."); };
 document.getElementById("bUndo").onclick=()=>{
   if(featDraft&&featDraft.pts.length){featDraft.pts.pop();drawTrace();return;}
   const v=cv(); v.A.pop(); drawTrace();commitTrace();};
@@ -4821,7 +4997,7 @@ function applyProfile(p){
   if(p.shape==="loft"||p.shape==="revolve")S.shape=p.shape; if(p.revShape)S.revShape=p.revShape; if(p.revSize)S.revSize=p.revSize;
   if(p.widMM)S.widMM=p.widMM; if(p.hgtMM)S.hgtMM=p.hgtMM; if(p.hullCrisp!=null)S.hullCrisp=p.hullCrisp;
   // restore full editable tracing state: points, scale, and reference images
-  for(const v of ["side","sideR","top","bottom","front","rear"]){ if(!V[v])continue; V[v].A=[];V[v].B=[];V[v].img=null;V[v].imgRaw=null;V[v].inv=null; }
+  for(const v of ["side","sideR","top","bottom","front","rear"]){ if(!V[v])continue; V[v].A=[];V[v].B=[];V[v].img=null;V[v].imgRaw=null;V[v].inv=null;V[v].dxfPolys=null; }
   if(p.trace){
     for(const v of ["side","sideR","top","bottom","front","rear"]){
       const T=p.trace[v]; if(!T||!V[v])continue;
@@ -5059,7 +5235,7 @@ let displayUnit="mm";
 function fmtLen(mm){const u=displayUnit,v=mm/UNIT_MM[u];return `${v.toFixed(u==="mm"||u==="px"?0:1)} ${u}`;}
 
 let calTarget=null;  // 'trace' | 'import'
-const IMP={pages:[], page:0, unit:"mm", calPts:[]};
+const IMP={pages:[], page:0, unit:"mm", calPts:[], zoom:1};
 Object.defineProperties(IMP,{
   cur:{get(){return this.pages[this.page]||null;}},
   img:{get(){return this.cur?this.cur.img:null;}, set(v){if(this.cur)this.cur.img=v;}},
@@ -5189,12 +5365,33 @@ function sheetMetrics(){
 }
 function s2d(x,y){const m=sheetMetrics();return {x:x*m.sc,y:y*m.sc};}   // relative to the image/wrap origin
 function clientToSrc(cx,cy){const m=sheetMetrics();return {x:(cx-m.imgLeft)/m.sc,y:(cy-m.imgTop)/m.sc};}
+function sheetFitZoom(){
+  // the zoom that puts the WHOLE sheet on screen, both directions
+  const host=document.getElementById("sheetHost");
+  if(!host||!IMP.natW||!IMP.natH)return 1;
+  const wFit=(host.clientWidth-24)/IMP.natW;
+  const hFit=(host.clientHeight-24)/IMP.natH;
+  const base=Math.max(60,Math.min(IMP.natW*2, host.clientWidth-24))/IMP.natW;
+  return Math.max(0.05, Math.min(wFit,hFit)/base);
+}
 function layoutSheet(){
   if(!IMP.img)return;
   const host=document.getElementById("sheetHost");
-  const dw=Math.max(60,Math.min(IMP.natW*2, host.clientWidth-24));   // fit width, allow vertical scroll
+  /* The sheet used to be pinned to the width of its panel, so a tall drawing ran off the
+     bottom and there was no way to step back and see the whole thing — which is exactly when
+     you need to, because that is when you are deciding which panel is which view. The fitted
+     width is still the starting point; zoom multiplies it. */
+  const base=Math.max(60,Math.min(IMP.natW*2, host.clientWidth-24));
+  const dw=Math.max(40, base*(IMP.zoom||1));
   document.getElementById("sheetImg").style.width=dw+"px";
   document.getElementById("sheetWrap").style.width=dw+"px";
+  const z=document.getElementById("iZoomLbl");
+  if(z)z.textContent=Math.round((dw/IMP.natW)*100)+"%";
+}
+function setSheetZoom(z){
+  IMP.zoom=Math.max(0.08,Math.min(6,z));
+  layoutSheet(); renderCrops();
+  if(typeof drawCalMarks==="function")drawCalMarks();
 }
 
 /* ---- crop box rendering + editing ---- */
@@ -5206,12 +5403,22 @@ function renderCrops(){
     div.style.left=a.x+"px";div.style.top=a.y+"px";div.style.width=(c.x-a.x)+"px";div.style.height=(c.y-a.y)+"px";
     div.style.borderColor=ROLE_COLOR[b.role]||"#71839A";
     div.innerHTML=`<div class="cb-bar" style="background:${ROLE_COLOR[b.role]||"#71839A"}">
-        <select class="cb-role">${["side","sideR","top","bottom","front","rear","ignore"].map(r=>`<option value="${r}" ${r===b.role?"selected":""}>${r}</option>`).join("")}</select>
+        <select class="cb-role">${["side","sideR","top","bottom","front","rear","ignore"].map(r=>`<option value="${r}" ${r===b.role?"selected":""}>${viewName(r)}</option>`).join("")}</select>
         <span class="cb-del">×</span></div>
       <span class="h nw"></span><span class="h ne"></span><span class="h sw"></span><span class="h se"></span>`;
     layer.appendChild(div);
     div.querySelector(".cb-role").addEventListener("change",e=>{b.role=e.target.value;renderCrops();});
-    div.querySelector(".cb-del").addEventListener("click",()=>{IMP.boxes=IMP.boxes.filter(x=>x!==b);renderCrops();});
+    /* Delete on POINTERDOWN, not click. A click is synthesised after the pointer sequence
+       finishes, and on a touch screen that sequence is often claimed by the drag handler on
+       the box underneath — so the tap moved the box a hair instead of closing it and the ×
+       looked dead. Firing first, and stopping the event there, means the button always wins.
+       The target was also about twelve pixels wide, which is not a button on a phone. */
+    const del=div.querySelector(".cb-del");
+    del.addEventListener("pointerdown",ev=>{
+      ev.preventDefault(); ev.stopPropagation();
+      IMP.boxes=IMP.boxes.filter(x=>x!==b);
+      renderCrops(); impRenderPages();
+    });
     div.addEventListener("pointerdown",ev=>{
       if(ev.target.classList.contains("cb-role")||ev.target.classList.contains("cb-del"))return;
       let handle=null;
@@ -5333,9 +5540,20 @@ document.querySelectorAll("#unitSeg button").forEach(b=>b.onclick=()=>{
 /* ---- auto-detect + role guess ---- */
 function guessRoles(){
   const bs=IMP.boxes;if(!bs.length)return;
-  const side=bs.filter(b=>(b.x1-b.x0)/(b.y1-b.y0)>2.2).sort((a,b)=>(b.x1-b.x0)-(a.x1-a.x0))[0];
+  /* A long, low panel is a side view. There can be TWO of them now — a drawing set with both
+     flanks — and only picking one left the second sitting on "ignore", which reads as the
+     importer not having seen it. Take the two longest: the upper one on the sheet becomes
+     Left, the lower one Right, which is the order a sheet is normally laid out in. Either can
+     be changed in the dropdown; this only has to be a sensible first guess. */
+  const longs=bs.filter(b=>(b.x1-b.x0)/(b.y1-b.y0)>2.2)
+                .sort((a,b)=>(b.x1-b.x0)-(a.x1-a.x0));
+  const side=longs[0];
   if(side)side.role="side";
-  const top=bs.filter(b=>b!==side).map(b=>({b,ar:(b.x1-b.x0)/(b.y1-b.y0),area:(b.x1-b.x0)*(b.y1-b.y0)}))
+  if(longs.length>1){
+    const pair=[longs[0],longs[1]].sort((a,b)=>a.y0-b.y0);
+    pair[0].role="side"; pair[1].role="sideR";
+  }
+  const top=bs.filter(b=>b.role==="ignore").map(b=>({b,ar:(b.x1-b.x0)/(b.y1-b.y0),area:(b.x1-b.x0)*(b.y1-b.y0)}))
     .filter(o=>o.ar>=1.3&&o.ar<=2.4).sort((p,q)=>q.area-p.area)[0];
   if(top)top.b.role="top";
   const front=bs.filter(b=>b.role==="ignore").map(b=>({b,ar:(b.x1-b.x0)/(b.y1-b.y0)}))
@@ -5351,6 +5569,10 @@ document.getElementById("iDetect").onclick=()=>{
   guessRoles();renderCrops();impRenderPages();
   toast(`Detected ${IMP.boxes.length} views (ink threshold ${thr}). Fix boxes/roles, set scale, then build.`);
 };
+document.getElementById("iZoomIn").onclick =()=>setSheetZoom((IMP.zoom||1)*1.35);
+document.getElementById("iZoomOut").onclick=()=>setSheetZoom((IMP.zoom||1)/1.35);
+document.getElementById("iZoomFit").onclick=()=>{ setSheetZoom(sheetFitZoom());
+  toast("Whole sheet in view. <b>＋</b> to zoom back in — the boxes follow."); };
 document.getElementById("iAdd").onclick=()=>{
   if(!IMP.img){toast("Load a sheet first.");return;}
   IMP.boxes.push({x0:IMP.natW*0.32,y0:IMP.natH*0.32,x1:IMP.natW*0.68,y1:IMP.natH*0.5,role:"ignore"});renderCrops();
