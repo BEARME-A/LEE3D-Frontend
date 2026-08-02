@@ -1008,11 +1008,16 @@ function distToPoly(poly,x,y){
   }
   return best;
 }
-// where a vertex lands in a given view's 0..1 frame
+/* Where a vertex lands in a given view's 0..1 frame.
+   All SIX views are named here. sideR used to fall through to the front/rear line and
+   right-hand detail was measured landing on the nose; bottom fell through as well and its
+   v was read off y instead of z. The 1- on top/bottom is the frame correction: features are
+   stored v screen-UP (featNormalize) while topPoly/bottomPoly are stored v screen-DOWN
+   (normPoly), so without it plan-view detail lands on the opposite flank. */
 function viewUV(view,x,y,z,B){
-  if(view==="side")  return [(x-B.x0)/B.dx, (z-B.z0)/B.dz];
-  if(view==="top")   return [(x-B.x0)/B.dx, (y-B.y0)/B.dy];
-  return               [(y-B.y0)/B.dy, (z-B.z0)/B.dz];        // front / rear
+  if(view==="side"||view==="sideR")  return [(x-B.x0)/B.dx, (z-B.z0)/B.dz];
+  if(view==="top"||view==="bottom")  return [(x-B.x0)/B.dx, 1-(y-B.y0)/B.dy];
+  return                               [(y-B.y0)/B.dy, (z-B.z0)/B.dz];        // front / rear
 }
 // A mask feature covers a rectangle of the view; the greyscale says how deep each spot
 // goes. Text becomes one of these, and so could any imported artwork. Sampled smoothly so
@@ -1048,14 +1053,23 @@ function applyFeatures(p,outer,inner,nrm){
     if(!f.mask && (!f.poly||f.poly.length<3))continue;
     const soft=Math.max(0.001,(f.soft??0.12));
     const side=(f.view==="rear")?-1:1;                        // rear is traced mirrored
+    const flank=(f.view==="side"||f.view==="sideR");
     for(let k=0;k<outer.length;k++){
       const P=outer[k], nx=nrm[k];
-      // only the surface actually facing this view gets stamped
-      const face = f.view==="side" ? Math.abs(nx[1]) : f.view==="top" ? nx[2] : nx[0]*side;
-      if(f.view==="side"){ if(face<0.25)continue; }
+      /* Only the surface actually facing this view gets stamped — and every view has to be
+         named. "bottom" used to be tested against nx[0], the nose-facing component; an
+         underside normal is about (0,0,-1), so the test read ~0, failed the 0.05 gate, and
+         EVERY bottom-view feature was thrown away in silence. Measured: 0.00mm of dent on
+         all six faces. sideR fell through the same way and was tested as a front view. */
+      const face = flank                ? Math.abs(nx[1])
+                 : f.view==="top"       ?  nx[2]
+                 : f.view==="bottom"    ? -nx[2]
+                 :                         nx[0]*side;
+      if(flank){ if(face<0.25)continue; }
       else if(face<=0.05)continue;
       let [u,v]=viewUV(f.view,P[0],P[1],P[2],B);
-      if(f.view==="rear")u=1-u;
+      // both are traced standing on the far side, so their length axis is mirrored
+      if(f.view==="rear"||f.view==="sideR")u=1-u;
       if(u<-0.02||u>1.02||v<-0.02||v>1.02)continue;
       let cover;
       if(f.mask){ cover=sampleMask(f,u,v); if(cover<=0.004)continue; }
@@ -1400,7 +1414,12 @@ function embossHull(p,positions,indices,crisp,wall){
   const before=new Float32Array(positions);
   const nf=hullVertexNormals(positions,indices);
   const skin={};                                     // view axis -> which vertices that view can see
-  for(const f of list){ const v=f.view||"side", ax=(v==="side")?1:(v==="top"||v==="bottom")?2:0;
+  // sideR is a FLANK view like side (axis 1). It used to land on axis 0 and stamp the nose.
+  const axOf=v=>(v==="side"||v==="sideR")?1:(v==="top"||v==="bottom")?2:0;
+  // With a second side traced the two flanks are genuinely different, so each drawing may
+  // only stamp its own. With one drawing the body is symmetric and it stamps both.
+  const twoSided=!!(p.sidePolyR&&p.sidePolyR.length>2);
+  for(const f of list){ const ax=axOf(f.view||"side");
     if(!skin[ax])skin[ax]=viewSkinVerts(positions,indices,ax); }
   const pts=new Array(n), nrm=new Array(n), spare=new Array(n);
   for(let k=0;k<n;k++){
@@ -1410,11 +1429,13 @@ function embossHull(p,positions,indices,crisp,wall){
   }
   let hits=0;
   for(const f of list){
-    const v=f.view||"side", ax=(v==="side")?1:(v==="top"||v==="bottom")?2:0, S=skin[ax];
+    const v=f.view||"side", ax=axOf(v), S=skin[ax];
     // hide every vertex this view cannot see, by zeroing its normal — applyFeatures skips those
     const keep=[];
     for(let k=0;k<n;k++){
-      const seen = (v==="side")   ? (S.outer[k]||S.inner[k])      // both flanks are outside skin
+      const seen = (v==="side")   ? (twoSided ? !!S.inner[k]      // its own flank only
+                                              : (S.outer[k]||S.inner[k]))  // symmetric: both
+                 : (v==="sideR")  ? !!S.outer[k]                  // the far flank, the one it draws
                  : (v==="top")    ? !!S.outer[k]
                  : (v==="bottom") ? !!S.inner[k]
                  : (v==="rear")   ? !!S.inner[k] : !!S.outer[k];
@@ -2034,8 +2055,17 @@ function makeVisualHull(p){
     if(!f||!f.poly||f.poly.length<3||!f.depth)return null;      // text/mask stay surface-only
     const view=f.view||"side";
     let pts,kind;
-    if(view==="side"){pts=f.poly.map(q=>[q[0]*L,q[1]*H]); kind="xz";}
-    else if(view==="top"||view==="bottom"){pts=f.poly.map(q=>[q[0]*L,q[1]*W]); kind="xy";}
+    /* WHICH PLANE A FEATURE BELONGS TO — the whole list, not "side, top, and everything else".
+       sideR used to fall through the else and be built on the yz plane, so detail traced on
+       the RIGHT view was pressed into the nose: measured on a plain block, a right-side
+       pocket dented +x at y=-20.2 z=27.2, the identical spot a front-view pocket lands, and
+       the flank it was drawn on moved 0.00mm. The right drawing is traced from the opposite
+       hand, so its length axis mirrors exactly the way sidePolyR is mirrored above.
+       top/bottom carry a second correction: featNormalize stores v screen-UP for every view,
+       while normPoly stores topPoly/bottomPoly v screen-DOWN. Reading one in the other's
+       frame put plan-view detail on the opposite flank from the one it was drawn on. */
+    if(view==="side"||view==="sideR"){pts=f.poly.map(q=>[(view==="sideR"?1-q[0]:q[0])*L,q[1]*H]); kind="xz";}
+    else if(view==="top"||view==="bottom"){pts=f.poly.map(q=>[q[0]*L,(1-q[1])*W]); kind="xy";}
     else {pts=f.poly.map(q=>[(view==="rear"?1-q[0]:q[0])*W,q[1]*H]); kind="yz";}
     return {pts,kind,depth:f.depth,through:!!f.through&&f.depth<0,
             soft:Math.max(0.35,(f.soft==null?0.1:f.soft)*soft0)};
@@ -2082,13 +2112,22 @@ function makeVisualHull(p){
      governs the left flank, the right drawing the right, and in between they cross over
      smoothly. It has to be a sweep rather than a switch — a hard changeover at the centreline
      would leave a step running the length of the body. */
-  const halfW = W*0.5;
   // smoothstep here takes ONE argument. Called as smoothstep(0,1,t) it silently reads the
   // first — a constant 0 — so the blend weight never moved off zero and the second drawing
   // was collected, tabled, and then ignored. Nothing threw; the model just came out
   // symmetric, which is exactly what it looks like when the feature isn't wired at all.
+  /* THE BLEND RUNS ACROSS y = 0..W, NOT -W/2..+W/2.
+     This used to read (y+W/2)/W, which is the right expression for a y centred on zero —
+     but the field's y is built from py(j)=(j-PAD)*hy and runs 0 at one flank to W at the
+     other; the centring happens later, on the finished mesh. So the weight only ever
+     spanned 0.5..1: the RIGHT drawing governed its own half AND the whole centreline,
+     while the LEFT flank was a 50/50 average of the two drawings and never once matched
+     the outline that was traced for it. Measured on a full-height left drawing against a
+     half-height right one: the left flank came out 30.0mm where its own drawing says
+     40.0mm. With y/W it reads 40.1 / 20.3 with a smooth crossover, and a model with no
+     second drawing is bit-for-bit unchanged (t is never consulted). */
   const sweep=(TA,TB2)=>TB2
-    ? (x,y,z)=>{ const t=smoothstep(clamp((y+halfW)/(W||1),0,1));
+    ? (x,y,z)=>{ const t=smoothstep(clamp(y/(W||1),0,1));
                  const a2=look(TA,x,z), b2=look(TB2,x,z); return a2+(b2-a2)*t; }
     : (x,y,z)=>look(TA,x,z);
   let sideAt=null, envSideAt=null;   // bound once the tables exist
@@ -2712,7 +2751,12 @@ function currentProfile(){
     section:buildSection(),
     sections:(traced.sections&&traced.sections.length?traced.sections:null),
     mode:S.mode, frontHull:(S.mode==="projection"?traced.frontHull:null), sepBottom:S.sepBottom,
-    sidePoly:traced.sidePoly, sidePolyR:traced.sidePolyR, topPoly:traced.topPoly, frontPoly:traced.frontPoly, hullCrisp:S.hullCrisp,
+    // bottomPoly is written because applyProfile already reads it back (its keep() fallback
+    // for outlines the trace points can't re-derive). It never was written, so that fallback
+    // was dead: a profile handed over WITHOUT its trace points — a DXF traced elsewhere, or
+    // one published to the library — silently lost its underside outline on load, and
+    // closedBottom then recomputed false and levelled a base that shouldn't have been.
+    sidePoly:traced.sidePoly, sidePolyR:traced.sidePolyR, topPoly:traced.topPoly, frontPoly:traced.frontPoly, bottomPoly:traced.bottomPoly, hullCrisp:S.hullCrisp,
     plainFrame:!!S.noDetail,
     closedBottom:!!traced.bottomPoly,
     hullRes:(qFast?hullDragRes:null), hullFast:qFast,   // self-tuning mid-drag, full on release
@@ -3530,7 +3574,9 @@ function featBounds(view){
   const b={minX,minY,sx:Math.max(1,maxX-minX),sy:Math.max(1,maxY-minY),maxY};
   // how many millimetres this view's frame spans, so a 5mm peg can be 5mm
   const L=S.len||150, W=(S.widMM||traced.natWid||60), H=(S.hgtMM||traced.natHgt||60);
-  if(view==="side"){b.wMM=L;b.hMM=H;} else if(view==="top"||view==="bottom"){b.wMM=L;b.hMM=W;}
+  // sideR is a side view: it spans the LENGTH, not the width. Reading it as a front view
+  // made a 5mm peg drawn on the right flank come out scaled by W/L.
+  if(view==="side"||view==="sideR"){b.wMM=L;b.hMM=H;} else if(view==="top"||view==="bottom"){b.wMM=L;b.hMM=W;}
   else {b.wMM=W;b.hMM=H;}
   return b;
 }
@@ -5024,6 +5070,7 @@ function applyProfile(p){
   traced.section=p.section&&p.section.length>1?p.section:null;
   traced.frontHull=p.frontHull&&p.frontHull.length>1?p.frontHull:null;
   traced.sidePoly=p.sidePoly&&p.sidePoly.length>2?p.sidePoly:null; traced.sidePolyR=p.sidePolyR&&p.sidePolyR.length>2?p.sidePolyR:null; traced.topPoly=p.topPoly&&p.topPoly.length>2?p.topPoly:null; traced.frontPoly=p.frontPoly&&p.frontPoly.length>2?p.frontPoly:null;
+  traced.bottomPoly=p.bottomPoly&&p.bottomPoly.length>2?p.bottomPoly:null;   // decides whether the base gets levelled
   traced.rearHull=null;
   traced.sections=(p.sections&&p.sections.length)?p.sections.map(x=>({at:x.at,prof:x.prof,src:x.src||'manual'})):null;
   if(p.mode==="loft"||p.mode==="projection"){S.mode=p.mode;
@@ -5225,7 +5272,11 @@ document.getElementById("saveLib").onclick=async ()=>{
 };
 
 document.getElementById("buildServer").onclick=async ()=>{
-  const prof=fullProfile(), name=slug(projName.value||"body"), base=beBase();
+  /* currentProfile(), not fullProfile(). The exact build reads the outlines, the features
+     and the dimensions — it never looks at the reference images. fullProfile() re-encodes
+     every traced view to a base64 JPEG and bolts it on, so a five-view sheet meant several
+     megabytes uploaded on a phone, on every press, for the far end to ignore. */
+  const prof=currentProfile(), name=slug(projName.value||"body"), base=beBase();
   if(!base){toast("Exact build needs the backend running — see SETUP.md. Everything else here works without it.");return;}
   await probeBackend();                                  // ask before spending the upload
   if(BE.reached && BE.image && !BE.cad){
@@ -5249,8 +5300,15 @@ document.getElementById("buildServer").onclick=async ()=>{
     if(r.status===503){toast("The backend is up but running the light image, which has no CAD kernel. Rebuild it with <span class='mono'>Dockerfile.full</span> for exact output.");return;}
     if(!r.ok){toast("Exact build: "+(await beExplain(r)));return;}
     const cut=r.headers.get("X-LEE3D-Through-Cuts")||"0";
+    const sym=r.headers.get("X-LEE3D-Symmetric-Only")==="1";
     download(await r.blob(), name+".step");
-    toast(`Exact build done ✓ <span class="mono">${name}.step</span>${+cut?` · ${cut} real opening(s) cut`:""} — opens in any CAD package.`);
+    // The exact build intersects ONE side outline. If a right-hand drawing was traced, the
+    // STEP is a symmetric body and the preview beside it is not — say so rather than hand
+    // over a quietly different shape.
+    toast(sym
+      ? `Exact build done <span class="mono">${name}.step</span>${+cut?` · ${cut} real opening(s) cut`:""} — but it is <b>symmetric</b>. `
+        + `The exact path uses one side outline, so your second side drawing wasn't applied. The STL from here does use both.`
+      : `Exact build done ✓ <span class="mono">${name}.step</span>${+cut?` · ${cut} real opening(s) cut`:""} — opens in any CAD package.`);
   }catch(e){
     toast("Exact build failed: "+e.message+" — if the studio is on https, the backend must be too, or the browser blocks it.");
   }
@@ -6487,19 +6545,31 @@ document.getElementById("wsPaintClear").onclick=wsPaintClearAll;
 /* =========================================================================
    CLOUD DATABASE — Supabase (Postgres via PostgREST, no SDK / zero-build)
    ========================================================================= */
-const SB_SQL=`-- Run once in Supabase → SQL editor:
+/* Safe to run more than once, and safe to run against a table that already exists.
+   The old version was create-table-only with the unique constraint inline, so on an
+   existing table the whole statement was skipped and the constraint never appeared —
+   which is exactly how you end up with a table that looks right and rejects every save. */
+const SB_SQL=`-- Run in Supabase → SQL editor. Safe to run again on an existing table.
 create table if not exists lee3d_projects (
   id uuid primary key default gen_random_uuid(),
   name text not null,
   category text not null default 'uncategorized',
   kind text not null default 'object',
   data jsonb not null,
-  updated_at timestamptz default now(),
-  unique (name, category)
+  updated_at timestamptz default now()
 );
+
+-- Saving the same project twice has to UPDATE it, not add a duplicate, and that needs
+-- this constraint. Added separately so it also lands on a table you already made.
+-- If it errors on duplicates, clear them first, then run it again.
+alter table lee3d_projects drop constraint if exists lee3d_projects_name_category_key;
+alter table lee3d_projects add  constraint lee3d_projects_name_category_key
+  unique (name, category);
+
 alter table lee3d_projects enable row level security;
 -- personal/prototype: let the anon key read + write.
 -- for multi-user, replace with auth-based row policies.
+drop policy if exists "lee3d public rw" on lee3d_projects;
 create policy "lee3d public rw" on lee3d_projects
   for all using (true) with check (true);`;
 
@@ -6517,12 +6587,57 @@ const CLOUD={
   ok(){return !!(this.cfg.url&&this.cfg.key);},
   base(){return this.cfg.url.replace(/\/+$/,"")+"/rest/v1/lee3d_projects";},
   headers(extra){return Object.assign({apikey:this.cfg.key,Authorization:"Bearer "+this.cfg.key,"Content-Type":"application/json"},extra||{});},
+  /* SAVE ONE PROJECT, WHETHER OR NOT THE TABLE HAS THE UNIQUE CONSTRAINT.
+     This used to be a bare PostgREST upsert: POST ?on_conflict=name,category with
+     Prefer: resolution=merge-duplicates. That compiles to ON CONFLICT (name,category) DO
+     UPDATE, and Postgres refuses that unless a unique index covers exactly those columns —
+     error 42P10, "no unique or exclusion constraint matching the ON CONFLICT
+     specification". The setup SQL below does declare the constraint, but it is written as
+     CREATE TABLE IF NOT EXISTS: run against a table that already exists (one made in the
+     Supabase table editor, say) the whole statement is a no-op and the constraint is never
+     added. The table then looks perfect — right columns, right types — and every single
+     cloud save fails.
+     So: try the fast path, and if the constraint isn't there, do the upsert by hand —
+     look the row up, PATCH it if it exists, INSERT it if it doesn't. Same result, one
+     extra round trip, and it works on a table nobody migrated. */
   async upsert(name,kind,data,category){
+    const cat=category||"uncategorized";
+    const row={name,kind,category:cat,data,updated_at:new Date().toISOString()};
     const r=await fetch(this.base()+"?on_conflict=name,category",{method:"POST",
       headers:this.headers({Prefer:"resolution=merge-duplicates,return=representation"}),
-      body:JSON.stringify([{name,kind,category:(category||"uncategorized"),data,updated_at:new Date().toISOString()}])});
-    if(!r.ok)throw new Error("HTTP "+r.status+" "+(await r.text()).slice(0,140));
-    return (await r.json())[0];
+      body:JSON.stringify([row])});
+    if(r.ok)return (await r.json())[0];
+    const msg=(await r.text()).slice(0,300);
+    // 42P10 is the missing constraint. Anything else is a real error and should surface.
+    if(!/42P10|no unique or exclusion constraint/i.test(msg))
+      throw new Error(this.explain(r.status,msg));
+    return await this.upsertByHand(row);
+  },
+  async upsertByHand(row){
+    const q=`?name=eq.${encodeURIComponent(row.name)}&category=eq.${encodeURIComponent(row.category)}&select=id`;
+    const f=await fetch(this.base()+q,{headers:this.headers()});
+    if(!f.ok)throw new Error(this.explain(f.status,(await f.text()).slice(0,200)));
+    const hit=(await f.json())[0];
+    const r=hit
+      ? await fetch(this.base()+"?id=eq."+hit.id,{method:"PATCH",
+          headers:this.headers({Prefer:"return=representation"}),body:JSON.stringify(row)})
+      : await fetch(this.base(),{method:"POST",
+          headers:this.headers({Prefer:"return=representation"}),body:JSON.stringify([row])});
+    if(!r.ok)throw new Error(this.explain(r.status,(await r.text()).slice(0,200)));
+    const j=await r.json();
+    return Array.isArray(j)?j[0]:j;
+  },
+  /* Say what the status actually means. A 401/403 here is almost always row-level security
+     switched on with no policy behind it, which reads as "connected" and then refuses every
+     write — and the raw PostgREST body doesn't say so. */
+  explain(status,body){
+    if(status===401||status===403)
+      return `Supabase refused it (${status}). The table most likely has row-level security on `
+           + `with no policy allowing the anon key. Open the SQL shown under “Help” and run the `
+           + `policy part. ${body}`;
+    if(status===404)
+      return `No lee3d_projects table at that URL (404). Run the SQL under “Help” once. ${body}`;
+    return "HTTP "+status+" "+body;
   },
   async list(){const r=await fetch(this.base()+"?select=id,name,kind,category,updated_at&order=updated_at.desc",{headers:this.headers()});
     if(!r.ok)throw new Error("HTTP "+r.status);return await r.json();},
