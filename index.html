@@ -2107,11 +2107,20 @@ function makeVisualHull(p){
       const sSide=sideAt(x,y,z);
       d = (1-crisp)*Math.max(soft,sSide) + crisp*hull;
     }
-    if(crisp>0.001) for(let q=0;q<feats.length;q++){
-      const f=feats[q]; if(!f.through)continue;                     // indents are stamped on the
-      const s=sdFeat(f,x,y,z);                                      // built surface instead (embossHull),
-      d += crisp*(Math.max(d,-s)-d);                                // so they land on the face they
-    }                                                               // were drawn on, not everywhere
+    /* CUT THROUGH MEANS CUT THROUGH, AT EVERY CRISPNESS.
+       This used to be scaled by crisp, so a window marked "cut clean through" was only
+       properly cut when the slider sat near the top. Measured on a plain box: at Smooth the
+       ray straight through the middle of the window still met 77.9mm of material — the full
+       thickness, as though the window had never been drawn — and it faded in gradually as
+       the slider moved. Crispness is about how closely the SURFACE follows your lines. It
+       was never supposed to decide whether a hole is a hole. A dent is a matter of degree;
+       a hole is not.
+       Indents are still stamped on the built surface instead (embossHull), so they land on
+       the face they were drawn on rather than everywhere at once. */
+    for(let q=0;q<feats.length;q++){
+      const f=feats[q]; if(!f.through)continue;
+      d=Math.max(d, -sdFeat(f,x,y,z));
+    }
     // level base: outside below the cut, so the solid finishes flat instead of rounding off
     return baseCut>-1e29 ? Math.max(d, baseCut-z) : d;
   };
