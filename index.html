@@ -551,7 +551,7 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
         <div class="field"><label>Frame thickness <span class="val"><span id="vWall">1.8</span> mm</span></label><input type="range" id="sWall" min="0.4" max="12" value="1.8" step="0.1"></div>
         <div class="hint" style="margin:-2px 0 4px">How thick the frame is. Nothing pressed in is allowed to go deeper than this — a 1&nbsp;mm scoop needs more than 1&nbsp;mm of frame. Tick <b>cut clean through</b> on a feature when you actually want a hole.</div>
         <label style="display:flex;align-items:center;gap:7px;font-size:11px;margin:2px 0 6px;cursor:pointer"><input type="checkbox" id="noDetail"> Plain frame — ignore traced detail</label>
-        <label style="display:flex;align-items:center;gap:7px;font-size:11px;margin:2px 0 6px;cursor:pointer"><input type="checkbox" id="openArches"> Open wheel wells — lighter, but the arch edge gets busier</label>
+        <label style="display:flex;align-items:center;gap:7px;font-size:11px;margin:2px 0 6px;cursor:pointer"><input type="checkbox" id="openArches"> Leave the underside open — lighter, busier edge</label>
         <div class="hint" style="margin:-2px 0 6px">Tick this and the model is just the outline you traced: no scoops, panel lines or ribbing pressed into it. Windows and other <b>cut clean through</b> holes still cut.</div>
         <label style="display:flex;align-items:center;gap:7px;font-size:11px;margin:2px 0 6px;cursor:pointer"><input type="checkbox" id="wallPerFace"> Different thickness per face</label>
         <div id="wallFaces" style="display:none">
@@ -1094,6 +1094,20 @@ function makeBody(p){
   if(p.mode==="projection" && p.sidePoly && p.sidePoly.length>2) return makeVisualHull(p);  // any-shape solid
   const N=Math.max(8,p.stations|0), M=Math.max(6,p.arcSegments|0);
   const L=p.length, pow=p.roofFlatness??1, WSPEC=wallSpec(p);
+  /* THE SMOOTH BUILDER GETS THE SAME LEVELLED BASE AS THE EXACT ONE.
+     Levelling the base — reading the traced side view to find where the body comes down and
+     meets the ground, and finishing it flat there — was built into the exact builder and
+     never reached this one. So the same model finished on a flat plane under "follow my
+     drawing" and, under "smooth", just ran off the bottom: measured on this car, down to
+     1.5mm BELOW the ground the drawing sits on, with no flat base at all. Two builders
+     disagreeing about where an object ends is not a style choice, it is a bug, and it is
+     exactly what he noticed.
+     The same reading is used here, and each station's floor is lifted to it. */
+  const loftBase = p.closedBottom ? -Infinity
+    : baseCutZ((p.sidePoly&&p.sidePoly.length>2)
+        ? p.sidePoly.map(q=>[q[0]*L, q[1]*Math.max(8,Math.max(...p.topProfile.map(t=>t[1])))])
+        : null,
+      Math.max(8,Math.max(...p.topProfile.map(t=>t[1]))));
   const rows=M+1; const gi=(i,j)=>i*rows+j;
   const outer=new Array((N+1)*rows);
 
@@ -1109,7 +1123,9 @@ function makeBody(p){
   }:null;
   for(let i=0;i<=N;i++){
     const xf=i/N, x=(xf-0.5)*L;
-    const zTop=sampleProfile(p.topProfile,xf), zBot=sampleProfile(p.bottomProfile,xf);
+    const zTop=sampleProfile(p.topProfile,xf);
+    let zBot=sampleProfile(p.bottomProfile,xf);
+    if(loftBase>-1e29 && zBot<loftBase) zBot=loftBase;      // finish flat where it meets the ground
     const halfW=Math.max(0.05,sampleProfile(p.widthProfile,xf));
     // A traced BOTTOM view gives the floor's own plan, which on a real car is narrower and
     // a different shape from the body above it. Blend from the floor width up to the body
@@ -1201,7 +1217,7 @@ function makeBottom(p){
   const L=p.length, plateT=Math.max(0.8,(p.wallThickness||1.8));
   const rows=M+1, gi=(i,j)=>i*rows+j, topV=[]; let zFloor=Infinity;
   const wProf=p.widthBottomProfile||p.widthProfile;      // follow the traced floor when there is one
-  for(let i=0;i<=N;i++){const xf=i/N,x=(xf-0.5)*L,hw=Math.max(0.05,sampleProfile(wProf,xf)),zb=sampleProfile(p.bottomProfile,xf);
+  for(let i=0;i<=N;i++){const xf=i/N,x=(xf-0.5)*L,hw=Math.max(0.05,sampleProfile(wProf,xf)),zb=Math.max(sampleProfile(p.bottomProfile,xf), loftBase>-1e29?loftBase:-Infinity);
     if(zb<zFloor)zFloor=zb;
     for(let j=0;j<=M;j++)topV[gi(i,j)]=[x,(2*j/M-1)*hw,zb];}
   zFloor-=plateT;
@@ -2378,7 +2394,9 @@ function makeVisualHull(p){
     const openBottom = !p.closedBottom;
     let outerIdx = indices;
     if(openBottom){                                    // open only the true underside
-      const flag=bottomSkinTris(positions,indices,{openArches:!!p.openArches,baseCut,cell});
+      // either spelling turns it on. ?? only falls through on null, so a file carrying the
+      // newer key as false would have silently ignored the older one set true.
+      const flag=bottomSkinTris(positions,indices,{openArches:!!(p.openUnderside || p.openArches),baseCut,cell});
       const keep=[];
       for(let q=0,t=0;q<indices.length;q+=3,t++){ if(flag[t])continue; keep.push(indices[q],indices[q+1],indices[q+2]); }
       if(keep.length && keep.length<indices.length) outerIdx=keep;   // never remove everything
@@ -2680,7 +2698,7 @@ function currentProfile(){
   return {
     schema:"lee3d.profile/v1", units:"mm", name:projName.value||"untitled-object", category:(projCat.value||"uncategorized").trim(),
     length:S.len, stations:S.st, arcSegments:S.seg, roofFlatness:S.round,
-    wallThickness:S.wall, wallPerFace:S.wallPerFace, noDetail:!!S.noDetail, openArches:!!S.openArches, hullHollow:true,
+    wallThickness:S.wall, wallPerFace:S.wallPerFace, noDetail:!!S.noDetail, openArches:!!S.openArches, openUnderside:!!S.openArches,   /* openArches is the older name, kept so models saved before this still load; both are written */ hullHollow:true,
     wallTop:S.wallPerFace?S.wallTop:S.wall, wallSide:S.wallPerFace?S.wallSide:S.wall, wallBottom:S.wallPerFace?S.wallBottom:S.wall,
     topProfile:SZ.topP, bottomProfile:SZ.botP, widthProfile:SZ.widP, widthBottomProfile:SZ.widBotP,
     section:buildSection(),
@@ -4859,8 +4877,9 @@ document.getElementById("openArches").addEventListener("change",e=>{
      different job from one that has to look right. */
   S.openArches=e.target.checked;
   toast(e.target.checked
-    ? "Wheel wells open — lighter, but the arches will show a rim across them."
-    : "Wheel wells closed — heavier, and the arches read clean.");
+    ? "Underside left open — lighter, and you can see up inside. The edge gets busier."
+    : "Underside closed — with no bottom traced, one is made from the drawing itself, "
+    + "open only where the shape comes down and meets the ground.");
   requestRebuild();
 });
 document.getElementById("noDetail").addEventListener("change",e=>{
@@ -4981,8 +5000,12 @@ function applyProfile(p){
   if(p.wallPerFace!=null)S.wallPerFace=!!p.wallPerFace;
   if(p.noDetail!=null){S.noDetail=!!p.noDetail;
     const nd=document.getElementById("noDetail"); if(nd)nd.checked=S.noDetail;}
-  if(p.openArches!=null){S.openArches=!!p.openArches;      // reopens the way it was saved
-    const oa=document.getElementById("openArches"); if(oa)oa.checked=S.openArches;}
+  {                                                        // reopens the way it was saved
+    const want = (p.openUnderside!=null) ? p.openUnderside
+               : (p.openArches!=null)    ? p.openArches : null;
+    if(want!=null){ S.openArches=!!want;
+      const oa=document.getElementById("openArches"); if(oa)oa.checked=S.openArches; }
+  }
   if(typeof syncWallUI==="function")syncWallUI();
   // NOTE: hullHollow is deliberately NOT restored from the file. A frame is always a shell,
   // and an old saved profile carrying hullHollow:false used to switch the session to a solid
