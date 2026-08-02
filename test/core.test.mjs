@@ -2145,6 +2145,58 @@ t("a second real model, not just the one everything was tuned on", () => {
      `${prof.length}mm asked, ${(hi-lo).toFixed(1)}mm built`);
 });
 
+t("the rim you see at an opening is a clean band, not a row of teeth", () => {
+  // The visible edge of a shell is the band of wall between its outer and inner skin. If that
+  // band wanders up and down over a short run, it reads as teeth around the wheel arch — the
+  // thing he kept pointing at. Measured on this traced model: with the underside closed the
+  // edge is a flat cut and barely moves; with it open the edge runs over the curved ceiling
+  // of an arch, and that is where the wander lives.
+  let prof;
+  try { prof = JSON.parse(fs.readFileSync(new URL("./fixture-traced.json", import.meta.url), "utf8")); }
+  catch (e) { ok(false, "the traced fixture must be present: " + e.message); return; }
+
+  const rim = (g) => {
+    const P=g.positions, I=g.indices, vc=P.length/6, bset=new Set();
+    for (let q=0;q<I.length;q+=3) {
+      const t=[I[q],I[q+1],I[q+2]];
+      const lo=t.filter(v=>v<vc).length;
+      if (lo>0 && lo<3) for (const v of t) if (v<vc) bset.add(v);
+    }
+    const ring=[...bset], widths=[];
+    for (const v of ring)
+      widths.push(Math.hypot(P[v*3]-P[(v+vc)*3], P[v*3+1]-P[(v+vc)*3+1], P[v*3+2]-P[(v+vc)*3+2]));
+    let wander=0, cnt=0;
+    for (const v of ring) {
+      const near=[];
+      for (const w of ring) {
+        if (w===v) continue;
+        if (Math.hypot(P[v*3]-P[w*3], P[v*3+1]-P[w*3+1]) < 4) near.push(P[w*3+2]);
+      }
+      if (near.length>2) {
+        const mn=Math.min(...near), mx=Math.max(...near);
+        wander += Math.abs(P[v*3+2]-(mn+mx)/2); cnt++;
+      }
+    }
+    widths.sort((a,b)=>a-b);
+    return { n:ring.length, med:widths[widths.length>>1]||0, wander: cnt?wander/cnt:0 };
+  };
+
+  const shut = rim(API.makeBody({ ...prof, openUnderside:false, openArches:false }));
+  ok(shut.n > 50, `the closed underside leaves a rim to look at (${shut.n} points)`);
+  ok(Math.abs(shut.med - prof.wallThickness) < 0.3,
+     `and it is the thickness asked for: ${shut.med.toFixed(2)}mm of ${prof.wallThickness}mm`);
+  ok(shut.wander < 0.2, `and it barely wanders: ${shut.wander.toFixed(3)}mm`);
+
+  const open = rim(API.makeBody({ ...prof, openUnderside:true }));
+  ok(open.n > 50, `the open underside leaves a longer rim (${open.n} points)`);
+  ok(open.wander < 0.6,
+     `and it stays reasonably straight over the arch: ${open.wander.toFixed(3)}mm (was 0.91 before fairing was raised)`);
+
+  for (const [label, g] of [["closed", API.makeBody({ ...prof, openUnderside:false })],
+                            ["open",   API.makeBody({ ...prof, openUnderside:true })]])
+    ok(API.checkManifold(g.indices).watertight, `${label}: watertight`);
+});
+
 // --- report ---
 console.log("\nLEE3D core suite — functions read live from index.html\n");
 if (MISSING.length) console.log("  (not present yet: " + MISSING.join(", ") + ")\n");
