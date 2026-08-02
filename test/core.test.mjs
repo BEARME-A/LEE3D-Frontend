@@ -2078,6 +2078,73 @@ t("crispness leaves the inside of the shell alone", () => {
      `turning crispness up doesn't roughen the inside: ${smooth.toFixed(4)} -> ${sharp.toFixed(4)}`);
 });
 
+t("a second real model, not just the one everything was tuned on", () => {
+  // Every geometry check above runs on shapes built in the test, or on one car. A tuning
+  // that happens to suit that car passes all of them. This is a different traced model —
+  // different outline, different detail, 228 features, a 4.9mm wall and the slider at 0.2 —
+  // loaded from the file the studio actually saved.
+  let prof;
+  try { prof = JSON.parse(fs.readFileSync(new URL("./fixture-charger.json", import.meta.url), "utf8")); }
+  catch (e) { ok(false, "the second model's fixture must be present: " + e.message); return; }
+
+  ok(prof.features.length > 200, `${prof.features.length} traced features came with it`);
+
+  // Both builders. "Smooth" and "Follow my drawing" are not two looks of one builder — they
+  // are two different ones, and a fix landing in only one is how they came to disagree about
+  // where the object ends.
+  for (const [label, over] of [
+    ["smooth, as saved",    { mode:"loft" }],
+    ["exact, as saved",     { mode:"projection" }],
+    ["exact, underside open", { mode:"projection", openUnderside:true }],
+    ["exact, crisp 1",      { mode:"projection", hullCrisp:1 }],
+    ["exact, thin wall",    { mode:"projection", wallThickness:1.8, wallTop:1.8, wallSide:1.8, wallBottom:1.8 }],
+    ["exact, thick wall",   { mode:"projection", wallThickness:7,   wallTop:7,   wallSide:7,   wallBottom:7 }],
+  ]) {
+    const g = API.makeBody({ ...prof, ...over });
+    const m = API.checkManifold(g.indices);
+    ok(m.watertight, `${label}: watertight (boundary ${m.boundary}, non-manifold ${m.nonman})`);
+    ok(g.volume > 0 && isFinite(g.volume), `${label}: has a real volume (${(g.volume/1000).toFixed(1)} cm3)`);
+
+    // no vertex may stand off from its own neighbours by more than an edge length —
+    // that is what a spike is
+    const P=g.positions, I=g.indices, n=P.length/3;
+    const nb=Array.from({length:n},()=>new Set());
+    for (let q=0;q<I.length;q+=3) {
+      const a=I[q],b=I[q+1],c=I[q+2];
+      nb[a].add(b); nb[a].add(c); nb[b].add(a); nb[b].add(c); nb[c].add(a); nb[c].add(b);
+    }
+    let worst=0;
+    for (let k=0;k<n;k++) {
+      const st=nb[k]; if (!st||st.size<3) continue;
+      let cx=0,cy=0,cz=0,el=0;
+      for (const j of st) { cx+=P[j*3]; cy+=P[j*3+1]; cz+=P[j*3+2];
+        el+=Math.hypot(P[j*3]-P[k*3],P[j*3+1]-P[k*3+1],P[j*3+2]-P[k*3+2]); }
+      cx/=st.size; cy/=st.size; cz/=st.size; el/=st.size;
+      const r=Math.hypot(P[k*3]-cx,P[k*3+1]-cy,P[k*3+2]-cz)/(el||1);
+      if (r>worst) worst=r;
+    }
+    ok(worst < 1.2, `${label}: no spikes (worst vertex stands off ${worst.toFixed(2)} edge lengths)`);
+  }
+
+  // Neither builder may finish below the ground the drawing sits on. The smooth one used to,
+  // by 1.5mm on this very model, because the levelled base had only been built into the
+  // other one.
+  for (const mode of ["loft","projection"]) {
+    const b2 = API.makeBody({ ...prof, mode });
+    let zMin = 1e30;
+    for (let k=2;k<b2.positions.length;k+=3) if (b2.positions[k]<zMin) zMin=b2.positions[k];
+    ok(zMin > -0.5, `${mode}: the body ends on or above the ground (lowest point ${zMin.toFixed(1)}mm)`);
+  }
+
+  // the length asked for is the length built, on a real traced outline too
+  const g = API.makeBody({ ...prof, mode:"projection" });
+  let lo=1e30, hi=-1e30;
+  for (let k=0;k<g.positions.length;k+=3) { if (g.positions[k]<lo) lo=g.positions[k];
+    if (g.positions[k]>hi) hi=g.positions[k]; }
+  ok(Math.abs((hi-lo)-prof.length) < 1.5,
+     `${prof.length}mm asked, ${(hi-lo).toFixed(1)}mm built`);
+});
+
 // --- report ---
 console.log("\nLEE3D core suite — functions read live from index.html\n");
 if (MISSING.length) console.log("  (not present yet: " + MISSING.join(", ") + ")\n");
