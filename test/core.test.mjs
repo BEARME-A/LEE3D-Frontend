@@ -2197,6 +2197,140 @@ t("the rim you see at an opening is a clean band, not a row of teeth", () => {
     ok(API.checkManifold(g.indices).watertight, `${label}: watertight`);
 });
 
+
+// =====================  WHERE DETAIL LANDS  =====================
+// These pin the PLACE, not merely that something happened. Every bug in this block shipped
+// past a green suite because the old tests asked "did the model change?" and the answer was
+// yes — on the wrong face. A traced right-hand window was measured denting the NOSE at the
+// exact coordinates a front-view window lands, and bottom-view detail was measured moving
+// nothing at all, 0.00mm on all six faces. Both are silent: nothing throws, the shell stays
+// watertight, the volume moves a little, and the detail is simply somewhere else.
+{
+  const BOX = [[0,0],[1,0],[1,1],[0,1]];
+  const blockProfile = extra => ({
+    length:100, topProfile:[[0,40],[1,40]], widthProfile:[[0,30],[1,30]],
+    sidePoly:BOX, topPoly:BOX, frontPoly:BOX, hullCrisp:1, wallThickness:2,
+    hullHollow:false, closedBottom:true, hullRes:70, mode:"projection", features:null, ...extra });
+  // a patch in a corner of the view frame, so u and v can each be told apart from their mirror
+  const PATCH = [[0.10,0.60],[0.30,0.60],[0.30,0.80],[0.10,0.80]];
+
+  // the deepest departure from the featureless body on one named face, and where it sits
+  const faceGrid = (pos, bb, ax, sgn, G = 56) => {
+    const o1 = (ax+1)%3, o2 = (ax+2)%3;
+    const a0 = bb.min[o1], a1 = bb.max[o1], b0 = bb.min[o2], b1 = bb.max[o2];
+    const M = new Float64Array(G*G).fill(sgn > 0 ? -1e9 : 1e9);
+    for (let i = 0; i < pos.length; i += 3) {
+      const u = Math.min(G-1, Math.max(0, Math.floor((pos[i+o1]-a0)/(a1-a0)*G)));
+      const v = Math.min(G-1, Math.max(0, Math.floor((pos[i+o2]-b0)/(b1-b0)*G)));
+      const o = v*G+u, a = pos[i+ax];
+      if (sgn > 0) { if (a > M[o]) M[o] = a; } else if (a < M[o]) M[o] = a;
+    }
+    return { M, G, a0, a1, b0, b1 };
+  };
+  const bboxOf = pos => { const mn=[1e18,1e18,1e18], mx=[-1e18,-1e18,-1e18];
+    for (let i=0;i<pos.length;i+=3) for (let k=0;k<3;k++){ if(pos[i+k]<mn[k])mn[k]=pos[i+k]; if(pos[i+k]>mx[k])mx[k]=pos[i+k]; }
+    return { min:mn, max:mx }; };
+  const dent = (view, ax, sgn, extra) => {
+    const prof = blockProfile(extra || {});
+    const g0 = API.makeVisualHull(prof), bb = bboxOf(g0.positions);
+    const g1 = API.makeVisualHull({ ...prof,
+      features:[{ kind:"poly", view, poly:PATCH, depth:-4, soft:0.02, name:"pit" }] });
+    const a = faceGrid(g0.positions, bb, ax, sgn), b = faceGrid(g1.positions, bb, ax, sgn);
+    let deep = 0, du = 0, dv = 0;
+    for (let v = 0; v < a.G; v++) for (let u = 0; u < a.G; u++) {
+      const o = v*a.G+u;
+      if (Math.abs(a.M[o]) > 1e8 || Math.abs(b.M[o]) > 1e8) continue;
+      const d = Math.abs(a.M[o]-b.M[o]);
+      if (d > deep) { deep = d; du = u; dv = v; }
+    }
+    return { depth: deep,
+             along: a.a0 + (du+0.5)/a.G*(a.a1-a.a0),
+             across: a.b0 + (dv+0.5)/a.G*(a.b1-a.b0) };
+  };
+
+  t("detail: every one of the six views presses something, somewhere", () => {
+    // bottom pressed NOTHING before this — its facing test read the nose-facing component of
+    // a normal that points at the floor, so every vertex failed the gate and was dropped.
+    for (const [view, ax, sgn] of [["side",1,+1], ["sideR",1,+1], ["top",2,+1],
+                                   ["bottom",2,-1], ["front",0,+1], ["rear",0,-1]])
+      ok(dent(view, ax, sgn).depth > 0.3, `${view} pressed nothing (${dent(view,ax,sgn).depth.toFixed(2)}mm)`);
+  });
+
+  t("detail: the right-side view presses the flank, not the nose", () => {
+    ok(dent("sideR", 1, +1).depth > 0.3, "right-side detail never reached a flank");
+    // the exact face and coordinates a FRONT feature lands on. It used to land here.
+    ok(dent("sideR", 0, +1).depth < 0.1, "right-side detail is being pressed into the nose");
+  });
+
+  t("detail: a right-side feature lands mirrored along the length, like its outline", () => {
+    // the right drawing is traced standing on the far side, so u runs the other way —
+    // the same flip sidePolyR gets. u 0.10..0.30 must come out at x 70..90 on a 100mm body.
+    const d = dent("sideR", 1, +1);
+    ok(d.across > 65 && d.across < 95, `expected x 70..90, got ${d.across.toFixed(1)}`);
+    const left = dent("side", 1, +1);
+    ok(left.across > 5 && left.across < 35, `left view should stay at x 10..30, got ${left.across.toFixed(1)}`);
+  });
+
+  t("detail: a plan-view feature lands on the side of the body it was drawn on", () => {
+    // features store v screen-up; topPoly stores v screen-down. Read one in the other's
+    // frame and the detail appears on the opposite flank, which looks plausible and isn't.
+    const d = dent("top", 2, +1);          // v 0.60..0.80 -> y (1-v)*W -> 12..24 -> centred -18..-6
+    ok(d.across < 0, `top-view detail is on the wrong flank: y=${d.across.toFixed(1)}, expected negative`);
+    const b = dent("bottom", 2, -1);
+    ok(b.across < 0, `bottom-view detail is on the wrong flank: y=${b.across.toFixed(1)}`);
+  });
+
+  t("detail: with two side drawings each one presses only its own flank", () => {
+    const half = [[0,0],[1,0],[1,0.5],[0,0.5]];
+    ok(dent("sideR", 1, +1, { sidePolyR: half }).depth > 0.3, "right drawing lost its own flank");
+    ok(dent("side",  1, -1, { sidePolyR: half }).depth > 0.3, "left drawing lost its own flank");
+  });
+
+  t("detail: all six views at once still leaves one watertight shell", () => {
+    const feats = ["side","sideR","top","bottom","front","rear"].map((view,i) =>
+      ({ kind:"poly", view, poly:PATCH, depth:-4, soft:0.02, name:"f"+i }));
+    for (const hollow of [false, true]) {
+      const g = API.makeVisualHull({ ...blockProfile({}), hullHollow:hollow, features:feats });
+      watertight(g, `six views, hollow=${hollow}`);
+    }
+  });
+}
+
+// =====================  THE SECOND SIDE ACTUALLY GOVERNS ITS FLANK  =====================
+t("two sides: each flank matches the outline drawn for it, not an average of both", () => {
+  // The existing symmetric/asymmetric test only asks whether the two flanks DIFFER, and they
+  // did — so this went unseen. The blend weight was built for a y centred on zero while the
+  // field's y runs 0..W, so it only ever spanned 0.5..1: the right drawing governed its own
+  // half AND the centreline, and the left flank came out a 50/50 average that never once
+  // matched the outline traced for it. Measured at 30.0mm where its drawing said 40.0mm.
+  const BOX = [[0,0],[1,0],[1,1],[0,1]];
+  const HALF = [[0,0],[1,0],[1,0.5],[0,0.5]];       // right drawing: half the height
+  const g = API.makeVisualHull({
+    length:100, topProfile:[[0,40],[1,40]], widthProfile:[[0,30],[1,30]],
+    sidePoly:BOX, sidePolyR:HALF, topPoly:BOX, frontPoly:BOX,
+    hullCrisp:1, wallThickness:2, hullHollow:false, closedBottom:true,
+    hullRes:70, mode:"projection", features:null });
+  const P = g.positions;
+  let yLo = 1e18, yHi = -1e18;
+  for (let i = 0; i < P.length; i += 3) { if (P[i+1] < yLo) yLo = P[i+1]; if (P[i+1] > yHi) yHi = P[i+1]; }
+  const tallest = (y0, y1) => { let h = -1e18;
+    for (let i = 0; i < P.length; i += 3)
+      if (P[i+1] >= y0 && P[i+1] <= y1 && P[i] > 15 && P[i] < 85 && P[i+2] > h) h = P[i+2];
+    return h; };
+  const band = (yHi - yLo) * 0.12;
+  const leftFlank  = tallest(yLo, yLo + band);
+  const rightFlank = tallest(yHi - band, yHi);
+  near(leftFlank, 40, 1.5,  "the flank the full-height drawing was traced for");
+  near(rightFlank, 20, 1.5, "the flank the half-height drawing was traced for");
+  // and one drawing on its own must be untouched by any of this
+  const sym = API.makeVisualHull({
+    length:100, topProfile:[[0,40],[1,40]], widthProfile:[[0,30],[1,30]],
+    sidePoly:BOX, topPoly:BOX, frontPoly:BOX, hullCrisp:1, wallThickness:2,
+    hullHollow:false, closedBottom:true, hullRes:70, mode:"projection", features:null });
+  let h = -1e18; for (let i = 0; i < sym.positions.length; i += 3) if (sym.positions[i+2] > h) h = sym.positions[i+2];
+  near(h, 40, 0.2, "a body with one side drawing is unchanged");
+});
+
 // --- report ---
 console.log("\nLEE3D core suite — functions read live from index.html\n");
 if (MISSING.length) console.log("  (not present yet: " + MISSING.join(", ") + ")\n");
