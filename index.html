@@ -2421,7 +2421,15 @@ function makeVisualHull(p){
       if(loop.size>2){
         const orig=new Map(); for(const s of loop.keys())orig.set(s,[positions[s*3],positions[s*3+1],positions[s*3+2]]);
         const capD=cell*2.5;                       // just past the staircase's own amplitude
-        for(let pass=0;pass<6;pass++){
+        /* Six passes was enough when the opening was a flat cut at the base: measured, the
+           edge wandered up and down by 0.12mm and looked straight. With the underside left
+           open the edge runs over the curved ceiling of a wheel arch instead, where the
+           correct line is itself a curve, and six passes left it wandering 0.91mm on a 4.2mm
+           rim — which is exactly the toothy arch edge. More passes cost nothing measurable
+           (a few hundred vertices) and the cap below still stops any vertex straying more
+           than 2.5 cells from where the mesher put it, so this cannot pull the edge away
+           from the drawing. Measured on that model: 0.91mm -> 0.47mm, volume unchanged. */
+        for(let pass=0;pass<24;pass++){
           const snap=new Map(); for(const s of loop.keys())snap.set(s,[positions[s*3],positions[s*3+1],positions[s*3+2]]);
           for(const[s,nbs]of loop){
             if(nbs.length<2)continue;
