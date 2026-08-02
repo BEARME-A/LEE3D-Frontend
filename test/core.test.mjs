@@ -1999,6 +1999,85 @@ t("two sides: one outline is symmetric, two are not", () => {
      "tracing the far side of a symmetric object changes nothing");
 });
 
+t("crispness decides how the surface follows your lines, not whether a hole is a hole", () => {
+  // A window marked "cut clean through" used to be scaled by the crispness slider, so in
+  // Smooth mode the ray through the middle of it still met the full thickness of the body —
+  // as though the window had never been drawn — and it faded in as the slider came up. A
+  // dent is a matter of degree. A hole is not.
+  const BOXP = [[0.03,0.03],[0.97,0.03],[0.97,0.97],[0.03,0.97]];
+  const win  = [[0.35,0.35],[0.65,0.35],[0.65,0.65],[0.35,0.65]];
+  const base = { mode:"projection", length:200, stations:52, hullHollow:false, closedBottom:true,
+    sidePoly:BOXP, topPoly:BOXP, frontPoly:BOXP, topProfile:[[0,90]], widthProfile:[[0,45]] };
+
+  // material met by a line straight through the middle of the window, off the grid planes
+  const throughWindow = (g) => {
+    const P=g.positions, I=g.indices, x=97.7, z=44.3, hits=[];
+    for (let t=0;t<I.length;t+=3) {
+      const a=I[t],b=I[t+1],c=I[t+2];
+      const ax=P[a*3],az=P[a*3+2],bx=P[b*3],bz=P[b*3+2],cx=P[c*3],cz=P[c*3+2];
+      const den=(bz-cz)*(ax-cx)+(cx-bx)*(az-cz);
+      if (Math.abs(den)<1e-12) continue;
+      const l1=((bz-cz)*(x-cx)+(cx-bx)*(z-cz))/den;
+      const l2=((cz-az)*(x-cx)+(ax-cx)*(z-cz))/den;
+      if (l1<0||l2<0||1-l1-l2<0) continue;
+      hits.push(l1*P[a*3+1]+l2*P[b*3+1]+(1-l1-l2)*P[c*3+1]);
+    }
+    hits.sort((u,v)=>u-v);
+    let m=0; for (let i=0;i+1<hits.length;i+=2) m+=hits[i+1]-hits[i];
+    return m;
+  };
+
+  for (const c of [0, 0.5, 1]) {
+    const solid = API.makeBody({ ...base, hullCrisp:c, features:[] });
+    const cut   = API.makeBody({ ...base, hullCrisp:c,
+      features:[{view:"side", poly:win, depth:-40, through:true, name:"window"}] });
+    const before = throughWindow(solid), after = throughWindow(cut);
+    ok(before > 10, `crisp ${c}: the plain body has material there to cut (${before.toFixed(1)}mm)`);
+    ok(after < before*0.1,
+       `crisp ${c}: the window is cut clean through (${after.toFixed(1)}mm left of ${before.toFixed(1)}mm)`);
+    ok(API.checkManifold(cut.indices).watertight, `crisp ${c}: and it stays watertight`);
+  }
+});
+t("crispness leaves the inside of the shell alone", () => {
+  // His point, and it is the right one: the slider is about how closely the OUTSIDE follows
+  // the drawing. The inner wall is offset from the shape before any detail is stamped, so
+  // turning crispness up must not start putting ribs and valleys inside the frame.
+  const BOXP = [[0.05,0.05],[0.95,0.05],[0.95,0.95],[0.05,0.95]];
+  const ring = (cx,cy,r) => Array.from({length:16},(_,i)=>{
+    const a=i/16*Math.PI*2; return [cx+Math.cos(a)*r, cy+Math.sin(a)*r]; });
+  const feats = [];
+  for (const v of ["side","top","front"])
+    for (const o of [0.3,0.5,0.7]) feats.push({ view:v, poly:ring(o,0.5,0.09), depth:-3, soft:0.1 });
+  const base = { mode:"projection", length:200, stations:48, hullHollow:true, wallThickness:5,
+    closedBottom:true, sidePoly:BOXP, topPoly:BOXP, frontPoly:BOXP,
+    topProfile:[[0,90]], widthProfile:[[0,45]], features:feats };
+
+  // how far each inner vertex sits from the average of its neighbours: a smooth wall is flat
+  const innerRoughness = (g) => {
+    const P=g.positions, I=g.indices, n=P.length/3, vc=Math.floor(n/2);
+    const nb=Array.from({length:n},()=>new Set());
+    for (let q=0;q<I.length;q+=3) {
+      const a=I[q],b=I[q+1],c=I[q+2];
+      nb[a].add(b); nb[a].add(c); nb[b].add(a); nb[b].add(c); nb[c].add(a); nb[c].add(b);
+    }
+    let sum=0, cnt=0;
+    for (let k=vc;k<n;k++) {
+      const s=nb[k]; if (!s||s.size<3) continue;
+      let cx=0,cy=0,cz=0,el=0;
+      for (const j of s) { cx+=P[j*3]; cy+=P[j*3+1]; cz+=P[j*3+2];
+        el+=Math.hypot(P[j*3]-P[k*3],P[j*3+1]-P[k*3+1],P[j*3+2]-P[k*3+2]); }
+      cx/=s.size; cy/=s.size; cz/=s.size; el/=s.size;
+      sum += Math.hypot(P[k*3]-cx,P[k*3+1]-cy,P[k*3+2]-cz)/(el||1); cnt++;
+    }
+    return cnt ? sum/cnt : 0;
+  };
+  const smooth = innerRoughness(API.makeBody({ ...base, hullCrisp:0 }));
+  const sharp  = innerRoughness(API.makeBody({ ...base, hullCrisp:1 }));
+  ok(smooth > 0 && sharp > 0, "both settings build a shell with an inside");
+  ok(sharp < smooth*1.35,
+     `turning crispness up doesn't roughen the inside: ${smooth.toFixed(4)} -> ${sharp.toFixed(4)}`);
+});
+
 // --- report ---
 console.log("\nLEE3D core suite — functions read live from index.html\n");
 if (MISSING.length) console.log("  (not present yet: " + MISSING.join(", ") + ")\n");
