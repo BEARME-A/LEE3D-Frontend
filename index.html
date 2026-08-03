@@ -237,6 +237,12 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
      thumb can reach it. Touch targets go up to ~38px throughout.
      ===================================================================== */
   @media (max-width: 860px){
+    /* the block, smaller on a phone. Folded into the existing breakpoint rather than
+       given its own: the suite refuses a wider query placed after a narrower one,
+       because the later one silently wins and you get two layouts fighting. */
+    #impBox{width:92px;right:8px;top:8px}
+    #impBox .ib-cap{font-size:9px}
+
     header{height:auto;min-height:48px;padding:6px 8px;gap:7px;flex-wrap:nowrap}
     header > .btn{width:auto;flex:0 0 auto}
     header h1.disp{font-size:15px}
@@ -380,6 +386,27 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
   #sheetWrap{position:relative;margin:12px auto;width:fit-content}
   #sheetImg{display:block;user-select:none;-webkit-user-drag:none}
   #cropLayer,#calLayer{position:absolute;inset:0}
+  /* ---- the block the model gets carved from, filling in as sides arrive ---- */
+  #impBox{position:absolute;right:12px;top:12px;z-index:14;width:132px;pointer-events:none;
+    text-align:center;user-select:none;opacity:.94}
+  #impBox svg{width:100%;height:auto;display:block;overflow:visible;
+    /* 40 beats a minute is 1.5s a beat. A heart is two thumps and a rest, not a sine wave —
+       a quick lub, a smaller dub behind it, then most of the bar doing nothing. */
+    animation:ibBeat 1.5s ease-in-out infinite;transform-origin:50% 52%}
+  #impBox.full svg{animation-name:ibBeatFull}
+  @keyframes ibBeat{
+    0%{transform:scale(1)}      7%{transform:scale(1.035)}
+    14%{transform:scale(1.004)} 21%{transform:scale(1.022)}
+    30%{transform:scale(1)}     100%{transform:scale(1)} }
+  @keyframes ibBeatFull{
+    0%{transform:scale(1)}      7%{transform:scale(1.065)}
+    14%{transform:scale(1.008)} 21%{transform:scale(1.042)}
+    30%{transform:scale(1)}     100%{transform:scale(1)} }
+  @media (prefers-reduced-motion:reduce){ #impBox svg{animation:none} }
+  #impBox .ib-face{transition:fill .45s ease,stroke .45s ease,opacity .45s ease}
+  #impBox .ib-cap{margin-top:2px;font-size:10px;line-height:1.35;color:var(--dim)}
+  #impBox .ib-cap b{display:block;font-size:11px;color:var(--accent);letter-spacing:.02em}
+  #impBox.full .ib-cap b{color:var(--good)}
   #calLayer{pointer-events:none}
   .cropbox{position:absolute;border:2px solid var(--accent);background:rgba(255,122,47,.06);box-sizing:border-box;cursor:move}
   .cb-bar{position:absolute;top:-21px;left:-2px;height:19px;display:flex;align-items:center;gap:3px;
@@ -697,6 +724,12 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
             <div id="cropLayer"></div>
             <div id="calLayer"></div>
           </div>
+          <!-- What the model has so far, as the block it will be carved from. A face fills
+               once that view is spoken for; when all six are in, the block closes up. -->
+          <div id="impBox" title="Which sides the model has">
+            <svg viewBox="-46 -48 92 96" id="impBoxSvg" aria-hidden="true"></svg>
+            <div class="ib-cap"><b id="ibCount">0 of 6</b><span id="ibMiss"></span></div>
+          </div>
           <div class="drop-note" id="iDrop"><div class="box"><b>Drop blueprints, sheets or SVGs</b><span>Drop <b>several files at once</b> — each becomes a page. A page can be a full multi-view sheet (auto-detect cuts the views out) or just a single side. Give each view a role, then <b>Send</b> collects them from every page into one model.</span></div></div>
         </div>
       </div>
@@ -774,6 +807,7 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
           <button class="btn ghost" id="featCancel" style="display:none">Cancel</button>
           <input id="featText" class="proj-name mono" style="width:110px;font-size:11px;display:none" placeholder="wording…" value="LEE3D">
           <button class="btn ghost" id="featSvgAll" style="display:none">Take all</button>
+          <button class="btn ghost" id="featTidy" style="display:none;color:var(--warn);border-color:rgba(245,179,66,.4)">Remove duplicates</button>
           <span id="featSelRow" style="display:none;align-items:center;gap:5px">
             <span class="hint" style="margin:0;opacity:.6">select</span>
             <button class="btn ghost" id="featSelFace">Face</button>
@@ -1408,11 +1442,26 @@ function embossHull(p,positions,indices,crisp,wall){
   // a cut-through is only a real hole when it goes INWARD; "through" with a positive depth is
   // a raised bump, so it gets stamped like any other detail (same rule the field uses)
   if(p.plainFrame) return 0;                       // "Plain frame" — press nothing into the skin
-  const list=(p.features||[]).filter(f=>f.depth && !(f.through && f.depth<0));
-  if(!list.length || crisp<=0.001) return 0;
+  /* A BLOCK OF STOCK, AND EVERYTHING ELSE CUT AWAY.
+     Three kinds of shape come out of a drawing, not two:
+       depth < 0   carve it away
+       depth = 0   LEAVE IT STANDING — this is the mask, and it is how a badge pops out
+       depth > 0   push the skin outward (see the warning on that below)
+     A mask used to mean "does nothing", which is only true if you think of a feature as a
+     dent applied to a surface. Think of it the way a carver does — stock, and the parts you
+     don't cut — and a shape you leave alone is the whole point: you cut the grille down and
+     the pony is what's left. Nothing is added, the part never grows past the box it was
+     measured in, and it is exactly what the drawing already says. */
+  const carves=(p.features||[]).filter(f=>f.depth && !(f.through && f.depth<0));
+  const masks =(p.features||[]).filter(f=>!f.depth && f.poly && f.poly.length>2);
+  const list=carves;
+  if((!list.length && !masks.length) || crisp<=0.001) return 0;
   const n=positions.length/3;
   const before=new Float32Array(positions);
   const nf=hullVertexNormals(positions,indices);
+  // The tallest raise anyone asked for on this model, so a badge can stand as proud as the
+  // slider says. Floored at the wall so behaviour never gets tighter than it used to be.
+  const OUT_LIM=Math.max((wall||2), ...list.map(f=>Math.max(0, +f.depth||0)), 0.05);
   const skin={};                                     // view axis -> which vertices that view can see
   // sideR is a FLANK view like side (axis 1). It used to land on axis 0 and stamp the nose.
   const axOf=v=>(v==="side"||v==="sideR")?1:(v==="top"||v==="bottom")?2:0;
@@ -1428,6 +1477,17 @@ function embossHull(p,positions,indices,crisp,wall){
     spare[k]=[0,0,0];                                // the inner wall is built later, from this
   }
   let hits=0;
+  /* NESTED SHAPES SHADE, THEY DO NOT DIG.
+     Every feature used to be stamped onto the result of the one before it, so a grille drawn
+     inside a bumper panel drawn inside a wing was pressed three times over and sank into a
+     pit. Measured at -2.0mm asked on each: the badge centre came out at 2.77mm, which is not
+     2.0 — it is the total-travel ceiling, the only thing that was stopping it reaching 6. A
+     drawing is a drawing, not a stack of cuts: a point inside three outlines is one point on
+     one panel, and it should sit at the depth of whichever shape asked for most, not their
+     sum. So each feature is now worked out against the ORIGINAL surface, and the largest
+     single displacement at each vertex wins. */
+  const acc=new Float32Array(n*3);
+  const work=new Array(n);
   for(const f of list){
     const v=f.view||"side", ax=axOf(v), S=skin[ax];
     // hide every vertex this view cannot see, by zeroing its normal — applyFeatures skips those
@@ -1443,9 +1503,67 @@ function embossHull(p,positions,indices,crisp,wall){
     }
     // an indent may never reach the inner wall, or it would open a hole into the frame
     const lim=Math.max(0.05,(wall||2)*0.5);
-    const dep=f.depth<0?Math.max(f.depth,-lim):Math.min(f.depth,lim*2);
-    hits+=applyFeatures({...p,features:[{...f,depth:dep*crisp}]},pts,spare,nrm);
+    /* RAISING IS NOT PRESSING, AND IT DOES NOT ANSWER TO THE WALL.
+       Pressing in is limited by how much frame there is behind the surface — go further and
+       you are through the panel. Raising ADDS material on the outside of the skin: there is
+       nothing there to breach, so the wall has no say in it. Both were sharing the same
+       clamp, so a badge asked to stand 6mm proud came out at 2.77mm on a 4.1mm frame, and
+       thickening the frame to get a taller badge made no sense to anyone. Outward travel is
+       now limited only by the slider, with the gradient limiter below still stopping the
+       sheet folding over itself. */
+    const dep=f.depth<0?Math.max(f.depth,-lim):Math.min(f.depth,OUT_LIM);
+    // start this one from the untouched surface, not from where the last feature left it
+    for(let k=0;k<n;k++)work[k]=[before[k*3],before[k*3+1],before[k*3+2]];
+    hits+=applyFeatures({...p,features:[{...f,depth:dep*crisp}]},work,spare,nrm);
+    for(let k=0;k<n;k++){
+      const dx=work[k][0]-before[k*3], dy=work[k][1]-before[k*3+1], dz=work[k][2]-before[k*3+2];
+      const m=dx*dx+dy*dy+dz*dz, a=acc[k*3], b=acc[k*3+1], c=acc[k*3+2];
+      if(m>a*a+b*b+c*c){ acc[k*3]=dx; acc[k*3+1]=dy; acc[k*3+2]=dz; }
+    }
     for(const [k,v2] of keep)nrm[k]=v2;              // restore for the next feature
+  }
+  /* Now put back whatever the masks say to leave alone. Running the mask's own outline
+     through the same stamper with a unit depth gives a 0..1 strength per vertex for free —
+     full inside the shape, easing off across its soft edge — so the mask's own Soft edge
+     slider controls how sharply the carving stops at it. */
+  for(const f of masks){
+    const v=f.view||"side", ax=axOf(v), S=skin[ax]||(skin[ax]=viewSkinVerts(positions,indices,ax));
+    const keep=[];
+    for(let k=0;k<n;k++){
+      const seen = (v==="side")   ? (twoSided ? !!S.inner[k] : (S.outer[k]||S.inner[k]))
+                 : (v==="sideR")  ? !!S.outer[k]
+                 : (v==="top")    ? !!S.outer[k]
+                 : (v==="bottom") ? !!S.inner[k]
+                 : (v==="rear")   ? !!S.inner[k] : !!S.outer[k];
+      if(!seen){ keep.push([k,nrm[k]]); nrm[k]=[0,0,0]; }
+    }
+    for(let k=0;k<n;k++)work[k]=[before[k*3],before[k*3+1],before[k*3+2]];
+    applyFeatures({...p,features:[{...f,depth:-1}]},work,spare,nrm);
+    /* Normalise against this mask's OWN strongest point rather than trusting the unit stamp
+       to reach 1. A shape only a few grid cells across never plateaus — measured, a 10mm
+       pony peaked at 0.59, so it was only ever 59% protected and stood 1.18mm proud of a
+       2mm cut instead of the full 2. Dividing through by the peak makes a small badge hold
+       as firmly as a big panel, which is what "leave this alone" has to mean. */
+    let peak=0;
+    for(let k=0;k<n;k++){
+      const d=Math.hypot(work[k][0]-before[k*3],work[k][1]-before[k*3+1],work[k][2]-before[k*3+2]);
+      if(d>peak)peak=d;
+    }
+    if(peak<=1e-6){ for(const [k,v2] of keep)nrm[k]=v2; continue; }
+    for(let k=0;k<n;k++){
+      const dx=work[k][0]-before[k*3], dy=work[k][1]-before[k*3+1], dz=work[k][2]-before[k*3+2];
+      const hold=Math.min(1,Math.hypot(dx,dy,dz)/peak);   // 1 = leave it entirely alone
+      if(hold<=0.001)continue;
+      acc[k*3]*=(1-hold); acc[k*3+1]*=(1-hold); acc[k*3+2]*=(1-hold);
+    }
+    for(const [k,v2] of keep)nrm[k]=v2;
+    hits++;
+  }
+  // the winner at each vertex becomes the surface the limiter below works on
+  for(let k=0;k<n;k++){
+    pts[k][0]=before[k*3]+acc[k*3];
+    pts[k][1]=before[k*3+1]+acc[k*3+1];
+    pts[k][2]=before[k*3+2]+acc[k*3+2];
   }
   /* Every stamp is capped, but stamps ADD — traced detail nests (a vent inside a panel inside
      a door), and a vertex sitting under five nested outlines was pressed five times: measured
@@ -1500,12 +1618,18 @@ function embossHull(p,positions,indices,crisp,wall){
       }
       if(worst<0.01)break;
     }
-    // and the absolute ceiling still stands: nesting may shade a panel, never excavate it
-    const capTot=Math.max(0.05,(wall||2)*0.5)*1.35;
+    // and the absolute ceiling still stands: nesting may shade a panel, never excavate it.
+    // Inward is held to the frame; outward is held to what was actually asked for, because
+    // material added outside the skin cannot break through anything.
+    const capIn=Math.max(0.05,(wall||2)*0.5)*1.35;
     for(let k=0;k<n;k++){
       let dx=D[k*3],dy=D[k*3+1],dz=D[k*3+2];
       const dl=Math.hypot(dx,dy,dz);
-      if(dl>capTot){const f=capTot/dl; dx*=f;dy*=f;dz*=f;}
+      // which way did this vertex travel relative to the surface it sits on?
+      const nk=nrm[k]||[0,0,0];
+      const outward=(dx*nk[0]+dy*nk[1]+dz*nk[2])>0;
+      const cap=outward?OUT_LIM*1.35:capIn;
+      if(dl>cap){const f2=cap/dl; dx*=f2;dy*=f2;dz*=f2;}
       pts[k][0]=before[k*3]+dx; pts[k][1]=before[k*3+1]+dy; pts[k][2]=before[k*3+2]+dz;
     }
   }
@@ -3153,22 +3277,39 @@ function drawTrace(){ if(typeof featRenderGizmos==="function" && !featDragging)s
     tctx.fillStyle=color;pts.forEach((p,i)=>{const c=img2canvas(p);tctx.beginPath();tctx.arc(c.x,c.y,i===0?5:4,0,7);tctx.fill();});
   };
   dp(v.A,"#FF7A2F",true); if(v.B&&v.B.length)dp(v.B,"#46B7D9",true);
-  // features already placed on this view, drawn back in the body outline's frame
+  /* Features on this view, drawn back in the body outline's frame.
+     ONLY THE SELECTED ONES GET THE FULL TREATMENT. This used to draw every feature filled,
+     with a five-pixel dot on each of its points — and a face carrying three hundred shapes
+     of a hundred points each is thirty thousand dots over the drawing. You could not see
+     the drawing, let alone pick anything out of it. Everything unselected is now a single
+     thin line, which is enough to see it is there and little enough to see through. */
   const B=(typeof featBounds==="function")?featBounds(activeView):null;
   if(B&&typeof features!=="undefined"){
-    features.filter(f=>f.view===activeView).forEach(f=>{
+    tctx.save();
+    features.forEach((f,i)=>{
+      if(f.view!==activeView)return;
+      const lead=(i===featSel), grp=featMulti.has(i);
       const col=f.depth<0?"#46B7D9":"#5BD6A0";
       if(f.poly){
-        dp(f.poly.map(q=>({x:B.minX+q[0]*B.sx, y:B.maxY-q[1]*B.sy})), col, true);
+        if(lead||grp){ dp(f.poly.map(q=>({x:B.minX+q[0]*B.sx, y:B.maxY-q[1]*B.sy})), col, true); }
+        else{
+          tctx.strokeStyle=(f.depth<0?"rgba(70,183,217,.5)":"rgba(91,214,160,.5)");
+          tctx.lineWidth=1; tctx.beginPath();
+          f.poly.forEach((q,k)=>{const c=img2canvas({x:B.minX+q[0]*B.sx, y:B.maxY-q[1]*B.sy});
+            k?tctx.lineTo(c.x,c.y):tctx.moveTo(c.x,c.y);});
+          tctx.closePath(); tctx.stroke();
+        }
       } else if(f.box){
         const b=f.box, c0=img2canvas({x:B.minX+b[0]*B.sx,y:B.maxY-b[1]*B.sy}), c1=img2canvas({x:B.minX+b[2]*B.sx,y:B.maxY-b[3]*B.sy});
-        tctx.strokeStyle=col;tctx.lineWidth=2;tctx.setLineDash([5,4]);
+        tctx.strokeStyle=(lead||grp)?col:(f.depth<0?"rgba(70,183,217,.5)":"rgba(91,214,160,.5)");
+        tctx.lineWidth=(lead||grp)?2:1; tctx.setLineDash([5,4]);
         tctx.strokeRect(Math.min(c0.x,c1.x),Math.min(c0.y,c1.y),Math.abs(c1.x-c0.x),Math.abs(c1.y-c0.y));
         tctx.setLineDash([]);
-        if(f.text){tctx.fillStyle=col;tctx.font="600 11px Inter,sans-serif";tctx.textAlign="center";
+        if(f.text&&(lead||grp)){tctx.fillStyle=col;tctx.font="600 11px Inter,sans-serif";tctx.textAlign="center";
           tctx.fillText(f.text,(c0.x+c1.x)/2,Math.min(c0.y,c1.y)-4);}
       }
     });
+    tctx.restore();
   }
   if(featTool==="svg" && typeof svgDetails==="function"){          // what you can click
     tctx.save(); tctx.strokeStyle="rgba(232,197,71,.85)"; tctx.lineWidth=1.5;
@@ -3190,27 +3331,10 @@ function drawTrace(){ if(typeof featRenderGizmos==="function" && !featDragging)s
   if(calPts.length){tctx.strokeStyle="#E5B45B";tctx.setLineDash([6,5]);tctx.lineWidth=2;
     tctx.beginPath();calPts.forEach((p,i)=>{const c=img2canvas(p);i?tctx.lineTo(c.x,c.y):tctx.moveTo(c.x,c.y);});tctx.stroke();tctx.setLineDash([]);
     tctx.fillStyle="#E5B45B";calPts.forEach(p=>{const c=img2canvas(p);tctx.beginPath();tctx.arc(c.x,c.y,5,0,7);tctx.fill();});}
-  /* When the boxes are quietened, the features are still shown — just drawn, thinly, instead
-     of each being a draggable rectangle with handles. You can see every one of them against
-     the drawing, which is the point; you just aren't fighting them. */
-  if(typeof featToScreen==="function" && featBounds(activeView)){
-    const onView=features.reduce((n,f)=>n+(f.view===activeView?1:0),0);
-    if(featBoxMode==="sel" || (featBoxMode==="auto" && onView>featBoxLimit)){
-      tctx.save(); tctx.lineWidth=1;
-      features.forEach((f,i)=>{
-        if(f.view!==activeView || i===featSel || featMulti.has(i))return;
-        const r=featToScreen(f); if(!r||r.w<2||r.h<2)return;
-        tctx.strokeStyle=f.depth<0?"rgba(70,183,217,.55)":"rgba(91,214,160,.55)";
-        if(f.poly&&f.poly.length>2){                   // trace its real shape, not a box
-          tctx.beginPath();
-          f.poly.forEach((q,k)=>{const c=featPtToScreen(f,q); if(!c)return;
-            k?tctx.lineTo(c.x,c.y):tctx.moveTo(c.x,c.y);});
-          tctx.closePath(); tctx.stroke();
-        } else tctx.strokeRect(r.x,r.y,r.w,r.h);
-      });
-      tctx.restore();
-    }
-  }
+  /* The second outline pass that used to live here is gone: every unselected feature is now
+     drawn once, thinly, in the main pass above whatever the box mode is. Two passes meant a
+     feature could be drawn filled AND outlined at the same time, which is where the wall of
+     overlapping shapes came from. */
 }
 function tcXY(e){const r=traceCanvas.getBoundingClientRect();return {x:e.clientX-r.left,y:e.clientY-r.top};}
 function nearestPoint(v,cx,cy){
@@ -3255,7 +3379,33 @@ traceCanvas.addEventListener("pointerdown",e=>{
     return;
   }
   if(featTool==="svg" && V[activeView] && V[activeView].img){
-    const p=canvas2img(cx,cy), poly=svgDetailAt(activeView,p);
+    const p=canvas2img(cx,cy);
+    /* PICK WHAT IS UNDER YOUR FINGER, SMALLEST FIRST.
+       A badge sits inside a grille sits inside a bumper panel. The gizmo boxes are
+       rectangles, so the big panel's box covers the small badge completely and there was no
+       way to reach it — and once a face carries enough features the boxes aren't drawn at
+       all, so there was nothing to tap either. Now the drawing itself is the hit target:
+       every feature whose outline contains the point is a candidate, the smallest wins
+       because it is the most specific thing you pointed at, and tapping the same spot again
+       steps out to the next one up. Nothing is ever unreachable. */
+    const B=featBounds(activeView);
+    if(B){
+      const u=(p.x-B.minX)/B.sx, vv=(B.maxY-p.y)/B.sy;
+      const hits=featPickAt(activeView,u,vv);
+      if(hits.length){
+        const key=`${activeView}:${Math.round(u*400)}:${Math.round(vv*400)}`;
+        if(featPickCycle.key!==key)featPickCycle={key,n:0};
+        else featPickCycle.n=(featPickCycle.n+1)%hits.length;
+        const pick=hits[featPickCycle.n];
+        featSelect(pick); drawTrace();
+        const f=features[pick];
+        toast(hits.length>1
+          ? `<b>${f.name||"feature"}</b> — ${hits.length} shapes overlap here, tap again to step to the next.`
+          : `<b>${f.name||"feature"}</b> selected. Depth <b>negative</b> presses in, <b>positive</b> pops out.`);
+        return;
+      }
+    }
+    const poly=svgDetailAt(activeView,p);
     if(!poly){toast("Nothing from the drawing under there — the yellow outlines are what you can take.");return;}
     featAddSvgPoly(activeView,poly); drawTrace(); return;
   }
@@ -3304,9 +3454,22 @@ function syncSize(){
   else vw.textContent="—";
   if(okH){h.max=Math.max(400,Math.round(traced.natHgt*3));h.value=Math.round(S.hgtMM||traced.natHgt);vh.textContent=Math.round(S.hgtMM||traced.natHgt);}
   else vh.textContent="—";
-  if(hint)hint.innerHTML = (okW||okH)
+  /* WHERE THIS MEASUREMENT CAME FROM.
+     A CAD file states its own dimensions, and once those are read the finished size is no
+     longer a guess — it is a ratio against a known original. Saying both, and the ratio
+     between them, is the difference between "200mm long" and "1:24, which is the scale the
+     chassis is". Lee is fitting a chassis; the ratio is the number he actually needs. */
+  const src=["side","sideR","top","bottom","front","rear"]
+    .map(k=>V[k]).find(v=>v&&v.scaleSrc==="file"&&v.srcMM>0);
+  const fin=okW?(S.lenMM||traced.natWid):0;
+  const prov = src
+    ? `<span class="tag" style="color:var(--good);border-color:rgba(91,214,160,.3)">from the file</span> `
+      + `The drawing states <b>${fmtMM(src.srcMM)}</b>${fin>0?` · finished at <b>${Math.round(fin)} mm</b> `
+        + `= <b>1:${(src.srcMM/fin).toFixed(1)}</b>`:""}. Nothing was re-measured by eye. `
+    : "";
+  if(hint)hint.innerHTML = prov + ((okW||okH)
     ? "The finished measurements — what your drawing measured. Move them to resize; <b>your tracing is left alone</b>, and a nudge survives re-tracing."
-    : "<b>How long</b> comes from the side or top view and always works. <b>How wide</b> comes from the top view, or head-on from front/rear. <b>How tall</b> comes from the side view. Until one of those is traced, the shape sliders below set them.";
+    : "<b>How long</b> comes from the side or top view and always works. <b>How wide</b> comes from the top view, or head-on from front/rear. <b>How tall</b> comes from the side view. Until one of those is traced, the shape sliders below set them.");
 }
 function markSil(on){
   const e=document.getElementById("silMode");
@@ -3606,6 +3769,26 @@ function featSelList(){               // valid, in order, lead first
   const out=[...featMulti].filter(i=>features[i]).sort((a,b)=>a-b);
   return out;
 }
+/* Every feature on this view whose own outline contains the point, smallest first.
+   Smallest first because the small thing is the specific thing: if you put your finger on
+   the badge you meant the badge, not the panel it happens to sit on. */
+let featPickCycle={key:"",n:0};
+function featPickAt(view,u,v){
+  const hits=[];
+  features.forEach((f,i)=>{
+    if(f.view!==view)return;
+    let inside=false, area=0;
+    if(f.poly&&f.poly.length>2){
+      inside=ptInPolyPts(f.poly.map(q=>({x:q[0],y:q[1]})),u,v);
+      area=polyAreaPts(f.poly.map(q=>({x:q[0],y:q[1]})));
+    } else {
+      const b=featBox(f);
+      if(b){ inside=(u>=b[0]&&u<=b[2]&&v>=b[1]&&v<=b[3]); area=(b[2]-b[0])*(b[3]-b[1]); }
+    }
+    if(inside)hits.push({i,area});
+  });
+  return hits.sort((a,b)=>a.area-b.area).map(h=>h.i);
+}
 
 // a feature's box in the view's 0..1 frame, whatever kind it is
 function featBox(f){
@@ -3652,8 +3835,16 @@ function featRenderGizmos(){
   if(!featBounds(activeView))return;
   const onView=features.reduce((n,f)=>n+(f.view===activeView?1:0),0);
   const quiet = featBoxMode==="sel" || (featBoxMode==="auto" && onView>featBoxLimit);
-  features.forEach((f,i)=>{
-    if(f.view!==activeView)return;
+  /* SMALLEST BOX ON TOP. These are rectangles, so a big panel's box completely covers a
+     badge sitting inside it and the badge could never be tapped. Appending in descending
+     area order puts the small ones last, which puts them on top. */
+  const order=features.map((f,i)=>i)
+    .filter(i=>features[i].view===activeView)
+    .sort((a,b)=>{ const A=featBox(features[a]), Bb=featBox(features[b]);
+      const ar=A?(A[2]-A[0])*(A[3]-A[1]):0, br=Bb?(Bb[2]-Bb[0])*(Bb[3]-Bb[1]):0;
+      return br-ar; });
+  order.forEach(i=>{
+    const f=features[i];
     if(quiet && i!==featSel && !featMulti.has(i))return;   // drawn on the canvas instead
     const r=featToScreen(f); if(!r||r.w<2||r.h<2)return;
     const el=document.createElement("div");
@@ -3915,6 +4106,19 @@ function featPanelRender(){
   $("fpDel").onclick=()=>{features.splice(featSel,1); featDeselect(); featRender(); requestRebuild();};
   featNote();
 }
+/* HOW PROUD THIS SHAPE CAN ACTUALLY STAND.
+   Raising is limited by how sharply the surface may bend, not by the frame — the same
+   gradient limit that stops the mesh folding over itself. A wide shape reaches whatever you
+   ask for; a narrow one cannot, because it would need near-vertical sides. Measured against
+   the builder: a 40mm badge on a 100mm face reaches the full 6mm, 25mm reaches 4.6, 15mm
+   reaches 3.4, 8mm reaches 1.7 — close enough to a fifth of its own width to say out loud.
+   Saying it beats letting the slider promise 12mm and quietly deliver 1.7. */
+function featRaiseLimit(f){
+  const B=featBounds(f.view||activeView), b=featBox(f);
+  if(!B||!b)return Infinity;
+  const spanMM=Math.min((b[2]-b[0])*(B.wMM||100),(b[3]-b[1])*(B.hMM||100));
+  return Math.max(0.2, spanMM*0.2);
+}
 // say plainly what this feature will actually do, given the mode and the frame
 function featNote(){
   const el=document.getElementById("fpNote"), f=features[featSel]; if(!el||!f)return;
@@ -3928,8 +4132,17 @@ function featNote(){
   if(f.depth<0 && Math.abs(f.depth)>=cap-0.05)
     el.innerHTML=`Pressed in as far as the <b>${cap.toFixed(1)} mm</b> frame allows. Thicken the frame in <b>Advanced</b> to go deeper.`;
   else if(f.depth<0) el.textContent="Pressed into the surface.";
-  else if(f.depth>0) el.textContent="Raised out of the surface.";
-  else el.textContent="No depth — this does nothing yet.";
+  else if(f.depth>0){
+    const lim=featRaiseLimit(f);
+    el.innerHTML = `<b style='color:var(--warn)'>Pushed outward.</b> This makes the part `
+      + `<b>bigger than the drawing you traced</b> — it grows past the box it was measured in, `
+      + `so it may no longer fit what it was measured for. To make a shape stand proud without `
+      + `growing the part, set it to <b>0</b> and carve the shape <i>around</i> it instead.`
+      + (f.depth>lim+0.05 ? ` (About ${lim.toFixed(1)} mm of it will take, at this width.)` : "");
+  }
+  else el.innerHTML="<b style='color:var(--good)'>Left standing.</b> Nothing cuts this — "
+     + "anything carved around it steps down and leaves this at full height, the way a carver "
+     + "leaves the part they don't cut. Set the shape <i>around</i> it to a negative depth.";
 }
 
 /* How many shapes THIS face's drawing is offering. It has to be worked out per face and
@@ -3953,6 +4166,8 @@ function featNextName(list,view,base){
 }
 function featRender(){
   featRenderGizmos(); featPanelRender(); featSelSync();
+  // the repair button lives or dies by whether there is anything to repair
+  if(typeof featTidySync==="function")featTidySync();
   const c=document.getElementById("featCount");
   const face=featOnView(features,activeView).length;
   if(c)c.textContent=features.length?`${features.length} on this model · ${face} on ${viewName(activeView)}`:"none yet";
@@ -4029,6 +4244,34 @@ function simplifyPoly(pts,tol){
   const out=pts.filter((_,i)=>keep[i]);
   return out.length>=3?out:pts;
 }
+/* A SHAPE'S FINGERPRINT, so the same one can't be taken twice.
+   "Take all" had no memory: press it a second time and every shape in the drawing was added
+   again, on top of itself. Sixty shapes pressed six times is 360 features that look exactly
+   like 60, and it is the single cause of most of what goes wrong afterwards —
+     * the detail smears. Stacked stamps all ask for depth at once; the gradient limiter has
+       to spread that somewhere, so it pushes it sideways. Measured on nested panels: the
+       dent stays at its 2.77mm cap, but the area that moves grows from 312 cells to 1,077,
+       and crisp panel lines bleed into one soft mound.
+     * deleting does nothing you can see. You removed one of six identical copies.
+     * you can't pick the small shape. Six copies of the big panel sit over it.
+   Duplicates are byte-identical here — same source polygon, same normalise, same simplify —
+   so centroid, extent and area together identify one uniquely and cheaply. */
+function featSig(f){
+  const p=f&&f.poly; if(!p||p.length<3)return null;
+  let cx=0,cy=0,x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+  for(const q of p){ cx+=q[0]; cy+=q[1];
+    if(q[0]<x0)x0=q[0]; if(q[0]>x1)x1=q[0]; if(q[1]<y0)y0=q[1]; if(q[1]>y1)y1=q[1]; }
+  const a=polyAreaPts(p.map(q=>({x:q[0],y:q[1]}))), r=n=>Math.round(n*2000)/2000;
+  return `${f.view||"side"}|${r(cx/p.length)}|${r(cy/p.length)}|${r(x1-x0)}|${r(y1-y0)}|${r(a)}`;
+}
+// how many features on a view are copies of one already there
+function featDupIdx(view){
+  const seen=new Set(), out=[];
+  features.forEach((f,i)=>{ if(view&&f.view!==view)return;
+    const s=featSig(f); if(!s)return;
+    if(seen.has(s))out.push(i); else seen.add(s); });
+  return out;
+}
 function featAddSvgPoly(view,poly,quiet){
   const dense=featNormalize(view,resamplePoly(poly,140));
   if(!dense)return false;
@@ -4038,6 +4281,13 @@ function featAddSvgPoly(view,poly,quiet){
   const span=Math.max(Math.max(...us)-Math.min(...us), Math.max(...vs)-Math.min(...vs));
   let norm=simplifyPoly(dense, Math.max(0.002, span*0.018));
   if(norm.length>34)norm=simplifyPoly(dense, Math.max(0.004, span*0.035));   // still busy? relax it
+  // already taken? say so and select the one that's there, rather than stacking another
+  const sig=featSig({view,poly:norm});
+  if(sig){
+    const at=features.findIndex(f=>f.view===view&&featSig(f)===sig);
+    if(at>=0){ if(!quiet){ featSelect(at); toast("That shape is already taken — selected the one you have."); }
+      return false; }
+  }
   features.push({kind:"poly",view,poly:norm,depth:-2.5,soft:0.08,name:featNextName(features,view,"detail")});
   if(!quiet){featSelect(features.length-1);requestRebuild();
     toast(`Taken straight from your drawing — <span class="mono">${features[features.length-1].poly.length} points</span> you can drag to reshape it.`);}
@@ -4156,6 +4406,7 @@ function applyViewSize(){
                :"Cleared this view's size.");
 }
 function commitTrace(){
+  if(typeof ibRender==="function")setTimeout(ibRender,0);   // a traced view fills a face too
   const DEF=(typeof DEFAULT_LEN!=="undefined"?DEFAULT_LEN:200);
   let lenMM=null, widMM=null, hgtMM=null;
 
@@ -4284,12 +4535,36 @@ function setTraceStatus(){
    parser. If the file carries physical units (width="190mm") the scale is exact
    and no calibration is ever needed.
    ========================================================================= */
-function svgPhysicalWidthMM(svg){
-  const w=(svg.getAttribute("width")||"").trim();
-  const m=w.match(/^([\d.]+)\s*(mm|cm|in)$/i); if(!m)return null;
+/* THE PHYSICAL SIZE AN SVG DECLARES, IN MILLIMETRES.
+   This used to accept mm, cm and in only. SVG's absolute unit set is larger than that, and
+   the ones it was missing are the ones real exporters actually write: Illustrator and older
+   Inkscape default to pt, and a plain unitless width alongside a viewBox is a CSS px count,
+   which is 1/96 inch by definition — a real measurement, not an unknown. Every unit below is
+   exact by spec, so none of this is estimation.
+   It also only ever looked at width. A file that states its height and not its width was
+   read as having no size at all, and the person was sent to Set scale to re-measure a
+   number the file was already telling them. */
+const SVG_UNIT_MM={mm:1, cm:10, q:0.25, in:25.4, pt:25.4/72, pc:25.4/6};
+function svgLengthMM(raw){
+  /* px and a bare number are deliberately NOT here. By the letter of the spec a CSS px is
+     1/96 inch and a bare width on the root svg is px, so both could be turned into a
+     millimetre figure — but almost nobody writing either MEANS a physical size, they mean
+     "this many units". Converting anyway would invent a measurement out of a default, which
+     is the same mistake as guessing DXF units from $MEASUREMENT. The units below are ones
+     nobody writes by accident. When the file doesn't state a size, say so and ask. */
+  const m=String(raw||"").trim().match(/^\+?([\d.]+(?:e[+-]?\d+)?)\s*(mm|cm|q|in|pt|pc)$/i);
+  if(!m)return null;
   const v=parseFloat(m[1]); if(!isFinite(v)||v<=0)return null;
-  const u=m[2].toLowerCase();
-  return u==="mm"?v : u==="cm"?v*10 : v*25.4;      // px / unitless -> physical size unknown
+  return v*SVG_UNIT_MM[m[2].toLowerCase()];
+}
+function svgPhysicalWidthMM(svg){
+  const byW=svgLengthMM(svg.getAttribute("width"));
+  if(byW)return byW;
+  // no usable width? the height plus the viewBox's own aspect gives the width exactly
+  const byH=svgLengthMM(svg.getAttribute("height"));
+  const vb=(svg.getAttribute("viewBox")||"").trim().split(/[\s,]+/).map(Number);
+  if(byH&&vb.length===4&&vb[2]>0&&vb[3]>0)return byH*(vb[2]/vb[3]);
+  return null;
 }
 function polyArea(p){let a=0;for(let i=0,j=p.length-1;i<p.length;j=i++)a+=(p[j].x*p[i].y-p[i].x*p[j].y);return Math.abs(a/2);}
 // biggest shape wins, ignoring a full-canvas background rect. rank>0 steps to the next
@@ -4314,17 +4589,44 @@ function resamplePoly(p,N){if(p.length<=N)return p;const o=[];for(let i=0;i<N;i+
    is how you know the outline is genuinely closed rather than nearly closed.
    Handles LINE, LWPOLYLINE, POLYLINE, ARC, CIRCLE, SPLINE and nested INSERTs into BLOCKS —
    which is where the geometry actually lives in a file exported from most CAD packages. */
+/* WHAT ONE DRAWING UNIT IS WORTH, IN MILLIMETRES.
+   $INSUNITS is the DXF header variable every CAD package writes to say what its coordinates
+   mean. The reader used to skip the HEADER section entirely and the comment below claimed
+   "DXF is unitless in general" — which is wrong, and it is exactly the thing Lee is
+   objecting to: his files carry real measurements, and asking him to click two points and
+   type a number can only ever contradict what the file already states exactly. */
+const DXF_UNIT_MM={1:25.4, 2:304.8, 3:1609344, 4:1, 5:10, 6:1000, 7:1e6,
+                   8:2.54e-5, 9:0.0254, 10:914.4, 13:0.001, 14:100, 15:10000, 16:100000,
+                   21:304.8006, 22:25.40005, 23:914.4018};
+const DXF_UNIT_NAME={1:"inches",2:"feet",3:"miles",4:"mm",5:"cm",6:"metres",7:"km",
+                     8:"microinches",9:"mils",10:"yards",13:"microns",14:"dm",15:"dam",
+                     16:"hm",21:"US survey feet",22:"US survey inches",23:"US survey yards"};
+function dxfUnitMM(header){
+  const n=parseInt((header||{})["$INSUNITS"],10);
+  if(isFinite(n)&&DXF_UNIT_MM[n])return {mm:DXF_UNIT_MM[n], name:DXF_UNIT_NAME[n], code:n};
+  /* $INSUNITS 0 means the file genuinely declares no units, and $MEASUREMENT only picks
+     which hatch-pattern file to load — it is not a statement about the coordinates. Guessing
+     from it risks being wrong by a factor of 25.4, so don't: report the raw extent instead
+     and let the person say. Silence beats a confident wrong number. */
+  return null;
+}
 function dxfParse(text){
   const L=text.replace(/\r\n/g,"\n").split("\n").map(t=>t.trim());
   const P=[]; for(let i=0;i+1<L.length;i+=2)P.push([L[i],L[i+1]]);
-  const blocks={}, model=[];
-  let sec=null, bucket=null, ent=null, curName=null, awaitingName=false;
+  const blocks={}, model=[], header={};
+  let sec=null, bucket=null, ent=null, curName=null, awaitingName=false, hdrVar=null;
   const flush=()=>{ if(ent&&bucket)bucket.push(ent); ent=null; };
   const KEEP={SPLINE:1,LINE:1,LWPOLYLINE:1,POLYLINE:1,ARC:1,CIRCLE:1,INSERT:1,VERTEX:1};
   for(let i=0;i<P.length;i++){
     const c=P[i][0], v=P[i][1];
-    if(c==="0"&&v==="SECTION"){ flush(); sec=(P[i+1]&&P[i+1][0]==="2")?P[i+1][1]:null; bucket=null; continue; }
-    if(c==="0"&&v==="ENDSEC"){ flush(); sec=null; bucket=null; continue; }
+    if(c==="0"&&v==="SECTION"){ flush(); sec=(P[i+1]&&P[i+1][0]==="2")?P[i+1][1]:null; bucket=null; hdrVar=null; continue; }
+    if(c==="0"&&v==="ENDSEC"){ flush(); sec=null; bucket=null; hdrVar=null; continue; }
+    // the header is name/value pairs: a code 9 names the variable, the next pair carries it
+    if(sec==="HEADER"){
+      if(c==="9"){ hdrVar=v; continue; }
+      if(hdrVar){ if(header[hdrVar]===undefined)header[hdrVar]=v; hdrVar=null; }
+      continue;
+    }
     if(sec==="BLOCKS"){
       if(c==="0"&&v==="BLOCK"){ flush(); awaitingName=true; curName=null; continue; }
       if(awaitingName&&c==="2"){ curName=v; blocks[curName]=blocks[curName]||[]; bucket=blocks[curName]; awaitingName=false; continue; }
@@ -4335,7 +4637,7 @@ function dxfParse(text){
     if(ent){ (ent.C[c]=ent.C[c]||[]).push(v); }
   }
   flush();
-  return {blocks,model};
+  return {blocks,model,header};
 }
 function dxfBspline(ctrl,knots,deg,samples){
   const n=ctrl.length; if(n<2)return ctrl.slice();
@@ -4408,8 +4710,115 @@ function dxfPolys(e,blocks,depth){
 /* Read a DXF and give back a canvas of it, plus how many lines were in it. Both ways into
    the studio need exactly this — the Reference & Trace tab traces it directly, the Import
    Sheet tab adds it as a page — so it lives in one place rather than being written twice. */
+/* ---- STITCHING LINE ART BACK INTO A CLOSED SHAPE ----------------------------------
+   A DXF holds the exact curve of every line and no statement at all about which lines
+   enclose the body. The silhouette used to be recovered by drawing the strokes onto a
+   canvas and reading the pixels back — which works, and throws away the precision that was
+   the reason to accept a CAD file in the first place. The outline came back as a pixel
+   trace of an exact source.
+   The lines do enclose it though; they just do it as a few hundred separate strokes that
+   happen to share endpoints. So: weld endpoints that land on each other, and the strokes
+   become a graph whose faces are the regions the drawing encloses. The outermost face is
+   the silhouette, exactly as drawn, to the file's own coordinates.
+   Endpoints are welded with a tolerance because exporters round, and arcs flattened to
+   segments land a hair off where the line meeting them ends. The tolerance escalates only
+   until a plausible shape appears, so a clean file is never over-merged. */
+function dxfWeldNodes(strokes,tol){
+  const cell=Math.max(tol,1e-12), grid=new Map(), nodes=[];
+  const at=(x,y)=>{
+    const ix=Math.round(x/cell), iy=Math.round(y/cell);
+    for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++){
+      const bucket=grid.get((ix+dx)+"_"+(iy+dy)); if(!bucket)continue;
+      for(const id of bucket){ const p=nodes[id];
+        if((p[0]-x)*(p[0]-x)+(p[1]-y)*(p[1]-y)<=tol*tol)return id; }
+    }
+    const id=nodes.length; nodes.push([x,y]);
+    const k=ix+"_"+iy; if(!grid.has(k))grid.set(k,[]); grid.get(k).push(id);
+    return id;
+  };
+  const edges=[], rings=[];
+  for(const s of strokes){
+    if(!s||s.length<2)continue;
+    const a=at(s[0][0],s[0][1]), b=at(s[s.length-1][0],s[s.length-1][1]);
+    // a stroke that already closes on itself — a circle, or a closed polyline — is a ring
+    // in its own right and needs no stitching at all
+    if(a===b){ if(s.length>=4)rings.push(s.slice()); continue; }
+    edges.push({a,b,pts:s});
+  }
+  return {nodes,edges,rings};
+}
+function dxfFaces(nodes,edges){
+  const adj=nodes.map(()=>[]);
+  edges.forEach((e,i)=>{ adj[e.a].push(i); adj[e.b].push(i); });
+  /* A line that dangles cannot be part of any loop, and CAD drawings are full of them —
+     dimension leaders, centre marks, hatching. Shaving degree-one nodes back repeatedly
+     leaves only the part of the drawing that actually encloses something. */
+  const dead=new Set();
+  for(let pass=0;pass<64;pass++){
+    let cut=0;
+    for(let n=0;n<nodes.length;n++){
+      const live=adj[n].filter(i=>!dead.has(i));
+      if(live.length===1){ dead.add(live[0]); cut++; }
+    }
+    if(!cut)break;
+  }
+  // darts: each surviving edge walked in both directions, with the angle it leaves at
+  const darts=[];
+  const ang=(p,q)=>Math.atan2(q[1]-p[1],q[0]-p[0]);
+  edges.forEach((e,i)=>{
+    if(dead.has(i))return;
+    const P=e.pts;
+    darts.push({e:i,from:e.a,to:e.b,out:ang(P[0],P[1]),                     fwd:true});
+    darts.push({e:i,from:e.b,to:e.a,out:ang(P[P.length-1],P[P.length-2]),   fwd:false});
+  });
+  const outAt=nodes.map(()=>[]);
+  darts.forEach((d,i)=>outAt[d.from].push(i));
+  outAt.forEach(l=>l.sort((x,y)=>darts[x].out-darts[y].out));
+  const rev=new Map();
+  darts.forEach((d,i)=>rev.set(d.e+"_"+(d.fwd?1:0),i));
+  const twin=i=>rev.get(darts[i].e+"_"+(darts[i].fwd?0:1));
+  /* Walk a face by always taking the next edge clockwise from the one you came in on.
+     Every face of the graph comes out exactly once, the interior ones wound one way and
+     the single outer boundary the other — which is the shape the drawing encloses. */
+  const seen=new Set(), faces=[];
+  for(let d0=0;d0<darts.length;d0++){
+    if(seen.has(d0))continue;
+    const loop=[]; let d=d0, guard=0;
+    while(!seen.has(d) && guard++<darts.length*4){
+      seen.add(d); loop.push(d);
+      const back=twin(d), ring=outAt[darts[back].from];
+      const at=ring.indexOf(back);
+      d=ring[(at-1+ring.length)%ring.length];        // one step clockwise
+    }
+    if(loop.length<2)continue;
+    const pts=[];
+    for(const i of loop){ const D=darts[i], P=edges[D.e].pts;
+      const run=D.fwd?P:P.slice().reverse();
+      for(let k=0;k<run.length-1;k++)pts.push([run[k][0],run[k][1]]); }
+    if(pts.length>=3)faces.push(pts);
+  }
+  return faces;
+}
+const dxfLoopArea=p=>{let a=0;for(let i=0,j=p.length-1;i<p.length;j=i++)a+=p[j][0]*p[i][1]-p[i][0]*p[j][1];return Math.abs(a)/2;};
+function dxfSilhouette(strokes,extent){
+  const diag=Math.hypot(extent.wU,extent.hU)||1, boxA=extent.wU*extent.hU||1;
+  let best=null;
+  // clean file first; open the tolerance only while nothing plausible has been found
+  for(const f of [2e-5,1e-4,4e-4,1.5e-3,5e-3]){
+    const {nodes,edges,rings}=dxfWeldNodes(strokes,diag*f);
+    const cand=dxfFaces(nodes,edges).concat(rings.map(r=>r.map(p=>[p[0],p[1]])));
+    // ignore a drawing frame or border box: a real silhouette leaves margin in its own bounds
+    const ok=cand.filter(p=>{const a=dxfLoopArea(p); return a>boxA*0.04 && a<boxA*0.95;});
+    if(ok.length){
+      const win=ok.reduce((m,p)=>dxfLoopArea(p)>dxfLoopArea(m)?p:m);
+      best={loop:win, tol:diag*f, area:dxfLoopArea(win)/boxA};
+      break;
+    }
+  }
+  return best;
+}
 async function dxfToCanvas(file){
-  const {blocks,model}=dxfParse(await file.text());
+  const {blocks,model,header}=dxfParse(await file.text());
   const src=model.length?model:(blocks["*Model_Space"]||[]);
   let polys=[];
   for(const e of src)polys=polys.concat(dxfPolys(e,blocks));
@@ -4423,8 +4832,11 @@ async function dxfToCanvas(file){
   const wU=(x1-x0)||1, hU=(y1-y0)||1;
   /* 1000 across is what the image path already uses, and the outline closes reliably there:
      the recovered silhouette stops changing as the pen thickens, which it does not at half
-     this. DXF is unitless in general, so nothing is claimed about scale — set that with
-     Set scale the same as any drawing. */
+     this. The RASTER is 1000 wide; the MEASUREMENT is whatever the file says it is, and the
+     two are kept apart deliberately — the canvas is only how the silhouette gets found. */
+  const unit=dxfUnitMM(header);
+  const srcMM=unit?wU*unit.mm:null;                // the drawing's real width, per the file
+  const srcHMM=unit?hU*unit.mm:null;
   const RW=1000, RH=Math.max(1,Math.round(RW*hU/wU));
   const cnv=document.createElement("canvas"); cnv.width=RW; cnv.height=RH;
   const g=cnv.getContext("2d");
@@ -4443,24 +4855,72 @@ async function dxfToCanvas(file){
      badge from pixels when the file already contains its curve is throwing away the reason
      to use a CAD file at all. */
   const asPts=polys.map(q=>q.map(pt=>({x:PX(pt), y:PY(pt)})));
-  return {canvas:cnv, lines:polys.length, polys:asPts, area:RW*RH};
+  /* The silhouette comes from the COORDINATES, not from the pixels above. The canvas is
+     still drawn — it is the reference image you trace against, and the fallback if the
+     drawing genuinely encloses nothing — but the outline handed back here is the file's own
+     geometry, welded into a closed loop and mapped into the same pixel frame so it lines up
+     with the backdrop exactly. */
+  const sil=dxfSilhouette(polys,{wU,hU});
+  const outline=sil?sil.loop.map(pt=>({x:PX(pt), y:PY(pt)})):null;
+  /* drawnW, not RW. The strokes are inset 2px each side so a fat pen doesn't clip against
+     the canvas edge, so the drawing occupies RW-4 pixels, not RW. Scaling by the full canvas
+     width made every DXF come out 0.4% short — 2000mm measured as 1992 — which is small
+     enough to look like rounding and is exactly the kind of quiet disagreement with a stated
+     dimension that reading the file was meant to end. */
+  return {canvas:cnv, lines:polys.length, polys:asPts, area:RW*RH,
+          srcMM, srcHMM, unit, rasterW:RW, drawnW:RW-4, extent:{wU,hU},
+          outline, silFill:sil?sil.area:0};
 }
 async function loadDXFFile(file){
-  const {canvas:cnv, lines, polys:vec, area}=await dxfToCanvas(file);
+  const {canvas:cnv, lines, polys:vec, area, srcMM, unit, drawnW, extent,
+         outline, silFill}=await dxfToCanvas(file);
   const v=cv();
   setRefImage(v,cnv);
   v.svgPolys=null; v.svgPick=0;                // Auto-trace still reads pixels for the outline
   v.dxfPolys=vec; v.svgArea=area;              // …but the detail comes from the real curves
   v.A=[]; v.B=[];
+  /* THE FILE ALREADY KNOWS HOW BIG IT IS. Take it, and say where it came from — a scale
+     re-measured by eye off a drawing that states its own dimensions can only ever disagree
+     with it, and the disagreement would be silent. srcMM is the width the CAD file declares;
+     the raster is 1000px wide, so that is the exact px-per-mm with nothing estimated. */
+  if(srcMM>0){ v.scale=drawnW/srcMM; v.srcMM=srcMM; v.scaleSrc="file"; }
+  else { v.srcMM=null; v.scaleSrc=null; }
+  /* THE OUTLINE IS THE FILE'S OWN, WHEN THE FILE ENCLOSES ONE.
+     Auto-trace reads pixels, and reading pixels off a drawing that carries exact curves
+     throws away the whole reason to accept a CAD file. Stitching the strokes into a closed
+     loop gives the silhouette to the file's own coordinates instead. Auto-trace is still
+     the fallback for a drawing whose lines genuinely close nothing — an elevation with an
+     open bottom edge, say — because a recovered outline beats no outline. */
+  let exact=false;
+  if(outline&&outline.length>=8){ v.A=resamplePoly(outline,110); exact=true; }
   drawTrace(); updateViewDots();
-  /* Trigger the studio's own Auto-trace rather than a second copy of it. It lives on the
-     button, so press the button — one implementation, one behaviour, and pressing it again
-     steps to the next shape exactly as it does for any other drawing. */
-  const auto=document.getElementById("bAuto");
-  if(auto&&auto.onclick){ try{ auto.onclick(); }catch(err){ toast("Loaded, but auto-trace failed: "+err.message); } }
+  if(!exact){
+    /* Trigger the studio's own Auto-trace rather than a second copy of it. It lives on the
+       button, so press the button — one implementation, one behaviour, and pressing it again
+       steps to the next shape exactly as it does for any other drawing. */
+    const auto=document.getElementById("bAuto");
+    if(auto&&auto.onclick){ try{ auto.onclick(); }catch(err){ toast("Loaded, but auto-trace failed: "+err.message); } }
+  } else commitTrace();
   requestRebuild();
-  toast(`Read <b>${lines}</b> lines from the DXF. <b>Auto-trace</b> picks the outline — `
-      + `press it again to step to a different shape. Set the real size with <span class="mono">Set scale</span>.`);
+  const sizeNote = srcMM>0
+    ? ` The file states its own size — <b>${fmtMM(srcMM)}</b> across in ${unit.name} — so the `
+      + `scale is taken from it and <span class="mono">Set scale</span> isn't needed.`
+    : ` It spans <span class="mono">${extent.wU.toFixed(1)}</span> drawing units but declares no `
+      + `units ($INSUNITS is 0 or absent), so nothing can be assumed — set the real size with `
+      + `<span class="mono">Set scale</span>.`;
+  const howNote = exact
+    ? ` The outline is the file's own — <b>${v.A.length} exact points</b> stitched from the `
+      + `strokes themselves, filling ${(silFill*100).toFixed(0)}% of its own bounds. Nothing was traced from pixels.`
+    : ` Its lines don't close a shape, so <b>Auto-trace</b> read the outline from the drawing — `
+      + `press it again to step to a different shape.`;
+  toast(`Read <b>${lines}</b> lines from the DXF.` + howNote + sizeNote);
+}
+// a measurement a person can read: 4700mm is a car, 4.7m is a car, 4700.0000 is noise
+function fmtMM(mm){
+  if(!(mm>0))return "—";
+  if(mm>=1000)return (mm/1000).toFixed(mm>=10000?0:2).replace(/\.?0+$/,"")+" m";
+  if(mm>=10)return Math.round(mm)+" mm";
+  return mm.toFixed(2).replace(/\.?0+$/,"")+" mm";
 }
 async function loadSVGFile(file){
   const text=await file.text();
@@ -4501,10 +4961,13 @@ async function loadSVGFile(file){
     v.A=outline; v.B=[];
     setRefImage(v,cnv);
     v.svgPolys=polys; v.svgArea=RW*RH; v.svgPick=0;      // the file IS the trace — keep the exact paths
-    if(physMM)v.scale=RW/physMM;                    // real units in the file -> exact scale
+    // real units in the file -> exact scale, and remember it came from the file so a manual
+    // Set scale can say plainly that it is overriding a stated measurement
+    if(physMM){ v.scale=RW/physMM; v.srcMM=physMM; v.scaleSrc="file"; }
+    else { v.srcMM=null; v.scaleSrc=null; }
     document.getElementById("imgOpField").style.display="inline-flex";
     switchTab("trace"); fitTrace(); drawTrace(); commitTrace(); updateViewDots();
-    toast(`SVG → <b>${viewName(activeView)}</b> view · <span class="mono">${outline.length} exact points</span>${physMM?` · scale from the file (${physMM.toFixed(0)}mm)`:" · <span class='mono'>Set scale</span> once, or leave it standard"}`);
+    toast(`SVG → <b>${viewName(activeView)}</b> view · <span class="mono">${outline.length} exact points</span>${physMM?` · size from the file, <b>${fmtMM(physMM)}</b> across — no need to Set scale`:" · <span class='mono'>Set scale</span> once, or leave it standard"}`);
   }catch(err){toast("SVG import failed: "+err.message);}
   finally{document.body.removeChild(holder);}
 }
@@ -4625,6 +5088,7 @@ document.querySelectorAll("#featTool button").forEach(b=>b.onclick=()=>{
     toast(have?`${have} ${kind}(s) found in this drawing — click one to take it.`
               :"No shapes found in this view's drawing. Load a drawing, or use Shape/Box/Text.");
   } else featSvgAllSync();
+  featTidySync();
   drawTrace();
 });
 document.getElementById("featSvgAll").onclick=()=>{
@@ -4642,15 +5106,40 @@ document.getElementById("featSvgAll").onclick=()=>{
   const CAP=40;
   const tooMany=list.length>CAP;
   const take=tooMany?list.slice().sort((a,b)=>polyAreaPts(b)-polyAreaPts(a)).slice(0,CAP):list;
-  let added=0; take.forEach(p=>{ if(featAddSvgPoly(activeView,p,true))added++; });
+  /* Clear any copies already stacked up before adding. A model built with the old button
+     can hold six of everything, and nothing downstream can tell them apart — so tidy first,
+     then add only what's genuinely new. */
+  const dups=featDupIdx(activeView);
+  if(dups.length){ dups.slice().sort((a,b)=>b-a).forEach(i=>features.splice(i,1)); featDeselect(); }
+  let added=0, already=0;
+  take.forEach(p=>{ if(featAddSvgPoly(activeView,p,true))added++; else already++; });
   featRender(); requestRebuild(); drawTrace();
   const total=features.length;
   const heavy = total>120
     ? ` <b>${total}</b> on the model now — past about 120 the rebuild starts to drag.`
     : ` <b>${total}</b> on the model now.`;
+  const tidied = dups.length ? ` Cleared <b>${dups.length}</b> stacked copy(s) that were already there.` : "";
+  const kept = already ? ` <b>${already}</b> were already taken.` : "";
   toast((tooMany
     ? `Took the <b>${added}</b> biggest shapes of ${list.length} on <b>${viewName(activeView)}</b> — click any others you want individually.`
-    : `Took <b>${added}</b> shape(s) from <b>${viewName(activeView)}</b>.`) + heavy);
+    : `Took <b>${added}</b> shape(s) from <b>${viewName(activeView)}</b>.`) + kept + tidied + heavy);
+};
+/* Repair a model that already has stacks in it. Sits beside Take all and only appears when
+   there is something to clean, because a button offering to remove nothing is noise. */
+function featTidySync(){
+  const b=document.getElementById("featTidy"); if(!b)return 0;
+  const n=featDupIdx(null).length;
+  b.style.display=n?"":"none";
+  b.textContent=`Remove ${n} duplicate${n===1?"":"s"}`;
+  return n;
+}
+document.getElementById("featTidy").onclick=()=>{
+  const dups=featDupIdx(null);
+  if(!dups.length){toast("No duplicates on this model.");return;}
+  dups.slice().sort((a,b)=>b-a).forEach(i=>features.splice(i,1));
+  featDeselect(); featRender(); featTidySync(); requestRebuild(); drawTrace();
+  toast(`Removed <b>${dups.length}</b> stacked copy(s). <b>${features.length}</b> features left — `
+      + `the detail should read cleanly again.`);
 };
 document.getElementById("featSelFace").onclick=()=>{
   const idx=featOnView(features,activeView);
@@ -4669,11 +5158,30 @@ document.getElementById("featSelAll").onclick=()=>{
 document.getElementById("featSelNone").onclick=()=>featDeselect();
 document.getElementById("railBtn").onclick=railToggle;
 document.getElementById("railScrim").onclick=()=>railOpen(false);
-document.getElementById("fpClose").onclick=()=>featDeselect();
+/* THE × HAS TO WIN AGAINST THE DRAG BAR IT SITS IN.
+   It was an onclick, and #fpClose lives inside #fpDrag, which takes pointer capture on
+   pointerdown. Capture redirects the rest of the gesture to the BAR, so pointerup no longer
+   lands on the × — and a click is only synthesised when down and up share a target. On a
+   phone the button therefore did nothing at all, which is the same bug the crop-box × had.
+   Answer it on pointerdown, and stop the event before the bar ever sees it. */
+(function(){
+  const x=document.getElementById("fpClose");
+  const shut=e=>{ e.preventDefault(); e.stopPropagation(); featDeselect(); };
+  x.addEventListener("pointerdown",shut);
+  x.addEventListener("click",e=>{e.preventDefault();e.stopPropagation();});   // swallow the follow-up
+})();
+// Escape closes it too, for anyone on a keyboard.
+document.addEventListener("keydown",e=>{
+  if(e.key!=="Escape")return;
+  if(featDraft){ featCancelDraft(); return; }
+  if(featSel>=0||featMulti.size) featDeselect();
+});
 (function(){                                   // drag the inspector by its bar
   const p=document.getElementById("featPanel"), bar=document.getElementById("fpDrag");
   let d=null;
-  bar.addEventListener("pointerdown",e=>{d={x:e.clientX,y:e.clientY,l:p.offsetLeft,t:p.offsetTop};
+  bar.addEventListener("pointerdown",e=>{
+    if(e.target&&e.target.id==="fpClose")return;          // the × is not a handle
+    d={x:e.clientX,y:e.clientY,l:p.offsetLeft,t:p.offsetTop};
     try{bar.setPointerCapture(e.pointerId);}catch(_){}});
   bar.addEventListener("pointermove",e=>{ if(!d)return;
     p.style.left=Math.max(0,d.l+e.clientX-d.x)+"px"; p.style.top=Math.max(0,d.t+e.clientY-d.y)+"px";});
@@ -4727,7 +5235,7 @@ document.querySelectorAll("#viewSeg button").forEach(b=>b.onclick=()=>{
   /* This face's own numbers, not the last one's. A GROUP, though, survives the switch on
      purpose: "all features" is meant to span faces, the panel names the faces it holds, and
      its members light up as you arrive on each one. None clears it. */
-  featSvgAllSync(); featSelSync();
+  featSvgAllSync(); featSelSync(); featTidySync();
   updateEdgeLabels();fitTrace();setTraceStatus();
 });
 
@@ -5544,6 +6052,67 @@ function startCropDrag(ev,box,div,handle){
   window.addEventListener("pointermove",mv);window.addEventListener("pointerup",up);
 }
 
+/* =========================================================================
+   THE BLOCK, FILLING IN
+   The model is a rectangular block the size of the drawing with everything else carved
+   away, so the most honest progress indicator is that block: one face per view, each one
+   solid once that side is spoken for. Drawn exploded while it is incomplete — six separate
+   panels floating apart, which is the only way to show all six at once, since a solid box
+   only ever presents three — and closing into one block when the last side lands.
+   ========================================================================= */
+const IB_S=15, IB_K=0.866;                       // half-size, and cos(30°) for the iso axes
+// Viewed from front-top-LEFT, so the Left side — the drawing almost everyone starts with —
+// is one of the three you can see rather than one of the three hidden round the back.
+const ibProj=(x,y,z)=>[(x+y)*IB_K*IB_S, ((x-y)*0.5-z)*IB_S];
+const IB_FACES=[
+  {v:"top",    n:[0,0,1],  c:[[-1,-1,1],[1,-1,1],[1,1,1],[-1,1,1]]},
+  {v:"bottom", n:[0,0,-1], c:[[-1,-1,-1],[1,-1,-1],[1,1,-1],[-1,1,-1]]},
+  {v:"front",  n:[1,0,0],  c:[[1,-1,-1],[1,1,-1],[1,1,1],[1,-1,1]]},
+  {v:"rear",   n:[-1,0,0], c:[[-1,-1,-1],[-1,1,-1],[-1,1,1],[-1,-1,1]]},
+  {v:"side",   n:[0,-1,0], c:[[-1,-1,-1],[1,-1,-1],[1,-1,1],[-1,-1,1]]},
+  {v:"sideR",  n:[0,1,0],  c:[[-1,1,-1],[1,1,-1],[1,1,1],[-1,1,1]]},
+];
+/* Which sides the model actually has. A role given to a crop on ANY page counts — Send
+   collects across every page — and so does a view already carrying a drawing over in
+   Reference & Trace, because that is just as much "the model has this side". */
+function ibFilled(){
+  const set=new Set();
+  try{ (IMP.pages||[]).forEach(p=>(p.boxes||[]).forEach(b=>{
+    if(b.role&&b.role!=="ignore")set.add(b.role); })); }catch(_){}
+  try{ IB_FACES.forEach(f=>{ const v=V[f.v]; if(v&&(v.img||(v.A&&v.A.length>2)))set.add(f.v); }); }catch(_){}
+  return set;
+}
+function ibRender(){
+  const host=document.getElementById("impBox"), svg=document.getElementById("impBoxSvg");
+  if(!host||!svg)return;
+  const have=ibFilled(), n=IB_FACES.filter(f=>have.has(f.v)).length, done=n===6;
+  // the panels draw together as the block comes in, and sit flush once it is whole
+  const gap=done?0:0.30+0.30*(1-n/6);
+  // painter's order: the three facing away go down first, so the near three sit over them
+  const order=IB_FACES.slice().sort((a,b)=>
+    (a.n[0]-a.n[1]+a.n[2])-(b.n[0]-b.n[1]+b.n[2]));
+  svg.innerHTML=order.map(f=>{
+    const [ox,oy]=ibProj(f.n[0]*gap,f.n[1]*gap,f.n[2]*gap);
+    const pts=f.c.map(c=>{const [x,y]=ibProj(c[0],c[1],c[2]);return `${(x+ox).toFixed(2)},${(y+oy).toFixed(2)}`;}).join(" ");
+    const on=have.has(f.v);
+    const near=(f.n[0]-f.n[1]+f.n[2])>0;                 // shade the far panels back a little
+    // light blue, brighter on the faces turned toward you so it still reads as a solid
+    const fill=on?(near?"rgba(90,200,235,.62)":"rgba(90,200,235,.34)"):"rgba(113,131,154,.07)";
+    const stroke=on?"rgba(150,222,246,.95)":"rgba(113,131,154,.45)";
+    return `<polygon class="ib-face" points="${pts}" fill="${fill}" stroke="${stroke}"
+      stroke-width="1.2" stroke-linejoin="round"${on?"":' stroke-dasharray="3 2.5"'}>
+      <title>${viewName(f.v)}${on?"":" — not in the model yet"}</title></polygon>`;
+  }).join("");
+  host.classList.toggle("full",done);
+  const cnt=document.getElementById("ibCount"), miss=document.getElementById("ibMiss");
+  if(cnt)cnt.textContent=done?"all six sides":`${n} of 6 sides`;
+  if(miss){
+    const gone=IB_FACES.filter(f=>!have.has(f.v)).map(f=>viewName(f.v));
+    miss.textContent=done?"the block is closed"
+      :(gone.length>3?"give a crop its role":"still open: "+gone.join(", ").toLowerCase());
+  }
+}
+
 function updateImpStatus(){
   const s=document.getElementById("iStatus");if(!s)return;const parts=[];
   parts.push(IMP.unit==="px"?'<span class="tag">px units · 1px = 1u</span>'
@@ -5553,6 +6122,7 @@ function updateImpStatus(){
   if(feed)parts.push(`<b style="color:var(--accent)">${feed} feeding model</b>`);
   if(calTarget==="import")parts.push('<b style="color:var(--accent)">● click 2 points</b>');
   s.innerHTML=parts.join(" &nbsp; ");
+  ibRender();          // every path that changes a role already comes through here
 }
 
 /* ---- load sheet ---- */
@@ -5713,6 +6283,23 @@ function cropToViewTrace(bx){
 }
 document.getElementById("iBuild").onclick=()=>{
   if(!IMP.pages.length){toast("Load a sheet first.");return;}
+  /* NOTHING GOES TO THE TRACE SIDE UNTIL THIS SHEET HAS BEEN READ.
+     Send used to run whatever it found, which on a sheet nobody had detected yet was
+     nothing at all — it switched tabs, showed an empty canvas, and left the person to work
+     out that the step before had been skipped. A blank tracing screen is the worst possible
+     prompt: it asks for work while giving no clue what work. So say plainly which step is
+     missing and stay put. */
+  const roled=IMP.pages.reduce((n,p)=>n+(p.boxes||[]).filter(b=>
+    ["side","sideR","top","bottom","front","rear"].includes(b.role)).length,0);
+  if(!roled){
+    const anyBox=IMP.pages.some(p=>(p.boxes||[]).length);
+    toast(anyBox
+      ? "These boxes are all set to <b>ignore</b>. Give at least one a role — <b>Left</b>, "
+        + "<b>Top</b>, <b>Front</b> — from the dropdown on its bar, then Send."
+      : "Nothing has been read off this sheet yet. Press <b>Auto-detect views</b> first "
+        + "(or <b>＋ Add box</b> to mark one by hand), give each box a role, then Send.");
+    return;
+  }
   const savedPage=IMP.page, sent=[], usedPages=new Set(), turned=[];
   let noScale=false;
   for(let pi=0; pi<IMP.pages.length; pi++){
