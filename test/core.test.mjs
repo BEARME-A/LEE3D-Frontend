@@ -42,7 +42,23 @@ function grabConst(decl) {
   if (!m) throw new Error("const not found in index.html: " + decl);
   return m[0];
 }
-const PRELUDE = [grabConst("clamp"), grabConst("lerp"), grabConst("smoothstep"), "const DEFAULT_LEN=200;"].join("\n");
+/* featDupIdx and featPickAt read the app's module-level `features` list rather than taking
+   it as an argument, so the harness has to provide one — otherwise they throw ReferenceError
+   the moment they're called and the tests around them go dark without saying why. */
+// a bit of the app that may not exist yet, without bringing the run down with it
+function soft(fn){ try { return fn() || ""; } catch { return ""; } }
+const PRELUDE = [grabConst("clamp"), grabConst("lerp"), grabConst("smoothstep"),
+  "const DEFAULT_LEN=200;", "let features=[]; let activeView='front';",
+  /* the unit tables are plain data, not functions, so they come across whole. Without them
+     svgLengthMM and dxfUnitMM throw ReferenceError the moment they're called — which is how
+     the suite caught this being added, and why they belong here rather than being inlined. */
+  /* Soft, like NAMES below. A hard grab here takes the WHOLE suite down with a stack trace
+     if the constant isn't there, instead of failing the two tests that need it — which is
+     the difference between "these three tests are red" and "nothing ran, good luck". */
+  soft(() => grabConst("SVG_UNIT_MM")),
+  soft(() => script.match(/^const DXF_UNIT_MM=[\s\S]*?\n *21:[^\n]*$/m)[0]),
+  soft(() => script.match(/^const DXF_UNIT_NAME=[\s\S]*?16:"hm"[^\n]*$/m)[0]),
+  soft(() => grabConst("dxfLoopArea"))].join("\n");
 const NAMES = ["outlineEnvelope", "anchorPxPerMm", "makeRevolve", "pointInPoly",
   "makeVisualHull", "checkManifold", "polyArea", "resamplePoly", "svgPhysicalWidthMM",
   "libCanonical", "sampleProfile", "resampleSection", "morphSections", "makeBody", "autoOutline",
@@ -50,14 +66,23 @@ const NAMES = ["outlineEnvelope", "anchorPxPerMm", "makeRevolve", "pointInPoly",
   "rasterRegions", "otsuThreshold", "lumOf", "regionOutline", "dilateMask", "labelBlobs", "outlineBBox", "sdPoly",
   "wallSpec", "wallAt", "minWall",
   "connDiameter", "connWarn", "connPoly", "simplifyPoly",
+  // a file that states its own dimensions — DXF $INSUNITS, SVG absolute units
+  "svgLengthMM", "dxfUnitMM", "dxfParse", "fmtMM",
+  // stitching line art back into the shape it encloses
+  "dxfWeldNodes", "dxfFaces", "dxfSilhouette", "dxfPolys", "dxfBspline",
   "featOnView", "featNextName", "featGroupStats", "baseCutZ",
+  // taking a shape twice, and reaching the small one under the big one
+  "featSig", "featDupIdx", "featPickAt", "featBox",
   "applyHullStrokes", "applyStroke", "hullVertexNormals", "hullAdjacency", "bottomSkinTris", "innerOffsets", "embossHull", "viewSkinVerts", "dropStrayShells", "sampleMask", "distToPoly", "viewUV"];
 const found = [];
 const src = PRELUDE + NAMES.map(n => {
   try { const s = grab(n); found.push(n); return s; }
   catch { return "/* not in index.html yet: " + n + " */"; }
 }).join("\n");
-const API = new Function(src + "\nreturn {" + found.join(",") + "};")();
+const API = new Function(src
+  + "\nconst setFeatures=l=>{features.length=0;l.forEach(f=>features.push(f));return features;};"
+  + "\nconst setView=v=>{activeView=v;};"
+  + "\nreturn {" + found.join(",") + ",setFeatures,setView};")();
 const MISSING = NAMES.filter(n => !found.includes(n));
 
 // --- test plumbing ---
@@ -2330,6 +2355,422 @@ t("two sides: each flank matches the outline drawn for it, not an average of bot
   let h = -1e18; for (let i = 0; i < sym.positions.length; i += 3) if (sym.positions[i+2] > h) h = sym.positions[i+2];
   near(h, 40, 0.2, "a body with one side drawing is unchanged");
 });
+
+
+// =====================  TAKING A SHAPE TWICE  =====================
+// "Take all" had no memory of what it had already taken, so pressing it again added every
+// shape in the drawing a second time, exactly on top of itself. On a real model that turned
+// 60 shapes into 667, and it is the single cause of three separate complaints:
+//   * the detail smears — stacked stamps all want depth at once and the gradient limiter
+//     spreads the excess sideways. Measured on nested panels: the dent holds at its 2.77mm
+//     cap while the area that moves grows from 312 cells to 1,077, so crisp panel lines
+//     bleed into one soft mound.
+//   * deleting appears to do nothing — you removed one of six identical copies.
+//   * the small shape can't be picked — five copies of the big panel sit over it.
+t("a shape taken twice is one feature, not two", () => {
+  const panel  = [[0.15,0.30],[0.85,0.30],[0.85,0.70],[0.15,0.70]];
+  const grille = [[0.30,0.40],[0.70,0.40],[0.70,0.60],[0.30,0.60]];
+  const horse  = [[0.47,0.47],[0.53,0.47],[0.53,0.53],[0.47,0.53]];
+  const mk = (n,poly,view="front") => ({ kind:"poly", view, poly, depth:-2.5, soft:0.08, name:n });
+  const feats = [];
+  for (let press = 0; press < 6; press++)
+    [["panel",panel],["grille",grille],["horse",horse]].forEach(([n,p]) => feats.push(mk(n+press, p)));
+  ok(feats.length === 18, "six presses of a three-shape drawing");
+  // a signature has to be stable for the same shape and different for a different one
+  eq(API.featSig(feats[0]), API.featSig(feats[3]), "the same shape signs the same both times");
+  ok(API.featSig(feats[0]) !== API.featSig(feats[1]), "two different shapes sign differently");
+  ok(API.featSig(mk("x", panel, "side")) !== API.featSig(mk("x", panel, "front")),
+     "the same outline on two different faces is two different features");
+  const live = API.setFeatures(feats);
+  const dup = API.featDupIdx(null);
+  eq(dup.length, 15, "fifteen of the eighteen are copies of one already there");
+  dup.slice().sort((a,b) => b-a).forEach(i => live.splice(i, 1));
+  eq(live.length, 3, "one of each shape survives");
+  eq(API.featDupIdx(null).length, 0, "and tidying again finds nothing left to do");
+  // taking a genuinely new shape is still adding, not deduping
+  live.push(mk("scoop", [[0.05,0.05],[0.11,0.05],[0.11,0.11],[0.05,0.11]]));
+  eq(API.featDupIdx(null).length, 0, "a shape that isn't there yet is not a duplicate");
+});
+
+t("the small shape under the big one can still be reached", () => {
+  // A badge sits inside a grille sits inside a bumper panel. The gizmo boxes are rectangles,
+  // so the panel's box covers the badge completely — there was no way to tap it, and past a
+  // few hundred features the boxes aren't drawn at all so there was nothing to tap either.
+  const panel  = [[0.15,0.30],[0.85,0.30],[0.85,0.70],[0.15,0.70]];
+  const grille = [[0.30,0.40],[0.70,0.40],[0.70,0.60],[0.30,0.60]];
+  const horse  = [[0.47,0.47],[0.53,0.47],[0.53,0.53],[0.47,0.53]];
+  const feats = [["panel",panel],["grille",grille],["horse",horse]]
+    .map(([n,poly]) => ({ kind:"poly", view:"front", poly, depth:-2.5, soft:0.08, name:n }));
+  API.setFeatures(feats); API.setView("front");
+  const hit = API.featPickAt("front", 0.5, 0.5);       // dead centre: all three overlap
+  eq(hit.length, 3, "every shape under the finger is a candidate");
+  eq(feats[hit[0]].name, "horse", "the smallest wins — you pointed at the badge, not the panel");
+  eq(feats[hit[1]].name, "grille", "tapping again steps out one layer");
+  eq(feats[hit[2]].name, "panel", "and again to the outermost");
+  const mid = API.featPickAt("front", 0.35, 0.50);     // inside the grille, outside the badge
+  eq(mid.length, 2, "only the shapes actually containing the point");
+  eq(feats[mid[0]].name, "grille", "smallest of those two");
+  eq(API.featPickAt("front", 0.02, 0.02).length, 0, "bare bodywork picks nothing");
+  // a shape on another face must never be offered
+  API.setFeatures([...feats, { kind:"poly", view:"side", poly:panel, depth:-2, soft:0.08, name:"flank" }]);
+  eq(API.featPickAt("front", 0.5, 0.5).length, 3, "a shape on another view is not a candidate");
+});
+
+// =====================  RAISED DETAIL  =====================
+t("a badge stands proud of the panel, and the frame has no say in it", () => {
+  // Pressing IN is limited by how much frame sits behind the surface — go further and you
+  // are through the panel. Raising ADDS material outside the skin, where there is nothing to
+  // breach, but both were sharing one clamp: a badge asked for 6mm came out at 2.77 on a
+  // 4.1mm frame, and thickening the frame to get a taller badge made sense to nobody.
+  const BOX = [[0,0],[1,0],[1,1],[0,1]];
+  const badge = [[0.35,0.35],[0.65,0.35],[0.65,0.65],[0.35,0.65]];
+  const build = (depth, wall) => {
+    const p = { length:200, topProfile:[[0,80],[1,80]], widthProfile:[[0,50],[1,50]],
+      sidePoly:BOX, topPoly:BOX, frontPoly:BOX, hullCrisp:1, wallThickness:wall,
+      hullHollow:true, closedBottom:true, hullRes:70, mode:"projection",
+      features: depth === null ? null
+        : [{ kind:"poly", view:"front", poly:badge, depth, soft:0.03, name:"horse" }] };
+    const g = API.makeVisualHull(p), b = API.makeVisualHull({ ...p, features:null });
+    let m = -1e9, n = -1e9;
+    for (let i = 0; i < g.positions.length; i += 3) if (g.positions[i] > m) m = g.positions[i];
+    for (let i = 0; i < b.positions.length; i += 3) if (b.positions[i] > n) n = b.positions[i];
+    return { proud: m - n, g };
+  };
+  const thick = build(2, 4.1), thin = build(2, 1.8);
+  near(thick.proud, 2, 0.25, "a 2mm raise stands 2mm proud");
+  near(thin.proud, thick.proud, 0.05,
+       "the frame thickness makes no difference to a raise — it used to clamp it");
+  // and it must still close: adding material outside the skin can't be allowed to tear it
+  for (const [label, d] of [["+2mm", 2], ["+6mm", 6], ["+12mm", 12]])
+    watertight(build(d, 4.1).g, `raised ${label}`);
+  // pressing in is still held to the frame, which is the whole point of the distinction
+  ok(build(-2.5, 4.1).proud < 0.15, "pressing in doesn't push anything outward");
+});
+
+t("a raise too steep for its own width is limited, not folded", () => {
+  // The gradient limiter still governs how sharply the surface may bend. A narrow shape
+  // therefore cannot reach an arbitrary height — it would need near-vertical sides, which is
+  // exactly the fold the limiter exists to prevent. Measured: on a 100mm face a 40mm badge
+  // reaches the full 6mm, 25mm reaches 4.6, 15mm reaches 3.4, 8mm reaches 1.7.
+  const BOX = [[0,0],[1,0],[1,1],[0,1]];
+  const sq = s => [[0.5-s/2,0.5-s/2],[0.5+s/2,0.5-s/2],[0.5+s/2,0.5+s/2],[0.5-s/2,0.5+s/2]];
+  const proud = span => {
+    const p = { length:200, topProfile:[[0,80],[1,80]], widthProfile:[[0,50],[1,50]],
+      sidePoly:BOX, topPoly:BOX, frontPoly:BOX, hullCrisp:1, wallThickness:4.1,
+      hullHollow:true, closedBottom:true, hullRes:70, mode:"projection",
+      features:[{ kind:"poly", view:"front", poly:sq(span), depth:6, soft:0.03, name:"b" }] };
+    const g = API.makeVisualHull(p), b = API.makeVisualHull({ ...p, features:null });
+    let m = -1e9, n = -1e9;
+    for (let i = 0; i < g.positions.length; i += 3) if (g.positions[i] > m) m = g.positions[i];
+    for (let i = 0; i < b.positions.length; i += 3) if (b.positions[i] > n) n = b.positions[i];
+    watertight(g, `raised badge ${(span*100).toFixed(0)}mm wide`);
+    return m - n;
+  };
+  const wide = proud(0.40), narrow = proud(0.08);
+  near(wide, 6, 0.4, "a wide badge reaches the height asked for");
+  ok(narrow < wide - 1,
+     `a narrow one is limited by its own width (${narrow.toFixed(2)} vs ${wide.toFixed(2)})`);
+  ok(narrow > 0.5, "but it is still raised, not flattened away");
+});
+
+
+t("a shape drawn inside another shape shades it, it doesn't dig a pit", () => {
+  // A front view is nested all the way down: a badge inside a grille inside a bumper panel.
+  // Each feature used to be stamped onto the RESULT of the one before, so a point under three
+  // outlines was pressed three times. Measured with each asking -2.0mm: the badge centre came
+  // out at 2.77mm — which is not 2.0, it is the total-travel ceiling, the only thing standing
+  // between that drawing and a 6mm crater. A drawing is a drawing, not a stack of cuts.
+  const BOX    = [[0,0],[1,0],[1,1],[0,1]];
+  const panel  = [[0.15,0.25],[0.85,0.25],[0.85,0.75],[0.15,0.75]];
+  const grille = [[0.30,0.38],[0.70,0.38],[0.70,0.62],[0.30,0.62]];
+  const badge  = [[0.44,0.44],[0.56,0.44],[0.56,0.56],[0.44,0.56]];
+  const mk = poly => ({ kind:"poly", view:"front", poly, depth:-2, soft:0.03, name:"f" });
+  const depthAt = (feats, u, v) => {
+    const p = { length:200, topProfile:[[0,80],[1,80]], widthProfile:[[0,50],[1,50]],
+      sidePoly:BOX, topPoly:BOX, frontPoly:BOX, hullCrisp:1, wallThickness:4.1,
+      hullHollow:true, closedBottom:true, hullRes:90, mode:"projection", features:feats };
+    const g = API.makeVisualHull(p), b = API.makeVisualHull({ ...p, features:null });
+    watertight(g, "nested detail");
+    const ty = (u-0.5)*100, tz = v*80;
+    const peak = pos => { let best = -1e9;
+      for (let i = 0; i < pos.length; i += 3)
+        if (Math.abs(pos[i+1]-ty) < 3 && Math.abs(pos[i+2]-tz) < 3 && pos[i] > best) best = pos[i];
+      return best; };
+    return peak(b.positions) - peak(g.positions);
+  };
+  const alone = depthAt([mk(panel)], 0.50, 0.5);
+  near(alone, 2, 0.2, "one shape asking for 2mm gives 2mm");
+  near(depthAt([mk(panel), mk(grille)], 0.50, 0.5), alone, 0.2,
+       "a second outline over the same point doesn't deepen it");
+  near(depthAt([mk(panel), mk(grille), mk(badge)], 0.50, 0.5), alone, 0.2,
+       "nor does a third — the deepest single request wins, they never sum");
+  // and the shapes stay individually readable, not flattened into one plateau. Both depths
+  // have to sit inside what the frame allows inward (half the wall, 2.05mm here) or the
+  // clamp — not the shading — is what you end up measuring.
+  const shallow = depthAt([{ ...mk(panel), depth:-0.8 }], 0.50, 0.5);
+  const stepped = depthAt([{ ...mk(panel), depth:-0.8 }, { ...mk(grille), depth:-2.0 }], 0.50, 0.5);
+  near(shallow, 0.8, 0.2, "a shallow panel on its own");
+  ok(stepped > shallow + 0.6,
+     `a deeper inner shape still reads deeper than the panel around it (${stepped.toFixed(2)} vs ${shallow.toFixed(2)})`);
+  // ...and the panel around it is untouched by its neighbour going deeper
+  near(depthAt([{ ...mk(panel), depth:-0.8 }, { ...mk(grille), depth:-2.0 }], 0.20, 0.5),
+       depthAt([{ ...mk(panel), depth:-0.8 }], 0.20, 0.5), 0.2,
+       "the outer panel keeps its own depth");
+});
+
+
+// =====================  STOCK, AND THE PARTS YOU DON'T CUT  =====================
+t("a shape left at zero depth is material you keep, not a feature that does nothing", () => {
+  // The model is a block of stock the size of the drawing, with everything else cut away.
+  // Under that reading a drawing gives three kinds of shape, not two: carve it, leave it, or
+  // (the odd one out) push it outward. "Leave it" is how a badge pops: cut the grille down
+  // and the pony is what remains. Nothing is added and the part never grows past the box it
+  // was measured in — which matters, because it has to fit the chassis it was measured for.
+  const BOX    = [[0,0],[1,0],[1,1],[0,1]];
+  const grille = [[0.20,0.30],[0.80,0.30],[0.80,0.70],[0.20,0.70]];
+  const pony   = [[0.38,0.38],[0.62,0.38],[0.62,0.62],[0.38,0.62]];
+  const mk = (poly, d, n) => ({ kind:"poly", view:"front", poly, depth:d, soft:0.03, name:n });
+  const run = feats => {
+    const p = { length:200, topProfile:[[0,80],[1,80]], widthProfile:[[0,50],[1,50]],
+      sidePoly:BOX, topPoly:BOX, frontPoly:BOX, hullCrisp:1, wallThickness:4.1,
+      hullHollow:true, closedBottom:true, hullRes:90, mode:"projection", features:feats };
+    const g = API.makeVisualHull(p);
+    watertight(g, "carved front");
+    const at = (u,v) => { const ty=(u-0.5)*100, tz=v*80; let best=-1e9;
+      for (let i = 0; i < g.positions.length; i += 3)
+        if (Math.abs(g.positions[i+1]-ty) < 2 && Math.abs(g.positions[i+2]-tz) < 2 && g.positions[i] > best)
+          best = g.positions[i];
+      return best; };
+    let lo = 1e18, hi = -1e18;
+    for (let i = 0; i < g.positions.length; i += 3) { if (g.positions[i] < lo) lo = g.positions[i]; if (g.positions[i] > hi) hi = g.positions[i]; }
+    return { face: at(0.30,0.5), pony: at(0.50,0.5), length: hi-lo };
+  };
+  const plain = run(null);
+  const cut   = run([mk(grille,-2,"grille")]);
+  const left  = run([mk(grille,-2,"grille"), mk(pony,0,"pony")]);
+  near(plain.length, 200, 0.5, "the block is the size it was traced at");
+  near(cut.face, plain.face - 2, 0.3, "the grille is cut 2mm into it");
+  near(cut.pony, cut.face, 0.3, "with no shape left standing, the middle goes with it");
+  ok(left.pony > left.face + 1.5,
+     `the pony is left standing proud of the grille around it (${(left.pony-left.face).toFixed(2)}mm)`);
+  near(left.pony, plain.face, 0.3, "and it is still at the original face — nothing was added to it");
+  near(left.length, 200, 0.5,
+       "the part is still exactly the size it was traced at; leaving material never grows it");
+});
+
+t("pushing a shape outward is what actually grows the part past its own box", () => {
+  // Kept working, because someone may want it — but it is the one operation that breaks the
+  // block-of-stock reading, and it must be measurable so the panel can warn about it.
+  const BOX = [[0,0],[1,0],[1,1],[0,1]];
+  const badge = [[0.42,0.42],[0.58,0.42],[0.58,0.58],[0.42,0.58]];
+  const len = depth => {
+    const p = { length:200, topProfile:[[0,80],[1,80]], widthProfile:[[0,50],[1,50]],
+      sidePoly:BOX, topPoly:BOX, frontPoly:BOX, hullCrisp:1, wallThickness:4.1,
+      hullHollow:true, closedBottom:true, hullRes:80, mode:"projection",
+      features: depth === null ? null : [{ kind:"poly", view:"front", poly:badge, depth, soft:0.03, name:"b" }] };
+    const g = API.makeVisualHull(p);
+    let lo = 1e18, hi = -1e18;
+    for (let i = 0; i < g.positions.length; i += 3) { if (g.positions[i] < lo) lo = g.positions[i]; if (g.positions[i] > hi) hi = g.positions[i]; }
+    return hi - lo;
+  };
+  near(len(null), 200, 0.5, "traced at 200mm");
+  near(len(-3), 200, 0.5, "carving never changes the outside size");
+  ok(len(3) > 201, `pushing outward does (${len(3).toFixed(2)}mm) — the panel says so now`);
+});
+
+
+// =====================  THE BLOCK, FILLING IN  =====================
+t("the import block draws six real faces that never land on top of each other", () => {
+  // Six panels in an isometric projection is all sign conventions and nothing else. Get one
+  // normal backwards and two faces explode to the same spot, or a face collapses to a line —
+  // and it still renders, just as something that isn't a box. Worth pinning, because it is
+  // the one place in the app where a silent wrong answer looks like a design choice.
+  const faces = script.match(/const IB_FACES=\[[\s\S]*?\n\];/)[0];
+  const body = [script.match(/^const IB_S=.*$/m)[0],
+                script.match(/^const ibProj=.*$/m)[0], faces].join("\n");
+  const { ibProj, IB_FACES } = new Function(body + "\nreturn {ibProj,IB_FACES};")();
+  eq(IB_FACES.length, 6, "one panel per view");
+  eq(new Set(IB_FACES.map(f => f.v)).size, 6, "and they are six different views");
+  // every face is a proper rhombus of the same area — a collapsed one means a bad normal
+  const areas = IB_FACES.map(f => {
+    const P = f.c.map(c => ibProj(c[0], c[1], c[2]));
+    let A = 0;
+    for (let i = 0; i < 4; i++) { const [x1,y1] = P[i], [x2,y2] = P[(i+1)%4]; A += x1*y2 - x2*y1; }
+    return Math.abs(A) / 2;
+  });
+  areas.forEach((a, i) => ok(a > 50, `${IB_FACES[i].v} is a real quad, not a sliver (${a.toFixed(0)})`));
+  areas.forEach(a => near(a, areas[0], 0.01, "every face of a cube projects to the same area"));
+  // three visible, three hidden — a solid box only ever shows you half its faces
+  const depth = f => f.n[0] - f.n[1] + f.n[2];
+  eq(IB_FACES.filter(f => depth(f) > 0).length, 3, "three faces turned toward you");
+  eq(IB_FACES.filter(f => depth(f) < 0).length, 3, "three turned away");
+  // the left side is one you can SEE — it's the drawing nearly every model starts from
+  ok(IB_FACES.filter(f => depth(f) > 0).map(f => f.v).includes("side"),
+     "the left side faces the viewer");
+  // exploded, no two panels may drift to the same place
+  const spots = new Set(IB_FACES.map(f => ibProj(f.n[0]*0.5, f.n[1]*0.5, f.n[2]*0.5)
+    .map(v => v.toFixed(2)).join(",")));
+  eq(spots.size, 6, "each panel separates in its own direction");
+  // and the whole thing has to stay inside the viewBox it's drawn in (-46..46, -48..48)
+  let mnx = 1e9, mxx = -1e9, mny = 1e9, mxy = -1e9;
+  for (const f of IB_FACES) {
+    const [ox, oy] = ibProj(f.n[0]*0.6, f.n[1]*0.6, f.n[2]*0.6);
+    for (const c of f.c) { const [x, y] = ibProj(c[0], c[1], c[2]);
+      mnx = Math.min(mnx, x+ox); mxx = Math.max(mxx, x+ox);
+      mny = Math.min(mny, y+oy); mxy = Math.max(mxy, y+oy); }
+  }
+  ok(mnx >= -46 && mxx <= 46 && mny >= -48 && mxy <= 48,
+     `fits its viewBox even fully exploded (${mnx.toFixed(0)}..${mxx.toFixed(0)}, ${mny.toFixed(0)}..${mxy.toFixed(0)})`);
+});
+
+
+// =====================  A FILE THAT STATES ITS OWN DIMENSIONS  =====================
+t("a DXF's declared units are read, not re-measured by eye", () => {
+  // Lee's drawings carry real coordinates. The reader used to skip the HEADER section
+  // outright — the old comment said "DXF is unitless in general", which isn't true —  so a
+  // file that states it is 4,700mm across was rasterised to 1000px and the person was sent
+  // to Set scale to re-measure a number the file already stated exactly. Anything they typed
+  // could only contradict it, and nothing would have said so.
+  const dxf = insunits => `0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1021\n`
+    + (insunits === null ? "" : `9\n$INSUNITS\n70\n${insunits}\n`)
+    + `9\n$EXTMIN\n10\n0.0\n20\n0.0\n30\n0.0\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n`
+    + `0\nLINE\n10\n0.0\n20\n0.0\n11\n4700.0\n21\n1400.0\n0\nENDSEC\n0\nEOF`;
+  const span = 4700;                                    // drawing units across
+  const mmFor = code => { const u = API.dxfUnitMM(API.dxfParse(dxf(code)).header); return u ? span*u.mm : null; };
+  near(mmFor(4), 4700, 0.5, "millimetres");
+  near(mmFor(5), 47000, 5, "centimetres");
+  near(mmFor(6), 4700000, 500, "metres");
+  near(mmFor(1), 4700*25.4, 5, "inches");
+  near(mmFor(2), 4700*304.8, 50, "feet");
+  // and when the file genuinely says nothing, it must NOT guess — being wrong by 25.4x here
+  // is worse than asking, and $MEASUREMENT only picks a hatch-pattern file, not the units
+  eq(mmFor(0), null, "$INSUNITS 0 declares no units, so nothing is claimed");
+  eq(mmFor(null), null, "nor does an absent $INSUNITS");
+  // reading the header must not disturb the geometry it sits in front of
+  eq(API.dxfParse(dxf(4)).model.length, 1, "entities still parse with a header present");
+  ok(API.dxfParse(dxf(4)).header["$ACADVER"] === "AC1021", "other header vars come through too");
+});
+
+t("every absolute unit an SVG can state is understood", () => {
+  // It used to accept mm, cm and in only — and the units it was missing are the ones real
+  // exporters write. Illustrator and older Inkscape default to pt; a bare number beside a
+  // viewBox is CSS px, which is 1/96 inch BY SPEC, not an unknown. All of these are 120mm.
+  for (const w of ["120mm", "12cm", "1.2e2mm"])
+    near(API.svgLengthMM(w), 120, 0.05, `width="${w}"`);
+  near(API.svgLengthMM("4.7244in"), 120, 0.05, 'width="4.7244in"');
+  near(API.svgLengthMM("340.16pt"), 120, 0.1, 'width="340pt" — Illustrator\'s default');
+  near(API.svgLengthMM("28.346pc"), 120, 0.1, 'width="28pc"');
+  // relative and meaningless values must stay unknown rather than becoming a wrong number
+  for (const w of ["100%", "3em", "2ex", "0mm", "-5mm", "", "auto"])
+    eq(API.svgLengthMM(w), null, `width="${w}" is not a physical size`);
+  // px and a bare number are a DEFAULT, not a statement. The spec would let us call them
+  // 1/96 inch; almost nobody writing them means that, so turning them into millimetres
+  // would invent a measurement — the same mistake as guessing DXF units from $MEASUREMENT.
+  for (const w of ["453.54", "453.54px", "1000"])
+    eq(API.svgLengthMM(w), null, `width="${w}" states units, not a size`);
+});
+
+
+// =====================  THE OUTLINE IS THE FILE'S OWN  =====================
+// A DXF holds the exact curve of every line and no statement about which lines enclose the
+// body, so the silhouette used to be recovered by drawing the strokes onto a canvas and
+// reading the pixels back. That works, and it throws away the precision that was the reason
+// to accept a CAD file at all — Lee's drawings carry real geometry and got a pixel trace of
+// it. The lines DO enclose the shape; they just do it as hundreds of separate strokes that
+// share endpoints. Weld the endpoints and the strokes become a graph whose outermost face
+// is the silhouette, to the file's own coordinates.
+{
+  const TRUE = [[0,0],[400,0],[600,180],[1200,260],[1680,260],[1860,100],[2000,80],[2000,0]];
+  const area = p => { let a = 0;
+    for (let i = 0, j = p.length-1; i < p.length; j = i++) a += p[j][0]*p[i][1] - p[i][0]*p[j][1];
+    return Math.abs(a)/2; };
+  // chop the outline into separate strokes and nudge the endpoints, the way an exporter
+  // rounds and a flattened arc lands a hair off the line meeting it
+  const shatter = (loop, gap, seed) => {
+    let s = seed; const rnd = () => ((s = (s*1103515245 + 12345) & 0x7fffffff)/0x7fffffff - 0.5)*2;
+    const out = [], ring = loop.concat([loop[0]]);
+    for (let i = 0; i < ring.length-1; i++) {
+      const a = ring[i], b = ring[i+1], m = [(a[0]+b[0])/2, (a[1]+b[1])/2];
+      out.push([[a[0]+rnd()*gap, a[1]+rnd()*gap], m]);
+      out.push([[m[0]+rnd()*gap, m[1]+rnd()*gap], b]);
+    }
+    return out;
+  };
+  // what every real drawing also carries: panel lines, a dimension leader, a stray stub
+  const JUNK = [[[600,90],[1600,90]], [[700,40],[700,200]],
+                [[1000,400],[1000,460]], [[950,460],[1050,460]],
+                [[100,-140],[1900,-140]], [[1500,150],[1500,150.001]]];
+  const bounds = { wU:2000, hU:260 };
+
+  t("dxf: the silhouette is stitched from the strokes, not read off pixels", () => {
+    for (const gap of [0, 0.01, 0.5, 2]) {
+      const r = API.dxfSilhouette(shatter(TRUE, gap, 7).concat(JUNK), bounds);
+      ok(r, `a ${gap} unit endpoint gap still closes`);
+      near(area(r.loop), area(TRUE), area(TRUE)*0.01,
+           `and encloses the drawn shape (gap ${gap})`);
+    }
+  });
+
+  t("dxf: every corner the file drew survives, to the file's own numbers", () => {
+    // the point of all this. A pixel trace rounds corners to whatever the raster could hold;
+    // stitching keeps the coordinates that were in the file.
+    const r = API.dxfSilhouette(shatter(TRUE, 0.01, 7).concat(JUNK), bounds);
+    let worst = 0;
+    for (const c of TRUE) {
+      let d = 1e18;
+      for (const p of r.loop) d = Math.min(d, Math.hypot(p[0]-c[0], p[1]-c[1]));
+      worst = Math.max(worst, d);
+    }
+    ok(worst < 0.05, `worst corner miss ${worst.toFixed(6)} drawing units`);
+  });
+
+  t("dxf: it won't invent a shape, and won't fall for a border frame", () => {
+    // nothing enclosed must stay nothing enclosed — auto-trace is the fallback, and a wrong
+    // outline is worse than no outline
+    eq(API.dxfSilhouette([[[0,0],[10,0]], [[20,0],[30,0]]], { wU:30, hU:1 }), null,
+       "open strokes enclose nothing");
+    eq(API.dxfSilhouette([], { wU:10, hU:10 }), null, "nor does an empty drawing");
+    // a drawing frame is bigger than the part and must not be mistaken for it
+    const framed = shatter(TRUE, 0.01, 7).concat(JUNK,
+      [[[-200,-300],[2200,-300]], [[2200,-300],[2200,500]],
+       [[2200,500],[-200,500]], [[-200,500],[-200,-300]]]);
+    const r = API.dxfSilhouette(framed, { wU:2400, hU:800 });
+    ok(r, "still finds something");
+    near(area(r.loop), area(TRUE), area(TRUE)*0.01, "and it is the part, not the frame");
+  });
+
+  t("dxf: a drawing that states its size measures that size, with nobody clicking", () => {
+    // the whole chain: header units -> stitched outline -> raster frame -> measured length.
+    // The scale uses the DRAWN extent, not the canvas width: strokes are inset 2px a side so
+    // a fat pen doesn't clip, so scaling by the full 1000 made every DXF 0.4% short — 2000mm
+    // measured as 1992, small enough to pass for rounding and exactly the quiet disagreement
+    // with a stated dimension that reading the file was supposed to end.
+    let dxf = "0\nSECTION\n2\nHEADER\n9\n$INSUNITS\n70\n4\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n";
+    const ring = TRUE.concat([TRUE[0]]);
+    for (let i = 0; i < ring.length-1; i++)
+      dxf += `0\nLINE\n10\n${ring[i][0]}\n20\n${ring[i][1]}\n11\n${ring[i+1][0]}\n21\n${ring[i+1][1]}\n`;
+    dxf += "0\nLINE\n10\n600\n20\n90\n11\n1600\n21\n90\n0\nENDSEC\n0\nEOF";
+    const { blocks, model, header } = API.dxfParse(dxf);
+    let polys = [];
+    for (const e of model) polys = polys.concat(API.dxfPolys(e, blocks));
+    polys = polys.filter(q => q.length > 1);
+    const unit = API.dxfUnitMM(header);
+    ok(unit && unit.mm === 1, "the header says millimetres");
+    let x0 = 1e18, x1 = -1e18, y0 = 1e18, y1 = -1e18;
+    for (const q of polys) for (const p of q) {
+      x0 = Math.min(x0,p[0]); x1 = Math.max(x1,p[0]); y0 = Math.min(y0,p[1]); y1 = Math.max(y1,p[1]); }
+    const wU = x1-x0, hU = y1-y0;
+    const sil = API.dxfSilhouette(polys, { wU, hU });
+    ok(sil, "the outline closed");
+    const RW = 1000, RH = Math.round(RW*hU/wU);
+    const PX = q => (q[0]-x0)/wU*(RW-4) + 2, PY = q => RH-2 - (q[1]-y0)/hU*(RH-4);
+    const outline = sil.loop.map(p => ({ x:PX(p), y:PY(p) }));
+    const srcMM = wU*unit.mm, scale = (RW-4)/srcMM;
+    const measured = API.outlineEnvelope(outline).span/scale;
+    near(measured, 2000, 0.5,
+         `the file says 2000mm and the model measures ${measured.toFixed(2)}mm`);
+  });
+}
 
 // --- report ---
 console.log("\nLEE3D core suite — functions read live from index.html\n");
