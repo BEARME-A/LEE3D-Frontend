@@ -2614,7 +2614,22 @@ function makeVisualHull(p){
         }
       }
     }
-    const inner=innerOffsets(plainSkin,outerIdx,wall,vc);   // clean inside, no stamped detail
+    /* OFFSET AGAINST THE CLOSED SHELL, NOT THE TRIMMED ONE.
+       innerOffsets pushes each vertex inward along the average normal of the triangles that
+       touch it. outerIdx has had the whole underside removed, so every vertex that lived only
+       on those removed triangles — measured here, 3,605 of them, the full base and the arch
+       ceilings — is now touched by NO triangle. Its normal comes out zero, so it isn't pushed
+       anywhere: inner[k] = positions[k] - 0, and it stays sitting on the OUTER surface. Those
+       stranded vertices then get welded into the inner shell and drag its bounding box out to
+       meet the outer one. That is the whole bug: at 12mm the inner shell measured 129mm wide
+       and its floor at -2.9mm, both LARGER than the fixed 115mm / +5.6mm outer skin, because
+       thousands of its vertices never actually moved inward.
+       The offset direction is a property of the geometry, not of which faces we chose to keep,
+       so compute it from the complete closed mesh (`indices`). The TRIM still applies to what
+       gets drawn — outerIdx decides which inner triangles are emitted below — but every vertex
+       now has a real inward normal and a real offset, so the inner shell sits wholly inside
+       the outer one at every wall thickness and the outside never moves. */
+    const inner=innerOffsets(plainSkin,indices,wall,vc);   // clean inside, offset off the closed shell
     /* THE RIM IS THE ONE PLACE THE WALL IS ON SHOW.
        Everywhere else the inside is hidden, so innerOffsets is free to relax it smooth and
        only guarantees a MINIMUM thickness. Around the opening that freedom is visible: the
@@ -2651,10 +2666,49 @@ function makeVisualHull(p){
            vertices back out to full thickness would undo exactly that protection, so the pin
            caps an over-wide band and otherwise leaves the safe distance alone. */
         const want=Math.min(1,wall/L), s=1+(want-1)*frac;
-        inner[v*3]=ox+dx*s; inner[v*3+1]=oy+dy*s; inner[v*3+2]=oz+dz*s;
+        /* And s may only ever be <= 1. want<1 means pull in, which is fine; but on a
+           one-sided boundary normal the offset direction can tip outward, and then even
+           s=1 places the inner vertex beyond the outer skin — a single such vertex was
+           enough to widen the whole shell at 12mm. Clamp so the lip can never sit outside
+           the surface it hangs from. */
+        const sc=Math.min(1,s);
+        inner[v*3]=ox+dx*sc; inner[v*3+1]=oy+dy*sc; inner[v*3+2]=oz+dz*sc;
       };
       for(const v of edge) setGap(v,1);              // the lip itself: exact
       for(const v of ring) setGap(v,0.5);            // one ring in: half way back to relaxed
+    }
+    /* FINAL GUARANTEE: nothing on the inner shell may sit outside the outer skin.
+       A handful of vertices on the arch ceilings touch kept triangles on one side only after
+       the trim, so their averaged normal tips slightly outward and the offset carries them a
+       few millimetres past the outer surface — measured, 2 vertices at 12mm, but that is
+       enough to widen the whole shell. They are interior to the opening, so the edge/ring pin
+       above never reaches them. Rather than special-case them, enforce the invariant directly:
+       the inner surface is the outer eroded inward, so no inner point can lie outside the
+       outer bounding surface. Any vertex that does is pulled back to the outer skin along the
+       line to its own outer position. This is a safety clamp on a few strays, not the offset
+       itself, so the wall everywhere else is untouched — and it makes the outside provably
+       independent of wall thickness. */
+    {
+      let ox0=Infinity,oy0=Infinity,oz0=Infinity,ox1=-Infinity,oy1=-Infinity,oz1=-Infinity;
+      for(let i=0;i<vc*3;i+=3){
+        if(positions[i]<ox0)ox0=positions[i]; if(positions[i]>ox1)ox1=positions[i];
+        if(positions[i+1]<oy0)oy0=positions[i+1]; if(positions[i+1]>oy1)oy1=positions[i+1];
+        if(positions[i+2]<oz0)oz0=positions[i+2]; if(positions[i+2]>oz1)oz1=positions[i+2];
+      }
+      for(let k=0;k<vc;k++){
+        let ix=inner[k*3],iy=inner[k*3+1],iz=inner[k*3+2];
+        const outside = ix<ox0||ix>ox1||iy<oy0||iy>oy1||iz<oz0||iz>oz1;
+        if(!outside)continue;
+        const px=positions[k*3],py=positions[k*3+1],pz=positions[k*3+2];
+        // largest t in [0,1] along outer->inner that still clears every face of the outer box
+        let t=1;
+        const lim=(o,p,lo,hi)=>{const d=o-p;
+          if(d>1e-9){ if(o>hi)t=Math.min(t,(hi-p)/d); }
+          else if(d<-1e-9){ if(o<lo)t=Math.min(t,(lo-p)/d); }};
+        lim(ix,px,ox0,ox1); lim(iy,py,oy0,oy1); lim(iz,pz,oz0,oz1);
+        t=Math.max(0,Math.min(1,t));
+        inner[k*3]=px+(ix-px)*t; inner[k*3+1]=py+(iy-py)*t; inner[k*3+2]=pz+(iz-pz)*t;
+      }
     }
     const pos2=new Float32Array(vc*6); pos2.set(positions,0); pos2.set(inner,vc*3);
     const idx2=Array.from(outerIdx);
