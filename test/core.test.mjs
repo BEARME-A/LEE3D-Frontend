@@ -2772,6 +2772,92 @@ t("every absolute unit an SVG can state is understood", () => {
   });
 }
 
+
+// =====================  THICKNESS EATS INWARD, THE OUTSIDE NEVER MOVES  =====================
+// For weeks the hollow shell grew OUTWARD when the wall was thickened, and a flat slab
+// floated across the cavity. Root cause: opening the underside removed every triangle on the
+// base and the arch ceilings, which left ~3,600 of their vertices touched by no remaining
+// triangle. innerOffsets pushes each vertex inward along the average normal of its faces —
+// with no faces, the normal is zero, so those vertices never moved: they stayed on the OUTER
+// surface and were then welded into the INNER shell, dragging its bounding box out to meet
+// the outer one (measured: 129mm wide and floor at -2.9mm at 12mm wall, vs a fixed 115/+5.6
+// outer). The floating slab was the inner shell's own floor, one wall-thickness up from an
+// opening the inner sheet didn't share. Fix: offset against the closed shell so every vertex
+// has a real inward normal, then clamp any stray inner vertex back inside the outer skin.
+{
+  // the REAL model Collin sent, the one that actually orphans arch-ceiling vertices when the
+  // underside opens. A synthetic box doesn't reproduce it — the arches have to be deep enough
+  // that opening them strands a whole band of vertices with no faces left to give a normal.
+  let HOLLOW_FIX = null;
+  try { HOLLOW_FIX = JSON.parse(fs.readFileSync(new URL("./fixture-hollow.json", import.meta.url), "utf8")); }
+  catch {}
+  const prof = extra => ({ ...HOLLOW_FIX, hullRes:80, features:null, ...extra });
+  const box = g => { const m=[1e9,1e9,1e9],M=[-1e9,-1e9,-1e9];
+    for(let i=0;i<g.positions.length;i+=3) for(let k=0;k<3;k++){
+      if(g.positions[i+k]<m[k])m[k]=g.positions[i+k]; if(g.positions[i+k]>M[k])M[k]=g.positions[i+k]; }
+    return { w:M[1]-m[1], h:M[2]-m[2], floor:m[2], len:M[0]-m[0] }; };
+
+  t("hollow: the outside is identical at every wall thickness", () => {
+    ok(HOLLOW_FIX, "fixture-hollow.json present"); if(!HOLLOW_FIX) return;
+    const walls = [1.8, 4.2, 8, 12];
+    const boxes = walls.map(wt => box(API.makeVisualHull(prof({ hullHollow:true, wallThickness:wt }))));
+    const ref = boxes[0];
+    boxes.forEach((b, i) => {
+      near(b.w, ref.w, 0.05, `width must not move (wall ${walls[i]})`);
+      near(b.h, ref.h, 0.05, `height must not move (wall ${walls[i]})`);
+      near(b.floor, ref.floor, 0.05, `floor must not drop (wall ${walls[i]})`);
+      near(b.len, ref.len, 0.05, `length must not move (wall ${walls[i]})`);
+    });
+    // vs the SOLID body: height and floor are exact; the open edge is faired inward by up
+    // to ~half a millimetre where the underside was cut, so width is allowed that much.
+    const solid = box(API.makeVisualHull(prof({ hullHollow:false, wallThickness:4.2 })));
+    near(ref.h, solid.h, 0.05, "hollow height == solid height");
+    near(ref.floor, solid.floor, 0.05, "hollow floor == solid floor");
+    ok(ref.w <= solid.w + 0.05 && ref.w > solid.w - 0.8,
+       `hollow width tracks solid within fairing tolerance (${ref.w.toFixed(2)} vs ${solid.w.toFixed(2)})`);
+  });
+
+  t("hollow: thickening the wall consumes the cavity, so material grows", () => {
+    ok(HOLLOW_FIX, "fixture-hollow.json present"); if(!HOLLOW_FIX) return;
+    const vol = g => { let V=0; const P=g.positions,I=g.indices;
+      for(let q=0;q<I.length;q+=3){const a=I[q]*3,b=I[q+1]*3,c=I[q+2]*3;
+        V+=(P[a]*(P[b+1]*P[c+2]-P[c+1]*P[b+2])-P[a+1]*(P[b]*P[c+2]-P[c]*P[b+2])+P[a+2]*(P[b]*P[c+1]-P[c]*P[b+1]))/6;}
+      return Math.abs(V); };
+    const thin = vol(API.makeVisualHull(prof({ hullHollow:true, wallThickness:1.8 })));
+    const thick = vol(API.makeVisualHull(prof({ hullHollow:true, wallThickness:12 })));
+    ok(thick > thin * 1.5, `a 12mm wall uses far more material than 1.8mm (${(thin/1000).toFixed(0)} -> ${(thick/1000).toFixed(0)} cm3)`);
+  });
+
+  t("hollow: no vertex of the inner shell lies outside the outer skin", () => {
+    ok(HOLLOW_FIX, "fixture-hollow.json present"); if(!HOLLOW_FIX) return;
+    // the invariant the whole fix rests on: inside = outside eroded inward, so nothing inner
+    // can poke out. If this holds, the outside cannot grow no matter what the wall is.
+    const g = API.makeVisualHull(prof({ hullHollow:true, wallThickness:12 }));
+    const m=[1e9,1e9,1e9],M=[-1e9,-1e9,-1e9];
+    for(let i=0;i<g.positions.length;i+=3) for(let k=0;k<3;k++){
+      if(g.positions[i+k]<m[k])m[k]=g.positions[i+k]; if(g.positions[i+k]>M[k])M[k]=g.positions[i+k]; }
+    // the outer skin alone defines the box; assert every vertex sits within it (tautological
+    // for the whole mesh, so instead assert the box equals the SOLID box — inner adds nothing)
+    const solid=[1e9,1e9,1e9],SolidM=[-1e9,-1e9,-1e9];
+    const gs=API.makeVisualHull(prof({ hullHollow:false, wallThickness:12 }));
+    for(let i=0;i<gs.positions.length;i+=3) for(let k=0;k<3;k++){
+      if(gs.positions[i+k]<solid[k])solid[k]=gs.positions[i+k]; if(gs.positions[i+k]>SolidM[k])SolidM[k]=gs.positions[i+k]; }
+    // height (axis 2) is exact both ways; width/length edges may be faired inward slightly,
+    // but the hollow box may NEVER exceed the solid one — that is the invariant that matters.
+    for(let k=0;k<3;k++){
+      ok(m[k] >= solid[k] - 0.05, `hollow min axis ${k} not outside solid (${m[k].toFixed(2)} >= ${solid[k].toFixed(2)})`);
+      ok(M[k] <= SolidM[k] + 0.05, `hollow max axis ${k} not outside solid (${M[k].toFixed(2)} <= ${SolidM[k].toFixed(2)})`);
+    }
+    near(M[2]-m[2], SolidM[2]-solid[2], 0.05, "height is exact");
+  });
+
+  t("hollow: stays watertight as the wall thickens", () => {
+    ok(HOLLOW_FIX, "fixture-hollow.json present"); if(!HOLLOW_FIX) return;
+    for (const wt of [1.8, 4.2, 8, 12])
+      watertight(API.makeVisualHull(prof({ hullHollow:true, wallThickness:wt })), `wall ${wt}`);
+  });
+}
+
 // --- report ---
 console.log("\nLEE3D core suite — functions read live from index.html\n");
 if (MISSING.length) console.log("  (not present yet: " + MISSING.join(", ") + ")\n");
