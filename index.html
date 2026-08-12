@@ -618,6 +618,26 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
         <div style="border-top:1px solid var(--line-2);margin:11px 0 8px;padding-top:2px"></div>
         <button class="btn primary" id="dlStl">↓ Shell STL (hollow)</button>
         <button class="btn" id="dlBottom" style="margin-top:6px">↓ Bottom plate STL</button>
+        <div style="border-top:1px solid var(--line-2);margin:11px 0 8px;padding-top:2px"></div>
+        <div class="hint" style="margin-bottom:5px"><b>Point cloud</b> — the model as raw 3D points, for scanners, inspection tools, and other 3D programs. Choose a format and how dense.</div>
+        <div class="btn-row">
+          <select id="pcFormat" class="filepick" style="display:block;width:auto;flex:1;background:#0c1119;border:1px solid var(--line-2);border-radius:5px;color:var(--ink);padding:6px 4px;font-size:12px">
+            <option value="ply-bin">PLY (binary)</option>
+            <option value="ply">PLY (text)</option>
+            <option value="xyz">XYZ (text)</option>
+            <option value="pcd">PCD (text)</option>
+          </select>
+          <select id="pcDensity" class="filepick" style="display:block;width:auto;flex:1;background:#0c1119;border:1px solid var(--line-2);border-radius:5px;color:var(--ink);padding:6px 4px;font-size:12px">
+            <option value="0">Corners only</option>
+            <option value="20000" selected>Dense · 20k</option>
+            <option value="80000">Very dense · 80k</option>
+            <option value="200000">Max · 200k</option>
+          </select>
+        </div>
+        <button class="btn" id="dlCloud" style="margin-top:6px;width:100%">↓ Export point cloud</button>
+        <label class="btn" id="upCloud" for="cloudFile" style="margin-top:6px;width:100%;display:block;text-align:center;box-sizing:border-box">↑ Import point cloud</label>
+        <input type="file" id="cloudFile" class="filepick" accept=".ply,.xyz,.pcd,.pts,.txt,*/*">
+        <div style="border-top:1px solid var(--line-2);margin:11px 0 8px;padding-top:2px"></div>
         <div class="btn-row">
           <button class="btn" id="dlJson">↓ Profile JSON</button>
           <label class="btn" id="upJson" for="jsonFile">↑ Import JSON</label>
@@ -1660,6 +1680,146 @@ function embossHull(p,positions,indices,crisp,wall){
    inner wall (joined by the rim when the underside is open) — anything else the field threw
    off is a stray scrap rattling around in there. Components are compared by size, so both
    walls survive while scraps are dropped. */
+/* Keep every component that is a real piece of the shell, drop only crumbs. Unlike
+   dropStrayShells (which keeps a fixed number of biggest pieces), this keeps ALL components
+   whose triangle count is at least `frac` of the biggest — so an outer skin and its inner
+   wall, which are separate components meeting only at the open underside, both survive, while
+   a stray grid-border sheet a hundredth their size is dropped. */
+function dropTinyShells(positions,indices,frac){
+  const nTri=indices.length/3; if(!nTri)return indices;
+  frac=frac||0.02;
+  const par=new Int32Array(positions.length/3).fill(-1);
+  const find=x=>{while(par[x]>=0)x=par[x];return x;};
+  const uni=(a,b)=>{a=find(a);b=find(b);if(a!==b)par[a]=b;};
+  for(let q=0;q<indices.length;q+=3){uni(indices[q],indices[q+1]);uni(indices[q+1],indices[q+2]);}
+  const cnt=new Map();
+  for(let q=0;q<indices.length;q+=3){const r=find(indices[q]); cnt.set(r,(cnt.get(r)||0)+1);}
+  if(cnt.size<=1)return indices;
+  let biggest=0; for(const v of cnt.values()) if(v>biggest)biggest=v;
+  const thresh=Math.max(1, biggest*frac);
+  const keep=new Set(); for(const [r,v] of cnt) if(v>=thresh)keep.add(r);
+  if(keep.size===cnt.size)return indices;
+  const out=[];
+  for(let q=0;q<indices.length;q+=3)if(keep.has(find(indices[q])))out.push(indices[q],indices[q+1],indices[q+2]);
+  return out.length?out:indices;
+}
+/* WHAT WALL DID WE ACTUALLY BUILD?
+   The wall slider is a request, not a promise. The body is meshed on a voxel grid, and a
+   dual contour puts ONE vertex in a cell — so when the wall is close to the cell size the
+   outer and inner surfaces land in the same cell and pinch each other. Measured on
+   profile_7 (2.8mm cells, 4.2mm asked): 3.8mm typical and 2.1mm at the tenth percentile.
+   It converges — 4.0mm at res 110, 4.2mm at res 160 — so it is the grid, not the field.
+
+   A toy car does not care. A bracket Curtis is going to bolt something to does, and so
+   does anyone printing a part that has to hold. So measure it instead of assuming it:
+   stand on the outer skin, walk in along that face's own normal, and see how far it is to
+   the first surface on the other side. That is the wall the printer lays down.
+
+   Normal-direction, not axis-aligned: a ray fired across a 45-degree wall reads 1.41x the
+   real thickness, which is exactly the sort of flattering number that hides a thin spot.
+   Triangles are bucketed into a coarse grid and the march is capped, so this stays cheap
+   enough to run on demand rather than being a thing you wait for. */
+function shellWallStats(positions,indices,opts){
+  const o=opts||{}, want=o.wall||0, samples=Math.max(24,o.samples||300);
+  const nTri=indices.length/3;
+  if(!nTri) return {n:0,min:0,median:0,p10:0,want:want,thin:0};
+  const P=positions;
+  // bucket every triangle by its bounding box, on a grid sized to the march we allow
+  const reach=Math.max(0.5, o.reach || (want>0?want*2.5:12));
+  let mnx=1e30,mny=1e30,mnz=1e30;
+  for(let i=0;i<P.length;i+=3){ if(P[i]<mnx)mnx=P[i]; if(P[i+1]<mny)mny=P[i+1]; if(P[i+2]<mnz)mnz=P[i+2]; }
+  const gs=reach, key=(a,b,c)=>a+","+b+","+c;
+  const bucket=new Map();
+  const tb=t=>{ const a=indices[t*3]*3,b=indices[t*3+1]*3,c=indices[t*3+2]*3;
+    return [Math.min(P[a],P[b],P[c]),Math.min(P[a+1],P[b+1],P[c+1]),Math.min(P[a+2],P[b+2],P[c+2]),
+            Math.max(P[a],P[b],P[c]),Math.max(P[a+1],P[b+1],P[c+1]),Math.max(P[a+2],P[b+2],P[c+2])]; };
+  for(let t=0;t<nTri;t++){
+    const q=tb(t);
+    for(let i=Math.floor((q[0]-mnx)/gs);i<=Math.floor((q[3]-mnx)/gs);i++)
+      for(let j=Math.floor((q[1]-mny)/gs);j<=Math.floor((q[4]-mny)/gs);j++)
+        for(let k=Math.floor((q[2]-mnz)/gs);k<=Math.floor((q[5]-mnz)/gs);k++){
+          const s=key(i,j,k); let L=bucket.get(s); if(!L){L=[];bucket.set(s,L);} L.push(t); }
+  }
+  // Möller–Trumbore, one ray against one triangle
+  const hit=(ox,oy,oz,dx,dy,dz,t)=>{
+    const a=indices[t*3]*3,b=indices[t*3+1]*3,c=indices[t*3+2]*3;
+    const e1x=P[b]-P[a],e1y=P[b+1]-P[a+1],e1z=P[b+2]-P[a+2];
+    const e2x=P[c]-P[a],e2y=P[c+1]-P[a+1],e2z=P[c+2]-P[a+2];
+    const hx=dy*e2z-dz*e2y, hy=dz*e2x-dx*e2z, hz=dx*e2y-dy*e2x;
+    const det=e1x*hx+e1y*hy+e1z*hz; if(Math.abs(det)<1e-12)return -1;
+    const inv=1/det, sx=ox-P[a], sy=oy-P[a+1], sz=oz-P[a+2];
+    const u=(sx*hx+sy*hy+sz*hz)*inv; if(u<-1e-6||u>1+1e-6)return -1;
+    const qx=sy*e1z-sz*e1y, qy=sz*e1x-sx*e1z, qz=sx*e1y-sy*e1x;
+    const v=(dx*qx+dy*qy+dz*qz)*inv; if(v<-1e-6||u+v>1+1e-6)return -1;
+    const tt=(e2x*qx+e2y*qy+e2z*qz)*inv;
+    return tt>1e-4?tt:-1;
+  };
+  const out=[];
+  /* Optionally sample only faces in a height band. The rim you see at an opening is the
+     band of material between the outer skin and the inner wall, and "is the rim a clean
+     band or a row of teeth" is a question about that strip specifically — so it has to be
+     askable without dragging the whole model's average into the answer. Rays are still cast
+     against the entire mesh; the band only chooses where to stand. */
+  const zLo=(o.zMin==null)?-Infinity:o.zMin, zHi=(o.zMax==null)?Infinity:o.zMax;
+  const banded=zLo>-Infinity||zHi<Infinity;
+  const step=banded?1:Math.max(1,Math.floor(nTri/samples));
+  // typical face area, so "sliver" is measured against this mesh rather than a magic number
+  let areaSum=0, areaN=0;
+  for(let t=0;t<nTri;t+=Math.max(1,Math.floor(nTri/400))){
+    const a=indices[t*3]*3,b=indices[t*3+1]*3,c=indices[t*3+2]*3;
+    const ux=P[b]-P[a],uy=P[b+1]-P[a+1],uz=P[b+2]-P[a+2];
+    const vx=P[c]-P[a],vy=P[c+1]-P[a+1],vz=P[c+2]-P[a+2];
+    const cxx=uy*vz-uz*vy,cyy=uz*vx-ux*vz,czz=ux*vy-uy*vx;
+    areaSum+=0.5*Math.hypot(cxx,cyy,czz); areaN++;
+  }
+  const minArea=areaN?(areaSum/areaN)*0.05:0;
+  for(let t=0;t<nTri;t+=step){
+    const a=indices[t*3]*3,b=indices[t*3+1]*3,c=indices[t*3+2]*3;
+    const ux=P[b]-P[a],uy=P[b+1]-P[a+1],uz=P[b+2]-P[a+2];
+    const vx=P[c]-P[a],vy=P[c+1]-P[a+1],vz=P[c+2]-P[a+2];
+    let nx=uy*vz-uz*vy, ny=uz*vx-ux*vz, nz=ux*vy-uy*vx;
+    const ln=Math.hypot(nx,ny,nz); if(ln<1e-12)continue;
+    /* A sliver's centroid sits within a hair of its own long edge, so the march leaves and
+       re-enters the surface almost immediately and reads a wall of nearly zero. That is a
+       property of the triangulation, not of the part. Anything far below the typical face
+       area is not a place you can stand and take a measurement. */
+    if(ln*0.5 < minArea) continue;
+    nx/=ln; ny/=ln; nz/=ln;
+    const cx=(P[a]+P[b]+P[c])/3, cy=(P[a+1]+P[b+1]+P[c+1])/3, cz=(P[a+2]+P[b+2]+P[c+2])/3;
+    if(cz<zLo||cz>zHi)continue;
+    // winding is not guaranteed to point outward here, so try both and keep the near side
+    let best=-1;
+    for(let s=-1;s<=1;s+=2){
+      const dx=nx*s, dy=ny*s, dz=nz*s;
+      /* A face that shares a corner with this one is its neighbour across a fold, not the
+         far side of a wall. It sits a hair off the ray and reads as a 0.02mm "wall", which
+         would make every model look catastrophically thin. Skip anything touching this
+         triangle's own vertices. */
+      const v0=indices[t*3],v1=indices[t*3+1],v2=indices[t*3+2];
+      const seen=new Set(); let near=-1;
+      for(let m=0;m<=reach;m+=gs){
+        const i=Math.floor((cx+dx*m-mnx)/gs), j=Math.floor((cy+dy*m-mny)/gs), k=Math.floor((cz+dz*m-mnz)/gs);
+        for(let di=-1;di<=1;di++)for(let dj=-1;dj<=1;dj++)for(let dk=-1;dk<=1;dk++){
+          const L=bucket.get(key(i+di,j+dj,k+dk)); if(!L)continue;
+          for(let z=0;z<L.length;z++){ const tt=L[z]; if(tt===t||seen.has(tt))continue; seen.add(tt);
+            const w0=indices[tt*3],w1=indices[tt*3+1],w2=indices[tt*3+2];
+            if(w0===v0||w0===v1||w0===v2||w1===v0||w1===v1||w1===v2||w2===v0||w2===v1||w2===v2)continue;
+            const d=hit(cx,cy,cz,dx,dy,dz,tt); if(d>0&&d<=reach&&(near<0||d<near))near=d; }
+        }
+        if(near>=0&&near<=m+gs)break;
+      }
+      if(near>0&&(best<0||near<best))best=near;
+    }
+    if(best>0)out.push(best);
+  }
+  if(!out.length) return {n:0,min:0,median:0,p10:0,want:want,thin:0};
+  out.sort((x,y)=>x-y);
+  const at=f=>out[Math.min(out.length-1,Math.max(0,Math.round(f*(out.length-1))))];
+  const thinBar=want>0?want*0.75:0;
+  let thin=0; for(let i=0;i<out.length;i++) if(out[i]<thinBar) thin++;
+  return { n:out.length, min:out[0], median:at(0.5), p10:at(0.10), want:want,
+           thin: want>0?thin/out.length:0 };
+}
 function dropStrayShells(positions,indices,expect){
   const nTri=indices.length/3; if(!nTri)return indices;
   expect=Math.max(1,expect||1);
@@ -2141,6 +2301,27 @@ function baseCutZ(sidePolyMM, H){
   if(!(b-a > (zHi-zLo)*0.08)) return -Infinity;  // the two groups aren't really distinct
   return a;                                      // the level the ground-touching parts sit at
 }
+/* HOW MUCH GRID A WALL NEEDS.
+   One number, used in two places that must never disagree: the rule that decides how fine
+   to make the grid, and the gate that decides whether field hollow can run on it. If those
+   two drift apart the gate quietly rejects a wall the grid was just refined to hold, and
+   the plank comes back with nothing in the log to say why.
+   Measured on the hollow fixture: wall/cell 3.2 -> outside exact to 0.00mm, 1.68 -> 0.07mm,
+   1.5 -> 0.5mm faired at the open edge, 0.72 -> 3.19mm SHORT with skin missing. Somewhere
+   around 1.5 is where a shell stops eating itself, and the vertex-offset path fairs an open
+   edge by about 0.42mm anyway, so half a millimetre here is in keeping rather than a
+   regression. Set just under 1.5 because the three cell sizes are not equal — profile_7
+   lands on 4.2 vs 4.2000001 and a hair of floating point either way must not be what decides
+   whether the plank comes back. */
+const HOLLOW_WALL_CELLS=1.45;
+/* HOW THIN THE ADAPTIVE WALL MAY GO.
+   Deliberately MORE headroom than HOLLOW_WALL_CELLS. That constant is the point at which a
+   shell stops eating itself outright; sitting exactly on it costs about half a millimetre of
+   fairing at the open edge, which is tolerable once for the whole model but not something to
+   invite locally all over a body. Measured on profile_7 at an 8mm wall: thinning down to
+   1.45 cells saved 5.9% of the material and pulled the width in 0.6mm; at 2.0 cells the
+   outside holds. Material is cheaper than a body that is the wrong size. */
+const HOLLOW_THIN_CELLS=2.0;
 function makeVisualHull(p){
   const BOX=[[0,0],[1,0],[1,1],[0,1]];
   const sideN=(p.sidePoly&&p.sidePoly.length>2)?p.sidePoly:BOX;
@@ -2304,6 +2485,15 @@ function makeVisualHull(p){
     return baseCut>-1e29 ? Math.max(d, baseCut-z) : d;
   };
   const res=Math.max(20,Math.min(80,Math.round(p.hullRes||Math.max(p.stations||48,40))));
+  /* NO SECRET RESOLUTION CHANGES.
+     An earlier cut of this raised the grid when hollowing, so a wall too thin for the field
+     path could still get one. It backfired twice over: the solid build kept the original
+     resolution, so simply ticking "hollow" moved the outside by half a millimetre — the very
+     invariant this is all meant to protect — and where the wall was far too thin the grid
+     climbed to the cap, cost about seven times the build time, and then got rejected anyway
+     and fell through to the path it would have taken at the original resolution.
+     So the grid is whatever the drawing asks for, and fieldHollow below simply decides
+     whether that grid can hold the wall. */
   /* THE GRID IS PADDED, AND THAT PADDING IS WHY THE MODEL COMES OUT THE SIZE YOU ASKED FOR.
      The outermost ring of grid corners is forced to "outside" so the surface always closes
      rather than running off the edge of the sampled box. That ring used to sit exactly ON
@@ -2366,13 +2556,196 @@ function makeVisualHull(p){
     const border=(i===0||j===0||k===0||i===nx||j===ny||k===nz);
     field[idx(i,j,k)] = border ? BIG : F(px(i),py(j),pz(k));   // keep the shell closed
   }
+  /* FIELD-BASED HOLLOW (opt-in via p.fieldHollow).
+     The cavity is a second reading of the SAME field, not a mesh operation bolted on after.
+     A point is shell material when it is inside the body (F<0) but not deep enough to be the
+     cavity (F > -wall) — i.e. within one wall of the outer surface. As a signed field that
+     shell is max(F, -(F+wall)): negative in the wall band, positive both in the open air
+     outside and in the hollow core. Meshing THAT one field yields the outer skin and the
+     inner wall together, correct by construction, because the field already knows the true
+     3D thickness everywhere. A thin deck the old vertex-offset hollow paved into a solid
+     plank (its two surfaces pushed until they collided) here simply has the field report it
+     is only 16mm thick, leaving exactly room for two walls and a core — proven on profile_7.
+     The underside stays open the same way the solid path opens it: below the level-base cut
+     plane the field is already outside, so the core reaches the opening with no extra work.
+     No innerOffsets, no rim stitch, no plank. */
+  /* ON BY DEFAULT as of this build. It was opt-in while it was being proved out; it is now
+     the hollowing path, because it fixes the plank at the root rather than patching the
+     mesh afterwards. Verified on profile_7 at its own resolution: the thin deck builds as a
+     closed box (top wall, side walls, bottom wall, cavity between) where the vertex-offset
+     path built a bare plate with its underside missing. Pass fieldHollow:false to get the
+     old innerOffsets path back — kept because saved models and the exact-STEP backend still
+     round-trip through it, and because a way back is worth having. */
+  /* ...and only if the grid we ended up with can actually hold it. If the wall is thinner
+     than about one and a half cells the two surfaces would eat each other, so hand the job
+     back to the vertex-offset path rather than build a shell full of holes. That path has
+     the plank problem on thin SECTIONS, but a thin WALL is the one case it does better,
+     and a plank is a nicer failure than a body 3.7mm short with skin missing. */
+  const fieldHollow = hollow && wall>0 && p.fieldHollow!==false
+                   && wall >= Math.max(hx,hy,hz)*HOLLOW_WALL_CELLS;
+  if(fieldHollow){
+    const shell=new Float32Array(NX*NY*NZ);
+    /* The body field is a max of three separable 2D fields, which is exact at the surface but
+       NOT a true Euclidean distance just inside it: on a gently sloped face (a beltline, the
+       base of the roof) the value changes slowly with depth, so a fixed value band -wall<F<0
+       covers a geometrically THICK slab and the cavity there fills solid. Divide by the local
+       gradient magnitude to turn the value into true perpendicular distance, so the wall band
+       is `wall` mm thick measured square to the surface everywhere, slope or no slope. */
+    /* THE OUTER SKIN IS NOT NEGOTIABLE.
+       Step 2 wrote max(dist, -(dist+wall)) with dist = b/|grad b| — normalising BOTH terms.
+       That moves the outer surface: the mesher finds a crossing by interpolating values
+       along a grid edge, so rescaling those values by a varying 1/|grad| slides the
+       crossing point. Measured on profile_7 it cost 0.3mm of width, and a coarser gradient
+       cost 0.9mm. A hollow body must be the same size as the solid one — that is the whole
+       invariant the hollow tests rest on.
+       So normalise only the term that draws the INNER wall, and leave the outer term as the
+       raw body field. Outer surface: b = 0, bit-identical to the solid build. Inner surface:
+       b/|grad| = -wall, a true perpendicular wall in millimetres even on a shallow slope. */
+    const eps=Math.min(hx,hy,hz)*0.5;
+    const deep=-wall*3;                     // past here it is core, and only the sign matters
+
+    /* ADAPTIVE WALL — thin the wall only where the section is a genuine thin SLAB.
+       Opt-in via p.adaptiveWall.
+
+       Why the old step-3 probe was wrong, so nobody rebuilds it: it fired 26 rays and took
+       the NEAREST outside sample as the local thickness. But for a point at depth d, the
+       nearest outside sample IS d — it was measuring depth-to-surface, which the field
+       already told us, so the "local thickness" tracked depth and the wall collapsed to its
+       floor value everywhere. Measured result: 0.52mm walls at the tenth percentile and the
+       whole body 4mm undersized. It was never a corner bug; it was measuring the wrong thing.
+
+       What thickness actually means: pick a direction, walk to the surface one way, walk to
+       the surface the other way, add them. That is the thickness of the section along that
+       direction. Take the smallest over all directions and you have the local thickness.
+       Both sides have to be close for it to count — at a corner one face is near and the
+       other is the whole width of the body away, so a corner reads THICK and is left alone.
+       That bilateral test is the whole difference between this and the version that failed.
+
+       It reads the grid that was already sampled rather than calling F again. The 26
+       neighbours ARE grid directions, so marching along them is plain array indexing — the
+       old probe's ray marching cost roughly a hundred F calls per voxel, which on this model
+       would have turned a 3.4s build into something you would not wait for. */
+    const AD = !!p.adaptiveWall;
+    const dirs=[];
+    for(let a=-1;a<=1;a++)for(let b2=-1;b2<=1;b2++)for(let c=-1;c<=1;c++){
+      if(!a&&!b2&&!c)continue;
+      if(a>0||(!a&&b2>0)||(!a&&!b2&&c>0)) dirs.push([a,b2,c,Math.hypot(a*hx,b2*hy,c*hz)]);
+    }
+    const maxN=Math.max(1,Math.ceil((wall*1.25)/Math.min(hx,hy,hz)));
+    /* How far to the surface from (i,j,k) heading (di,dj,dk). Returns the capped distance if
+       it doesn't reach one, which is what makes "thick" the safe default. */
+    const reach=(i,j,k,di,dj,dk,stepLen)=>{
+      let prev=field[idx(i,j,k)];
+      for(let n=1;n<=maxN;n++){
+        const I2=i+di*n, J2=j+dj*n, K2=k+dk*n;
+        if(I2<0||I2>=NX||J2<0||J2>=NY||K2<0||K2>=NZ) return n*stepLen;
+        const v=field[idx(I2,J2,K2)];
+        if(v>=BIG*0.5) return n*stepLen;      // sentinel ring: don't interpolate against it
+        if(v>=0){ const f=prev/(prev-v); return (n-1+(f>0&&f<1?f:0))*stepLen; }
+        prev=v;
+      }
+      return maxN*stepLen;                    // never found it: treat as thick
+    };
+    /* The floor is not a taste setting. A wall below about one and a half cells cannot be
+       meshed at all — the outer and inner surfaces land in the same cell and cancel — so
+       thinning past that does not produce a thinner shell, it produces holes. And a wall
+       thinner than this is not worth printing even when it can be meshed. Where a section is
+       too thin for even the floor, no cavity is attempted and it stays solid, which is the
+       right answer for a thin rib anyway. */
+    const wallFloor=Math.min(wall, Math.max(1.2, Math.max(hx,hy,hz)*HOLLOW_THIN_CELLS));
+
+    for(let i=0;i<NX;i++)for(let j=0;j<NY;j++)for(let k=0;k<NZ;k++){
+      const o=idx(i,j,k), b=field[o];
+      if(b>=BIG*0.5){ shell[o]=BIG; continue; }
+      /* Outside the body the first term already wins, whatever the gradient is, and deep in
+         the core the second term is positive by a mile. Both cases skip the gradient, which
+         is six calls to F — so it is only paid for in the wall band, about a tenth of the
+         grid instead of all of it. */
+      if(b>=0){ shell[o]=b; continue; }
+      if(b<deep){ shell[o]=-(b+wall); continue; }
+      const xm=px(i),ym=py(j),zm=pz(k);
+      const gx=(F(xm+eps,ym,zm)-F(xm-eps,ym,zm))/(2*eps);
+      const gy=(F(xm,ym+eps,zm)-F(xm,ym-eps,zm))/(2*eps);
+      const gz=(F(xm,ym,zm+eps)-F(xm,ym,zm-eps))/(2*eps);
+      const g=Math.hypot(gx,gy,gz)||1;
+      const dist=b/g;                              // true perpendicular distance, mm, negative inside
+      let wLoc=wall;
+      if(AD && wallFloor<wall){
+        let T=Infinity;
+        for(let d=0;d<dirs.length;d++){
+          const D=dirs[d];
+          const t=reach(i,j,k,D[0],D[1],D[2],D[3])+reach(i,j,k,-D[0],-D[1],-D[2],D[3]);
+          if(t<T)T=t;
+        }
+        /* Two walls and a cavity have to fit inside T. At 40% each there is a fifth of the
+           section left as cavity, which is enough to be worth hollowing and not so little
+           that it closes up again under meshing. */
+        const want=T*0.4;
+        if(want<wall) wLoc=Math.max(wallFloor, want);
+      }
+      shell[o]=Math.max(b, -(dist+wLoc));
+    }
+    /* WHERE BOTH SKINS WANT THE SAME CELL, THE SOLID ONE WINS.
+       A dual contour puts ONE vertex in a cell. Where the wall is thin enough that the outer
+       skin and the inner wall both pass through a single cell, both sheets are forced onto
+       that one vertex and welded together — and because they face opposite ways, the edge
+       they end up sharing is traversed the same direction by both. That is a fin: a fold of
+       zero-thickness material, and it is not a winding mistake but a genuinely non-orientable
+       surface that NO winding can fix. Measured on profile_7: 61 such edges, normals back to
+       back at a median dot of -0.84, and exactly 61 vertices where two separate sheets meet.
+       The winding pass was right to refuse them.
+       So do not hand the mesher an impossible cell. A cell holding both an outside corner and
+       a core corner is one where the wall has pinched below what the grid can carry; fill its
+       core corners back to solid, which drops the inner surface out of that cell and leaves a
+       single sheet. Locally the shell just becomes solid there — a few voxels of extra
+       material, which is the right trade against a fold that no slicer should have to see. */
+    /* A cell is safe for a single-vertex dual contour only if its material corners form ONE
+       connected group and its air corners do too. If either splits in two, the cell holds two
+       separate sheets and they get welded onto the one vertex the mesher is allowed. That
+       covers both ways a shell pinches: a thin WALL puts the outer skin and the inner wall in
+       one cell, and a thin CAVITY puts the inner wall in twice. Testing connectivity of the
+       corner signs catches both without having to know which is happening.
+       Corners are the 8 bits of (i,j,k); two are adjacent along a cube edge when their
+       indices differ in exactly one bit, i.e. a^1, a^2, a^4. */
+    const oneGroup=(mask)=>{
+      if(mask===0||mask===255)return true;
+      let first=0; while(!((mask>>first)&1))first++;
+      let seen=1<<first, st=[first];
+      while(st.length){ const a=st.pop();
+        for(const nb of [a^1,a^2,a^4])
+          if(((mask>>nb)&1)&&!((seen>>nb)&1)){ seen|=1<<nb; st.push(nb); } }
+      return seen===mask;
+    };
+    const patch=[];
+    for(let i=0;i<NX-1;i++)for(let j=0;j<NY-1;j++)for(let k=0;k<NZ-1;k++){
+      let solidMask=0, off=[];
+      let skip=false;
+      for(let a=0;a<8;a++){
+        const o=idx(i+(a&1),j+((a>>1)&1),k+((a>>2)&1));
+        off.push(o);
+        if(field[o]>=BIG*0.5){ skip=true; break; }
+        if(shell[o]<=0) solidMask|=1<<a;
+      }
+      if(skip)continue;
+      if(oneGroup(solidMask)&&oneGroup((~solidMask)&255))continue;   // unambiguous, leave alone
+      /* Ambiguous. Resolve towards material: the core corners are the cavity, and filling them
+         merges whichever pair of sheets was about to be welded into one. Extra material in a
+         handful of voxels is a far better outcome than a zero-thickness fold. */
+      for(let a=0;a<8;a++){ const o=off[a]; if(shell[o]>0&&field[o]<0) patch.push(o); }
+    }
+    for(let q=0;q<patch.length;q++) shell[patch[q]]=field[patch[q]];
+    for(let o=0;o<NX*NY*NZ;o++) field[o]=shell[o];
+  }
   /* NO GUTS. Anywhere the field happens to enclose a pocket of air — where traced cuts cross,
      where a fold closes over on itself — the mesher faithfully builds a surface around it, and
      those become the slabs and boxes rattling about inside the frame. A frame should be its
      outer skin and the wall behind it, nothing else. So flood the OUTSIDE air inward from the
      border first; any air the flood never reaches is a sealed pocket, and it gets filled in as
-     solid. What's left is one clean cavity you can see into, and no interior scenery. */
-  {
+     solid. What's left is one clean cavity you can see into, and no interior scenery.
+     Skipped for field-hollow: there the hollow CORE is a deliberately sealed air pocket, and
+     filling it would defeat the whole point. Field-hollow keeps its core; the underside opening
+     is handled by the base cut, and any true stray pocket is dropped later by dropStrayShells. */
+  if(!fieldHollow){
     const N=NX*NY*NZ, out=new Uint8Array(N), st=[];
     for(let i=0;i<NX;i++)for(let j=0;j<NY;j++)for(let k=0;k<NZ;k++){
       if(i===0||j===0||k===0||i===nx||j===ny||k===nz){const o=idx(i,j,k); if(field[o]>0&&!out[o]){out[o]=1;st.push(o);}}}
@@ -2553,7 +2926,7 @@ function makeVisualHull(p){
      (the ground-facing skin is dropped) and the two shells are stitched with a rim, so it's a
      genuine open-bottom shell you can see up into — like the smooth body — and still watertight. */
   let openedBottom=false;
-  if(hollow && wall>0){
+  if(hollow && wall>0 && !fieldHollow){
     const openBottom = !p.closedBottom;
     let outerIdx = indices;
     if(openBottom){                                    // open only the true underside
@@ -2732,6 +3105,16 @@ function makeVisualHull(p){
     indices=dropStrayShells(positions,indices,trimmed?1:2);   // exactly the frame, nothing else
     vol=Math.abs(facing(indices));                     // now the SHELL's material, not the lump
   }
+  if(fieldHollow){
+    // the shell field already meshed the outer skin + inner wall as one closed surface.
+    // Do NOT run dropStrayShells here — the inner wall is a separate connected component from
+    // the outer skin (they meet only at the open underside), and dropStrayShells keeps just the
+    // largest, which would throw the whole inner wall away and leave a solid lump. Instead drop
+    // only trivially small fragments (grid-border crumbs), preserving both walls.
+    openedBottom = !p.closedBottom;
+    indices = dropTinyShells(positions, indices, 0.02);   // <2% of the biggest = a crumb
+    vol=Math.abs(facing(indices));
+  }
   /* ONE WINDING FOR THE WHOLE SURFACE.
      Every check up to here counts how often an edge is USED. Two faces on an edge is the
      test for watertight, and a face that is wound backwards still uses its edges twice — so
@@ -2799,7 +3182,13 @@ function makeVisualHull(p){
       if(vol<0){ for(let q=0;q<indices.length;q+=3){const t2=indices[q+1];indices[q+1]=indices[q+2];indices[q+2]=t2;} vol=-vol; }
     }
   }
-  return {positions,indices,volume:Math.abs(vol),hollow:(hollow&&wall>0),openBottom:openedBottom};
+  /* Say which way this was built. Two hollowing paths now exist and they fair an open edge
+     differently — the field path lands exactly on the solid body's width, the vertex-offset
+     path pulls in about 0.4mm — so "did the outside move?" only has a sharp answer once you
+     know which one ran. It also lets the app tell someone why a 1.5mm wall behaves unlike a
+     6mm one on the same model, instead of leaving it as a mystery. */
+  return {positions,indices,volume:Math.abs(vol),hollow:(hollow&&wall>0),openBottom:openedBottom,
+          fieldHollow,hullRes:res};
 }
 function checkManifold(indices){
   const m=new Map(),key=(a,b)=>a<b?a+"_"+b:b+"_"+a;
@@ -2827,6 +3216,247 @@ function toSTL(positions,indices){
   }
   return new Blob([buf],{type:"model/stl"});
 }
+
+/* =========================================================================
+   POINT CLOUDS — .PLY / .XYZ / .PCD, import and export.
+   A point cloud is just the vertices, no faces. Two ways to make one from a model:
+   dedupeVerts() keeps the mesh's own corners (compact, exact); samplePointCloud() scatters
+   extra points across every triangle so a downstream tool that reconstructs a surface has
+   enough density to follow the shape. Import returns the same flat [x,y,z,...] soup the STL
+   path uses, plus optional per-point RGB, so a scan drops straight into the workshop as a
+   display mesh (rebuilt as points) and can be traced against.
+   All pure and headless-testable — no DOM, no THREE. Coordinates are the studio's own mm,
+   model-Z up; the display layer applies the same -90° X rotation STL meshes get.
+   ========================================================================= */
+
+// Collapse triangle-soup vertices to unique points (quantized weld) → {pts:Float32Array, n}.
+// A mesh corner shared by k triangles appears once, so an STL's 3N verts become the real V.
+function dedupeVerts(positions, weld){
+  const q = weld || 1e-4;                 // mm grid the weld snaps to (0.1µm default = essentially exact)
+  const seen = new Map(), out = [];
+  for(let i=0;i<positions.length;i+=3){
+    const x=positions[i],y=positions[i+1],z=positions[i+2];
+    const key = Math.round(x/q)+"_"+Math.round(y/q)+"_"+Math.round(z/q);
+    if(seen.has(key))continue;
+    seen.set(key,1); out.push(x,y,z);
+  }
+  return { pts:new Float32Array(out), n:out.length/3 };
+}
+
+// Scatter `target` points across the surface, density proportional to triangle area, so a
+// reconstruction (Poisson, ball-pivot) has enough to work with. Includes every original
+// vertex first, then fills the rest by area-weighted barycentric sampling. Deterministic.
+function samplePointCloud(positions, indices, target){
+  const base = dedupeVerts(positions);
+  const want = Math.max(base.n, target|0 || base.n);
+  const extra = want - base.n;
+  const out = Array.from(base.pts);
+  if(extra>0 && indices && indices.length){
+    // cumulative areas for area-weighted face pick
+    const nt = indices.length/3, area = new Float64Array(nt); let tot=0;
+    for(let t=0;t<nt;t++){
+      const a=indices[t*3]*3,b=indices[t*3+1]*3,c=indices[t*3+2]*3;
+      const ux=positions[b]-positions[a],uy=positions[b+1]-positions[a+1],uz=positions[b+2]-positions[a+2];
+      const vx=positions[c]-positions[a],vy=positions[c+1]-positions[a+1],vz=positions[c+2]-positions[a+2];
+      const cx=uy*vz-uz*vy,cy=uz*vx-ux*vz,cz=ux*vy-uy*vx;
+      area[t]=0.5*Math.hypot(cx,cy,cz); tot+=area[t];
+    }
+    const cum=new Float64Array(nt); let acc=0; for(let t=0;t<nt;t++){acc+=area[t];cum[t]=acc;}
+    // deterministic low-discrepancy sequence (no Math.random, so builds are reproducible)
+    let s=0.5;
+    const rnd=()=>{ s=(s+0.6180339887498949)%1; return s; };
+    for(let e=0;e<extra;e++){
+      const pick=rnd()*tot; let lo=0,hi=nt-1;
+      while(lo<hi){const mid=(lo+hi)>>1; if(cum[mid]<pick)lo=mid+1; else hi=mid;}
+      const a=indices[lo*3]*3,b=indices[lo*3+1]*3,c=indices[lo*3+2]*3;
+      let r1=rnd(), r2=rnd(); if(r1+r2>1){r1=1-r1;r2=1-r2;} const r0=1-r1-r2;
+      out.push(
+        positions[a]*r0+positions[b]*r1+positions[c]*r2,
+        positions[a+1]*r0+positions[b+1]*r1+positions[c+1]*r2,
+        positions[a+2]*r0+positions[b+2]*r1+positions[c+2]*r2);
+    }
+  }
+  return { pts:new Float32Array(out), n:out.length/3 };
+}
+
+// ---- EXPORT ----
+
+// .XYZ — plain text, one point per line "x y z" (+ " r g b" when colors given, 0..255).
+function toXYZ(pts, colors){
+  const n=pts.length/3, rows=new Array(n);
+  for(let i=0;i<n;i++){
+    let s=pts[i*3].toFixed(4)+" "+pts[i*3+1].toFixed(4)+" "+pts[i*3+2].toFixed(4);
+    if(colors) s+=" "+(colors[i*3]|0)+" "+(colors[i*3+1]|0)+" "+(colors[i*3+2]|0);
+    rows[i]=s;
+  }
+  return new Blob([rows.join("\n")+"\n"],{type:"text/plain"});
+}
+
+// .PLY — ascii or binary_little_endian. Stores points; RGB as uchar when colors given.
+function toPLY(pts, colors, binary){
+  const n=pts.length/3, hasC=!!colors;
+  let head="ply\n"+(binary?"format binary_little_endian 1.0\n":"format ascii 1.0\n")
+    +"comment LEE3D point cloud\n"
+    +"element vertex "+n+"\n"
+    +"property float x\nproperty float y\nproperty float z\n"
+    +(hasC?"property uchar red\nproperty uchar green\nproperty uchar blue\n":"")
+    +"end_header\n";
+  if(!binary){
+    const rows=new Array(n);
+    for(let i=0;i<n;i++){
+      let s=pts[i*3]+" "+pts[i*3+1]+" "+pts[i*3+2];
+      if(hasC)s+=" "+(colors[i*3]|0)+" "+(colors[i*3+1]|0)+" "+(colors[i*3+2]|0);
+      rows[i]=s;
+    }
+    return new Blob([head+rows.join("\n")+"\n"],{type:"model/ply"});
+  }
+  const stride = 12 + (hasC?3:0);
+  const hb = new TextEncoder().encode(head);
+  const buf = new ArrayBuffer(hb.length + n*stride);
+  const u8 = new Uint8Array(buf); u8.set(hb,0);
+  const dv = new DataView(buf); let o=hb.length;
+  for(let i=0;i<n;i++){
+    dv.setFloat32(o,pts[i*3],true); dv.setFloat32(o+4,pts[i*3+1],true); dv.setFloat32(o+8,pts[i*3+2],true); o+=12;
+    if(hasC){ u8[o]=colors[i*3]|0; u8[o+1]=colors[i*3+1]|0; u8[o+2]=colors[i*3+2]|0; o+=3; }
+  }
+  return new Blob([buf],{type:"model/ply"});
+}
+
+// .PCD — Point Cloud Library ascii format. RGB packed into a single float field (PCL convention).
+function toPCD(pts, colors){
+  const n=pts.length/3, hasC=!!colors;
+  let head="# .PCD v0.7 - Point Cloud Data file format\nVERSION 0.7\n"
+    +(hasC?"FIELDS x y z rgb\nSIZE 4 4 4 4\nTYPE F F F F\nCOUNT 1 1 1 1\n":"FIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nCOUNT 1 1 1\n")
+    +"WIDTH "+n+"\nHEIGHT 1\nVIEWPOINT 0 0 0 1 0 0 0\nPOINTS "+n+"\nDATA ascii\n";
+  const rows=new Array(n), f32=new Float32Array(1), u32=new Uint32Array(f32.buffer);
+  for(let i=0;i<n;i++){
+    let s=pts[i*3]+" "+pts[i*3+1]+" "+pts[i*3+2];
+    if(hasC){ u32[0]=((colors[i*3]|0)<<16)|((colors[i*3+1]|0)<<8)|(colors[i*3+2]|0); s+=" "+f32[0]; }
+    rows[i]=s;
+  }
+  return new Blob([head+rows.join("\n")+"\n"],{type:"text/plain"});
+}
+
+// ---- IMPORT ----
+// Every parser returns { pts:Float32Array (x,y,z soup), colors:Uint8Array|null, n }.
+
+function parseXYZ(text){
+  const pts=[], cols=[]; let anyC=false;
+  const lines=text.split(/\r?\n/);
+  for(const ln of lines){
+    const t=ln.trim(); if(!t||t[0]==="#"||t[0]==="/")continue;
+    const p=t.split(/[\s,]+/).map(Number);
+    if(p.length<3||!isFinite(p[0])||!isFinite(p[1])||!isFinite(p[2]))continue;
+    pts.push(p[0],p[1],p[2]);
+    if(p.length>=6&&isFinite(p[3])){ anyC=true; cols.push(p[3]|0,p[4]|0,p[5]|0); }
+    else cols.push(0,0,0);
+  }
+  return { pts:new Float32Array(pts), colors:anyC?new Uint8Array(cols):null, n:pts.length/3 };
+}
+
+function parsePLY(buf){
+  // header is always ascii; body may be ascii or binary_little_endian
+  const bytes = buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf;
+  const headEnd = (()=>{ const marker="end_header"; const txt=new TextDecoder().decode(bytes.subarray(0,Math.min(bytes.length,65536)));
+    const i=txt.indexOf(marker); if(i<0)throw new Error("not a PLY (no end_header)");
+    // byte offset just after the newline following end_header
+    let b=new TextEncoder().encode(txt.slice(0,i+marker.length)).length;
+    while(b<bytes.length && bytes[b]!==0x0a) b++; return b+1; })();
+  const header=new TextDecoder().decode(bytes.subarray(0,headEnd));
+  const ascii=/format\s+ascii/i.test(header);
+  const mV=header.match(/element\s+vertex\s+(\d+)/i); const nV=mV?+mV[1]:0;
+  // property order within a vertex
+  const props=[]; let inV=false;
+  for(const ln of header.split(/\r?\n/)){
+    const t=ln.trim();
+    if(/^element\s+vertex/i.test(t)){inV=true;continue;}
+    if(/^element\s/i.test(t)){inV=false;continue;}
+    if(inV){ const m=t.match(/^property\s+(\S+)\s+(\S+)/i); if(m)props.push({type:m[1].toLowerCase(),name:m[2].toLowerCase()}); }
+  }
+  const ix=props.findIndex(p=>p.name==="x"), iy=props.findIndex(p=>p.name==="y"), iz=props.findIndex(p=>p.name==="z");
+  const ir=props.findIndex(p=>p.name==="red"||p.name==="r"), ig=props.findIndex(p=>p.name==="green"||p.name==="g"), ib=props.findIndex(p=>p.name==="blue"||p.name==="b");
+  const hasC = ir>=0&&ig>=0&&ib>=0;
+  const pts=new Float32Array(nV*3), cols=hasC?new Uint8Array(nV*3):null;
+  const tSize=t=>({char:1,uchar:1,int8:1,uint8:1,short:2,ushort:2,int16:2,uint16:2,int:4,uint:4,int32:4,uint32:4,float:4,float32:4,double:8,float64:8}[t]||4);
+  if(ascii){
+    const txt=new TextDecoder().decode(bytes.subarray(headEnd));
+    const lines=txt.split(/\r?\n/); let vi=0;
+    for(const ln of lines){
+      if(vi>=nV)break; const t=ln.trim(); if(!t)continue;
+      const f=t.split(/\s+/).map(Number);
+      if(f.length<props.length)continue;
+      pts[vi*3]=f[ix]; pts[vi*3+1]=f[iy]; pts[vi*3+2]=f[iz];
+      if(hasC){ cols[vi*3]=f[ir]|0; cols[vi*3+1]=f[ig]|0; cols[vi*3+2]=f[ib]|0; }
+      vi++;
+    }
+    return { pts, colors:hasC?cols:null, n:vi };
+  }
+  // binary little-endian
+  const dv=new DataView(bytes.buffer, bytes.byteOffset);
+  const read=(t,o)=>{ switch(t){
+    case"float":case"float32":return dv.getFloat32(o,true);
+    case"double":case"float64":return dv.getFloat64(o,true);
+    case"uchar":case"uint8":case"char":case"int8":return bytes[o];
+    case"short":case"int16":return dv.getInt16(o,true);
+    case"ushort":case"uint16":return dv.getUint16(o,true);
+    case"int":case"int32":return dv.getInt32(o,true);
+    case"uint":case"uint32":return dv.getUint32(o,true);
+    default:return dv.getFloat32(o,true);
+  }};
+  let o=headEnd;
+  const rowSize=props.reduce((s,p)=>s+tSize(p.type),0);
+  for(let v=0;v<nV;v++){
+    let off=o; const vals=new Array(props.length);
+    for(let k=0;k<props.length;k++){ vals[k]=read(props[k].type,off); off+=tSize(props[k].type); }
+    pts[v*3]=vals[ix]; pts[v*3+1]=vals[iy]; pts[v*3+2]=vals[iz];
+    if(hasC){ cols[v*3]=vals[ir]|0; cols[v*3+1]=vals[ig]|0; cols[v*3+2]=vals[ib]|0; }
+    o+=rowSize;
+  }
+  return { pts, colors:hasC?cols:null, n:nV };
+}
+
+function parsePCD(text){
+  const lines=text.split(/\r?\n/);
+  let fields=[], n=0, dataMode="ascii", hi=0;
+  for(let i=0;i<lines.length;i++){
+    const t=lines[i].trim();
+    if(/^FIELDS/i.test(t)) fields=t.split(/\s+/).slice(1);
+    else if(/^POINTS/i.test(t)) n=+t.split(/\s+/)[1];
+    else if(/^WIDTH/i.test(t) && !n) n=+t.split(/\s+/)[1];
+    else if(/^DATA/i.test(t)){ dataMode=(t.split(/\s+/)[1]||"ascii").toLowerCase(); hi=i+1; break; }
+  }
+  const ix=fields.indexOf("x"), iy=fields.indexOf("y"), iz=fields.indexOf("z");
+  const irgb=fields.indexOf("rgb")>=0?fields.indexOf("rgb"):fields.indexOf("rgba");
+  const pts=[], cols=[]; let anyC=false;
+  const f32=new Float32Array(1), u32=new Uint32Array(f32.buffer);
+  for(let i=hi;i<lines.length;i++){
+    const t=lines[i].trim(); if(!t)continue;
+    const f=t.split(/\s+/);
+    if(f.length<3)continue;
+    const x=+f[ix],y=+f[iy],z=+f[iz];
+    if(!isFinite(x)||!isFinite(y)||!isFinite(z))continue;
+    pts.push(x,y,z);
+    if(irgb>=0 && f[irgb]!=null){ f32[0]=+f[irgb]; const p=u32[0]; cols.push((p>>16)&255,(p>>8)&255,p&255); anyC=true; }
+    else cols.push(0,0,0);
+    if(pts.length/3>=n && n) break;
+  }
+  return { pts:new Float32Array(pts), colors:anyC?new Uint8Array(cols):null, n:pts.length/3 };
+}
+
+// dispatch on filename/extension → {pts,colors,n}. buf may be ArrayBuffer or string.
+function parsePointCloud(name, buf){
+  const ext=(name||"").toLowerCase().split(".").pop();
+  const asText=()=> typeof buf==="string" ? buf : new TextDecoder().decode(buf instanceof ArrayBuffer?new Uint8Array(buf):buf);
+  if(ext==="xyz"||ext==="pts"||ext==="txt") return parseXYZ(asText());
+  if(ext==="pcd") return parsePCD(asText());
+  if(ext==="ply"){ const ab = typeof buf==="string" ? new TextEncoder().encode(buf).buffer : buf; return parsePLY(ab); }
+  // sniff if extension is unknown
+  const head = asText().slice(0,64);
+  if(/^ply/i.test(head)) { const ab = typeof buf==="string" ? new TextEncoder().encode(buf).buffer : buf; return parsePLY(ab); }
+  if(/^#\s*\.PCD/i.test(head)) return parsePCD(asText());
+  return parseXYZ(asText());
+}
+
 
 /* =========================================================================
    PROFILE MODEL  (the editable state -> shared JSON schema)
@@ -4629,7 +5259,32 @@ function pickSilhouette(polys,fullArea,rank){
   if(!list.length)return null;
   return list[((rank||0)%list.length+list.length)%list.length];
 }
-function resamplePoly(p,N){if(p.length<=N)return p;const o=[];for(let i=0;i<N;i++)o.push(p[Math.round(i*(p.length-1)/(N-1))]);return o;}
+/* THINNING AN OUTLINE MUST NOT MOVE IT.
+   This took every (N-1)th point by INDEX. Index position has nothing to do with shape: on a
+   DXF whose file coordinates are already exact, a corner survived or was dropped purely by
+   where it happened to fall in the list, and a dropped corner takes the outline with it —
+   measured on profile_7, traced points ended up a mean of 1.18mm and a worst of 3.22mm from
+   the finished mesh, and the error did NOT shrink as the voxel grid got finer (1.24 -> 1.18
+   -> 1.07mm from 5mm cells to 1.8mm), which is the signature of points being thrown away
+   before the grid ever sees them rather than of a sampling limit.
+   Douglas-Peucker instead: drop a point only when the straight line between its neighbours
+   already passes within tolerance of it, so corners are kept by construction and only points
+   that add nothing are lost. Tightened until it fits the budget, so the result is the closest
+   N-point outline to what was drawn instead of an arbitrary N of them. */
+function resamplePoly(p,N){
+  if(!p||p.length<=N)return p;
+  let lo=0, hi=0;
+  for(let i=0;i<p.length;i++)for(const k of [0,1]){ const v=Math.abs(p[i][k]); if(v>hi)hi=v; }
+  hi=hi||1;
+  let best=null;
+  for(let it=0;it<24;it++){                    // bisect the tolerance onto the budget
+    const mid=(lo+hi)/2, q=simplifyPoly(p,mid);
+    if(q.length<=N){ best=q; hi=mid; } else lo=mid;
+    if(hi-lo<1e-9)break;
+  }
+  if(best&&best.length>=3)return best;
+  const o=[];for(let i=0;i<N;i++)o.push(p[Math.round(i*(p.length-1)/(N-1))]);return o;
+}
 /* ============================ DXF =============================================
    A CAD drawing is a better source than a photograph: the lines are exact, and there is no
    perspective, no lens, no lighting to argue with. What arrives is line art though — a few
@@ -5602,6 +6257,61 @@ document.getElementById("dlBottom").onclick=()=>{
     ?`Bottom plate · <span class="mono">${(indices.length/3).toLocaleString()} tris · watertight</span>`
     :`Bottom plate · <span class="mono" style="color:var(--warn)">${man.boundary} open edges</span>`);
 };
+/* Point cloud out: build the shell, take just its points (corners) or scatter more across the
+   surface so a reconstruction tool has enough density, then write the chosen format. */
+document.getElementById("dlCloud").onclick=()=>{
+  const prof=currentProfile();const {positions,indices}=makeBody(prof);
+  const dens=+(document.getElementById("pcDensity").value||0);
+  const cloud = dens>0 ? samplePointCloud(positions,indices,dens) : dedupeVerts(positions);
+  const fmt=document.getElementById("pcFormat").value;
+  const nm=(projName.value||"object");
+  let blob, ext;
+  if(fmt==="xyz"){ blob=toXYZ(cloud.pts,null); ext="xyz"; }
+  else if(fmt==="pcd"){ blob=toPCD(cloud.pts,null); ext="pcd"; }
+  else if(fmt==="ply"){ blob=toPLY(cloud.pts,null,false); ext="ply"; }
+  else { blob=toPLY(cloud.pts,null,true); ext="ply"; }
+  download(blob,nm+"."+ext);
+  toast(`Point cloud exported · <span class="mono">${cloud.n.toLocaleString()} points · ${ext.toUpperCase()}</span>`);
+};
+/* Point cloud in: parse any of the formats, show the points in the 3D view, and remember them
+   so they can be turned on as a tracing reference. A cloud has no faces, so it renders as dots. */
+let importedCloud=null;
+document.getElementById("cloudFile").onchange=async(e)=>{
+  const f=e.target.files&&e.target.files[0]; if(!f)return;
+  try{
+    const isText=/\.(xyz|pcd|pts|txt)$/i.test(f.name);
+    const buf = isText ? await f.text() : await f.arrayBuffer();
+    const cloud = parsePointCloud(f.name, buf);
+    if(!cloud.n){ toast('<span style="color:var(--warn)">No points found in that file.</span>'); return; }
+    importedCloud=cloud;
+    showCloudInView(cloud);
+    const withC = cloud.colors ? " · with colour" : "";
+    toast(`Imported <b>${f.name}</b> · <span class="mono">${cloud.n.toLocaleString()} points${withC}</span>. Showing in the 3D view.`);
+  }catch(err){ toast('<span style="color:var(--warn)">Could not read that point cloud: '+(err.message||err)+'</span>'); }
+  e.target.value="";
+};
+/* Draw an imported cloud as a THREE.Points layer, oriented like the studio's models
+   (model-Z → world-Y). Replaces any previous imported cloud. */
+let cloudPointsObj=null;
+function showCloudInView(cloud){
+  if(typeof scene==="undefined"||!scene)return;
+  if(cloudPointsObj){ scene.remove(cloudPointsObj); cloudPointsObj.geometry.dispose(); cloudPointsObj.material.dispose(); cloudPointsObj=null; }
+  const geo=new THREE.BufferGeometry();
+  geo.setAttribute("position",new THREE.BufferAttribute(cloud.pts.slice(),3));
+  let mat;
+  if(cloud.colors){
+    const col=new Float32Array(cloud.n*3);
+    for(let i=0;i<cloud.n*3;i++)col[i]=cloud.colors[i]/255;
+    geo.setAttribute("color",new THREE.BufferAttribute(col,3));
+    mat=new THREE.PointsMaterial({size:1.2,vertexColors:true,sizeAttenuation:true});
+  } else {
+    mat=new THREE.PointsMaterial({size:1.2,color:0x58c6ff,sizeAttenuation:true});
+  }
+  const pts=new THREE.Points(geo,mat);
+  pts.rotation.set(-Math.PI/2,0,0);   // same orientation STL meshes get
+  scene.add(pts); cloudPointsObj=pts;
+  try{ if(typeof requestRender==="function") requestRender(); }catch(_){}
+}
 document.getElementById("dlJson").onclick=()=>{
   download(new Blob([JSON.stringify(fullProfile(),null,2)],{type:"application/json"}),(projName.value||"object")+".profile.json");
   toast("Profile JSON exported — feed this to the backend.");
