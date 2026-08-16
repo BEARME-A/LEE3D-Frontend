@@ -1612,16 +1612,47 @@ t("detail: nested outlines shade the panel, they never excavate it", () => {
   const bare = API.makeBody({ ...SHELL, hullHollow:false, hullCrisp:1 });
   const inked = API.makeBody({ ...SHELL, hullHollow:false, hullCrisp:1,
     wallThickness:wall, features:nest });
-  ok(bare.positions.length === inked.positions.length, "same mesher output, features only stamp");
-  let maxD = 0;
-  for (let k = 0; k < bare.positions.length; k += 3) {
-    const d = Math.hypot(inked.positions[k]-bare.positions[k],
-      inked.positions[k+1]-bare.positions[k+1], inked.positions[k+2]-bare.positions[k+2]);
-    if (d > maxD) maxD = d;
-  }
-  ok(maxD > 0.3, `the detail must still press in (moved ${maxD.toFixed(2)}mm)`);
-  ok(maxD <= wall*0.5*1.35 + 0.05,
-     `five nested stamps may never dig past ~one: moved ${maxD.toFixed(2)}mm on a ${wall}mm wall`);
+  /* REWRITTEN, and the behaviour it protects is unchanged.
+     This used to require `bare.positions.length === inked.positions.length` ("features only
+     stamp") and then pair vertex k against vertex k. That was true while a feature was a push
+     applied to an already-built mesh, so the two meshes shared a vertex list. A feature is now
+     carved into the field before meshing, so the mesher legitimately returns a different
+     vertex count (4998 -> 5092 here) — and index-paired distances become meaningless the
+     moment the lists differ, comparing unrelated points.
+     What the test is actually for: five nested 2.5mm outlines must not dig five times deeper
+     than one. That is a question about the SURFACE, so ask it with a ray at each point on the
+     face and compare depths — which works whatever the topology. Measured on this build: one
+     ring 2.51mm, five nested rings 2.51mm. */
+  const single = API.makeBody({ ...SHELL, hullHollow:false, hullCrisp:1,
+    wallThickness:wall, features:[nest[0]] });
+  const flank = (g, x, z) => {                 // a side feature cuts the -y flank
+    const P = g.positions, I = g.indices;
+    let best = Infinity, found = false;
+    for (let q = 0; q < I.length; q += 3) {
+      const A = I[q]*3, B = I[q+1]*3, C = I[q+2]*3;
+      const au=P[A], av=P[A+2], bu=P[B], bv=P[B+2], cu=P[C], cv=P[C+2];
+      const den=(bv-cv)*(au-cu)+(cu-bu)*(av-cv); if (Math.abs(den) < 1e-12) continue;
+      const w0=((bv-cv)*(x-cu)+(cu-bu)*(z-cv))/den, w1=((cv-av)*(x-cu)+(au-cu)*(z-cv))/den, w2=1-w0-w1;
+      if (w0<-1e-9 || w1<-1e-9 || w2<-1e-9) continue;
+      const h = w0*P[A+1] + w1*P[B+1] + w2*P[C+1];
+      if (h < best) { best = h; found = true; }
+    }
+    return found ? best : null;
+  };
+  const deepest = g => {
+    let d = 0;
+    for (let x = 20; x < 180; x += 4) for (let z = 10; z < 75; z += 4) {
+      const a = flank(bare, x, z), b = flank(g, x, z);
+      if (a === null || b === null) continue;
+      if (b - a > d) d = b - a;
+    }
+    return d;
+  };
+  const one = deepest(single), five = deepest(inked);
+  ok(five > 0.3, `the detail must still press in (moved ${five.toFixed(2)}mm)`);
+  ok(five <= one + 0.6,
+     `five nested outlines may never dig past ~one: ${five.toFixed(2)}mm vs ${one.toFixed(2)}mm for a single`);
+  ok(five <= 2.5 + 0.6, `and never past the depth drawn: ${five.toFixed(2)}mm on a 2.5mm outline`);
 });
 t("shell: the opened underside is floor, not wall", () => {
   // The opening's edge is decided by majority vote now, so a staircase of flickering
@@ -2259,46 +2290,100 @@ t("the rim you see at an opening is a clean band, one wall thick", () => {
   // a patch in a corner of the view frame, so u and v can each be told apart from their mirror
   const PATCH = [[0.10,0.60],[0.30,0.60],[0.30,0.80],[0.10,0.80]];
 
-  // the deepest departure from the featureless body on one named face, and where it sits
-  const faceGrid = (pos, bb, ax, sgn, G = 56) => {
+  /* WHERE IS THE SURFACE — asked with a ray, not with a vertex bin.
+     faceGrid used to bucket MESH VERTICES by cell and keep the extreme one. That cannot see
+     a pocket: the pocket's own rim and walls put vertices in the same cell as the uncut face,
+     so the extreme is unchanged and a perfectly good 4mm pocket reads 0.00mm. It also cannot
+     tell a pocket from the whole face moving — both look like "the extreme shifted" — which
+     is how a 4mm pocket on a 30mm block once read as a 60mm through-cut.
+     Casting a ray answers the actual question: at this (u,v), how far in is the first
+     surface? Ray/triangle parity is also immune to the grazing-ray error that fooled the
+     earlier probes. */
+  const firstHit = (pos, idx, ax, sgn, u, v) => {
     const o1 = (ax+1)%3, o2 = (ax+2)%3;
-    const a0 = bb.min[o1], a1 = bb.max[o1], b0 = bb.min[o2], b1 = bb.max[o2];
-    const M = new Float64Array(G*G).fill(sgn > 0 ? -1e9 : 1e9);
-    for (let i = 0; i < pos.length; i += 3) {
-      const u = Math.min(G-1, Math.max(0, Math.floor((pos[i+o1]-a0)/(a1-a0)*G)));
-      const v = Math.min(G-1, Math.max(0, Math.floor((pos[i+o2]-b0)/(b1-b0)*G)));
-      const o = v*G+u, a = pos[i+ax];
-      if (sgn > 0) { if (a > M[o]) M[o] = a; } else if (a < M[o]) M[o] = a;
+    let best = sgn > 0 ? -Infinity : Infinity, found = false;
+    for (let q = 0; q < idx.length; q += 3) {
+      const A = idx[q]*3, B = idx[q+1]*3, C = idx[q+2]*3;
+      const au = pos[A+o1], av = pos[A+o2], bu = pos[B+o1], bv = pos[B+o2], cu = pos[C+o1], cv = pos[C+o2];
+      const den = (bv-cv)*(au-cu) + (cu-bu)*(av-cv);
+      if (Math.abs(den) < 1e-12) continue;
+      const w0 = ((bv-cv)*(u-cu) + (cu-bu)*(v-cv)) / den;
+      const w1 = ((cv-av)*(u-cu) + (au-cu)*(v-cv)) / den;
+      const w2 = 1 - w0 - w1;
+      if (w0 < -1e-9 || w1 < -1e-9 || w2 < -1e-9) continue;
+      const h = w0*pos[A+ax] + w1*pos[B+ax] + w2*pos[C+ax];
+      if (sgn > 0 ? h > best : h < best) { best = h; found = true; }
     }
-    return { M, G, a0, a1, b0, b1 };
+    return found ? best : null;
   };
+
+  /* How much material a feature actually removed. Volume cannot be faked by a rim vertex
+     landing in the right cell, and it is the number that says whether a carve carved. */
+  const volOf = g => { let V = 0; const P = g.positions, I = g.indices;
+    for (let q = 0; q < I.length; q += 3) {
+      const a = I[q]*3, b = I[q+1]*3, c = I[q+2]*3;
+      V += (P[a]*(P[b+1]*P[c+2]-P[c+1]*P[b+2]) - P[a+1]*(P[b]*P[c+2]-P[c]*P[b+2])
+          + P[a+2]*(P[b]*P[c+1]-P[c]*P[b+1]))/6;
+    }
+    return Math.abs(V); };
+
   const bboxOf = pos => { const mn=[1e18,1e18,1e18], mx=[-1e18,-1e18,-1e18];
     for (let i=0;i<pos.length;i+=3) for (let k=0;k<3;k++){ if(pos[i+k]<mn[k])mn[k]=pos[i+k]; if(pos[i+k]>mx[k])mx[k]=pos[i+k]; }
     return { min:mn, max:mx }; };
+
+  /* Sweep the named face with rays and report the deepest place the surface moved inward,
+     where it sits, and how much material went. `depth` is a real millimetre measurement of
+     the pocket floor, not a difference of binned extremes. */
   const dent = (view, ax, sgn, extra) => {
     const prof = blockProfile(extra || {});
-    const g0 = API.makeVisualHull(prof), bb = bboxOf(g0.positions);
+    const g0 = API.makeVisualHull(prof);
     const g1 = API.makeVisualHull({ ...prof,
       features:[{ kind:"poly", view, poly:PATCH, depth:-4, soft:0.02, name:"pit" }] });
-    const a = faceGrid(g0.positions, bb, ax, sgn), b = faceGrid(g1.positions, bb, ax, sgn);
-    let deep = 0, du = 0, dv = 0;
-    for (let v = 0; v < a.G; v++) for (let u = 0; u < a.G; u++) {
-      const o = v*a.G+u;
-      if (Math.abs(a.M[o]) > 1e8 || Math.abs(b.M[o]) > 1e8) continue;
-      const d = Math.abs(a.M[o]-b.M[o]);
-      if (d > deep) { deep = d; du = u; dv = v; }
+    const bb = bboxOf(g0.positions);
+    const o1 = (ax+1)%3, o2 = (ax+2)%3;
+    const G = 40, pad = 0.02;
+    let deep = 0, along = 0, across = 0;
+    for (let i = 0; i < G; i++) for (let j = 0; j < G; j++) {
+      const u = bb.min[o1] + (bb.max[o1]-bb.min[o1]) * (pad + (1-2*pad)*(i+0.5)/G);
+      const v = bb.min[o2] + (bb.max[o2]-bb.min[o2]) * (pad + (1-2*pad)*(j+0.5)/G);
+      const h0 = firstHit(g0.positions, g0.indices, ax, sgn, u, v);
+      const h1 = firstHit(g1.positions, g1.indices, ax, sgn, u, v);
+      /* A ray that misses the body on either build tells us nothing — and on a face whose
+         own two axes are shorter than the bounding box (a flank of a 100x30x40 block is
+         100x40 inside a box that is also 30 wide) most of the sweep is off the part. */
+      if (h0 === null || h1 === null) continue;
+      const d = sgn > 0 ? (h0 - h1) : (h1 - h0);      // positive = surface moved inward
+      if (d > deep) { deep = d; along = u; across = v; }
     }
-    return { depth: deep,
-             along: a.a0 + (du+0.5)/a.G*(a.a1-a.a0),
-             across: a.b0 + (dv+0.5)/a.G*(a.b1-a.b0) };
+    /* Name the axes by what they ARE, not by the order (ax+1, ax+2) happens to put them in.
+       For a flank (ax=y) that order gives z then x, so the "first" axis is the height and the
+       length is second — reading them as along/across the length silently transposed the
+       answer and a pocket correctly sitting at x=75..85 was reported as x=27. */
+    return { depth: deep, removed: volOf(g0) - volOf(g1),
+             x: ax===0 ? null : (o1===0 ? along : across),
+             y: ax===1 ? null : (o1===1 ? along : across),
+             z: ax===2 ? null : (o1===2 ? along : across),
+             along, across };
   };
 
   t("detail: every one of the six views presses something, somewhere", () => {
     // bottom pressed NOTHING before this — its facing test read the nose-facing component of
     // a normal that points at the floor, so every vertex failed the gate and was dropped.
-    for (const [view, ax, sgn] of [["side",1,+1], ["sideR",1,+1], ["top",2,+1],
+    /* Each view is probed on the face it actually cuts. "side" was probed on +1 — the RIGHT
+       flank — while a left-view feature cuts the left one, so it was reading a face the
+       feature never touches. Every other entry here already names its own face: sideR the
+       right flank, top +z, bottom -z, front the nose, rear the tail. */
+    for (const [view, ax, sgn] of [["side",1,-1], ["sideR",1,+1], ["top",2,+1],
                                    ["bottom",2,-1], ["front",0,+1], ["rear",0,-1]])
-      ok(dent(view, ax, sgn).depth > 0.3, `${view} pressed nothing (${dent(view,ax,sgn).depth.toFixed(2)}mm)`);
+    {
+      const d = dent(view, ax, sgn);
+      ok(d.depth > 0.3, `${view} pressed nothing (${d.depth.toFixed(2)}mm)`);
+      /* And it must have taken real material, not just nudged a surface. The patch is
+         20% x 20% of a face, 4mm deep — of order 1cm3 on this block. Volume cannot be
+         faked by a rim vertex landing in a convenient cell, which is exactly how the old
+         metric let a carve that removed almost nothing pass for years. */
+      ok(d.removed > 300, `${view} removed almost no material (${(d.removed/1000).toFixed(2)}cm3)`);
+    }
   });
 
   t("detail: the right-side view presses the flank, not the nose", () => {
@@ -2311,18 +2396,28 @@ t("the rim you see at an opening is a clean band, one wall thick", () => {
     // the right drawing is traced standing on the far side, so u runs the other way —
     // the same flip sidePolyR gets. u 0.10..0.30 must come out at x 70..90 on a 100mm body.
     const d = dent("sideR", 1, +1);
-    ok(d.across > 65 && d.across < 95, `expected x 70..90, got ${d.across.toFixed(1)}`);
-    const left = dent("side", 1, +1);
-    ok(left.across > 5 && left.across < 35, `left view should stay at x 10..30, got ${left.across.toFixed(1)}`);
+    // the ray sweep reports position along the face's own two axes: for a flank (ax=y) the
+    // first is x. `across` is the other one, which for this face is z, not the length.
+    ok(d.x > 65 && d.x < 95, `expected x 70..90, got ${d.x.toFixed(1)}`);
+    /* The LEFT drawing cuts the LEFT flank, which is -y. This probed +y — the far side — and
+       so measured a face the feature never touches. It passed only while the old vertex-bin
+       metric was reporting the whole face's extreme, which moves for reasons unrelated to
+       where the pocket is. */
+    const left = dent("side", 1, -1);
+    ok(left.depth > 0.3, `left view pressed nothing (${left.depth.toFixed(2)}mm)`);
+    ok(left.x > 5 && left.x < 35, `left view should stay at x 10..30, got ${left.x.toFixed(1)}`);
   });
 
   t("detail: a plan-view feature lands on the side of the body it was drawn on", () => {
     // features store v screen-up; topPoly stores v screen-down. Read one in the other's
     // frame and the detail appears on the opposite flank, which looks plausible and isn't.
+    // top face is ax=z, so its two axes are x then y: the flank we care about is `across`
     const d = dent("top", 2, +1);          // v 0.60..0.80 -> y (1-v)*W -> 12..24 -> centred -18..-6
-    ok(d.across < 0, `top-view detail is on the wrong flank: y=${d.across.toFixed(1)}, expected negative`);
+    ok(d.depth > 0.3, `top view pressed nothing (${d.depth.toFixed(2)}mm)`);
+    ok(d.y < 0, `top-view detail is on the wrong flank: y=${d.y.toFixed(1)}, expected negative`);
     const b = dent("bottom", 2, -1);
-    ok(b.across < 0, `bottom-view detail is on the wrong flank: y=${b.across.toFixed(1)}`);
+    ok(b.depth > 0.3, `bottom view pressed nothing (${b.depth.toFixed(2)}mm)`);
+    ok(b.y < 0, `bottom-view detail is on the wrong flank: y=${b.y.toFixed(1)}`);
   });
 
   t("detail: with two side drawings each one presses only its own flank", () => {
@@ -2467,11 +2562,11 @@ t("a badge stands proud of the panel, and the frame has no say in it", () => {
   ok(build(-2.5, 4.1).proud < 0.15, "pressing in doesn't push anything outward");
 });
 
-t("a raise too steep for its own width is limited, not folded", () => {
-  // The gradient limiter still governs how sharply the surface may bend. A narrow shape
-  // therefore cannot reach an arbitrary height — it would need near-vertical sides, which is
-  // exactly the fold the limiter exists to prevent. Measured: on a 100mm face a 40mm badge
-  // reaches the full 6mm, 25mm reaches 4.6, 15mm reaches 3.4, 8mm reaches 1.7.
+t("a badge reaches the height asked for, whatever its width", () => {
+  // RENAMED. It was "a raise too steep for its own width is limited, not folded", describing
+  // the surface-stamp era: a push spread over the vertices under an outline, so a small
+  // outline had too few to push and the badge came out short (40mm -> 6.0, 15mm -> 3.4,
+  // 8mm -> 1.7, all asked for 6). A field boss is a real prism and has no such limit.
   const BOX = [[0,0],[1,0],[1,1],[0,1]];
   const sq = s => [[0.5-s/2,0.5-s/2],[0.5+s/2,0.5-s/2],[0.5+s/2,0.5+s/2],[0.5-s/2,0.5+s/2]];
   const proud = span => {
@@ -2486,11 +2581,30 @@ t("a raise too steep for its own width is limited, not folded", () => {
     watertight(g, `raised badge ${(span*100).toFixed(0)}mm wide`);
     return m - n;
   };
-  const wide = proud(0.40), narrow = proud(0.08);
-  near(wide, 6, 0.4, "a wide badge reaches the height asked for");
-  ok(narrow < wide - 1,
-     `a narrow one is limited by its own width (${narrow.toFixed(2)} vs ${wide.toFixed(2)})`);
-  ok(narrow > 0.5, "but it is still raised, not flattened away");
+  /* THIS CONTRACT CHANGED, DELIBERATELY, AND THE CHANGE IS THE POINT OF THE CARVE REWRITE.
+     The old surface-stamp could not raise a narrow badge to full height — a push is spread
+     over the vertices under the outline, so a small outline had few vertices to push and the
+     badge came out short. Measured on the old build: 20mm wide -> 6.00mm, 10mm -> 3.93mm,
+     4mm -> 1.67mm, all asked for 6mm. That was never a designed limit; it was the stamp
+     running out of mesh, and the old test pinned it as though it were intended.
+     A field boss is a real prism, so it reaches the height asked for whatever its width, and
+     it stays watertight doing it (checked below at three widths, boundary 0 non-manifold 0,
+     with a flat top face). Asking for 6mm and getting 6mm is the correct behaviour and the
+     reason this work was done.
+     What still needs pinning is that a badge is a BADGE and not a spike: full height, flat
+     top, sound geometry, and no wider than drawn plus its own soft margin. */
+  for (const span of [0.40, 0.20, 0.08]) {
+    const h = proud(span);                      // proud() already asserts watertight
+    near(h, 6, 0.5, `a ${(span*50).toFixed(0)}mm badge must reach the 6mm asked for`);
+  }
+  /* SUB-CELL FEATURES ARE A REAL LIMIT, recorded rather than papered over. A footprint
+     narrower than a voxel has no grid point inside it, so the mesher has nothing to place a
+     surface from and extrapolates: a 2mm badge on this 2.86mm grid built 9.29mm proud, and
+     converged to 5.78mm once the cell was 1.43mm. Nothing in the field can fix that — it is
+     the grid. Pinned here so the day someone makes the mesher adaptive, this tightens. */
+  const tiny = proud(0.04);                     // 2mm on a 2.86mm grid
+  ok(tiny > 4, `a sub-cell badge is coarse but must not vanish (${tiny.toFixed(2)}mm)`);
+  ok(tiny < 11, `and must not run away entirely (${tiny.toFixed(2)}mm for a 6mm ask)`);
 });
 
 
@@ -3203,14 +3317,43 @@ t("every absolute unit an SVG can state is understood", () => {
        `a body with no thin sections must not be thinned (${(vn/1000).toFixed(0)} vs ${(vo/1000).toFixed(0)} cm3)`);
   });
 
-  t("adaptive wall: it does thin a genuinely thin slab", () => {
-    // a wide flat slab: 200 x 100 x 22, with a wall that cannot fit twice inside it
+  t("adaptive wall: a thin slab is left SOLID, which is the right answer", () => {
+    /* REWRITTEN, and the old assertion was the wrong requirement.
+       It demanded that a slab too thin for two walls plus a cavity must be thinned so that
+       something hollow survives. Measured across ten geometries, that is not a trade worth
+       making: at an 8mm wall it saves 1.6-4.3% of material and opens a thin patch every time,
+       down to 0.00mm, and at a 4mm wall it does nothing whatsoever.
+       Field hollow already answers this case correctly by leaving such a section SOLID — a rib
+       too thin to hold a cavity should be a rib, not a shell with a hole in it. So what needs
+       protecting is that the plain build stays clean, not that the flag keeps acting. */
     const slab = extra => boxy({ topProfile:[[0,22]], widthProfile:[[0,50]],
                                  wallThickness:8, ...extra });
     const off = API.makeVisualHull(slab({}));
-    const on  = API.makeVisualHull(slab({ adaptiveWall:true }));
-    ok(vol(on) < vol(off) * 0.99,
-       `a slab too thin for two full walls should thin (${(vol(on)/1000).toFixed(1)} vs ${(vol(off)/1000).toFixed(1)} cm3)`);
+    watertight(off, "thin slab, plain build");
+    /* FIXED — this used to assert the opposite, and the note is kept because the shape of the
+       bug is worth remembering. A cavity too narrow for the grid did NOT simply fail to
+       appear: it collapsed into slivers of air a fraction of a millimetre wide hugging the
+       inside of the wall, leaving an 82.8mm solid core that still reported itself hollow. The
+       safety gate then measured across a sliver and called it a 0.28mm wall — a false alarm
+       on what was really a solid block.
+       Now an air cell with material on BOTH sides along any axis is filled, so a cavity that
+       cannot open becomes properly solid and one that can, opens. */
+    /* The bar is a sliver, not a thin spot. Half a millimetre of air pretending to be a
+       cavity is the defect; a genuinely thinner-than-asked wall at an end cap is a different
+       matter and is what the safety gate is for. Measured on this fixture: the middle now
+       carries two clean 7.1mm walls with a proper gap, and the worst remaining reading is
+       1.38mm at x=10 — the end of the body, not the cavity. */
+    const s = API.shellWallStats(off.positions, off.indices, { wall:8, samples:900 });
+    ok(!s.worstPatch || s.worstPatch.min > 0.5,
+       `the cavity must not fragment into slivers ` +
+       `(worst ${s.worstPatch ? s.worstPatch.min.toFixed(2)+"mm" : "none"})`);
+    /* KNOWN, NOT FIXED: this fixture still shows a 0.64mm layer inside its END CAP, where the
+       cavity fragments along the length rather than across it. The one-cell bilateral fill
+       does not reach it. Widening to two cells does reach it — and closes a 6mm cavity that
+       was building correctly, and opens a 2mm gap in a 10mm one that was clean. Measured, and
+       reverted: the end-cap artefact is smaller than the damage the wider rule does. */
+    ok(s.median > 8*0.85,
+       `and the wall itself must still be sound (median ${s.median.toFixed(2)}mm of 8mm)`);
   });
 
   t("adaptive wall: it never thins past what can be meshed or printed", () => {
@@ -3395,6 +3538,1101 @@ t("every absolute unit an SVG can state is understood", () => {
     const out = API.resamplePoly(pts, 40);
     ok(out.length <= 40, "meets the budget");
     ok(devOf(pts, out) < 1.5, `circle deviated ${devOf(pts, out).toFixed(2)}mm — it is cutting the corner`);
+  });
+}
+
+
+// =====================================================================================
+// FACE-LOCALITY — a feature may only touch what its own view can see.
+//
+// This is the test that was missing. A front-view pocket 2.5mm deep was carving material at
+// EVERY x from 0 to 200 on a 200mm body, and the suite passed 217/217 while it did. The
+// cause: the carve looked for the nearest surface along its cut axis, but a body with open
+// wheel arches is several separate runs of material along that axis — profile_7 at wheel
+// height is solid at x 1..32, 85..106 and 174..200 — so a point inside an arch pillar has a
+// surface millimetres away that no front view can see past.
+//
+// The body here is deliberately shaped like that problem: a saddle, high at both ends and
+// low in the middle, so a top view sees two different surfaces at two different heights.
+// =====================================================================================
+{
+  const BOX = [[0,0],[1,0],[1,1],[0,1]];
+  const SADDLE = [[0,0],[1,0],[1,1],[0.62,1],[0.62,0.35],[0.38,0.35],[0.38,1],[0,1]];
+  const body = extra => ({ mode:"projection", length:120, stations:52, hullCrisp:1, hullRes:60,
+    sidePoly:SADDLE, topPoly:BOX, frontPoly:BOX, topProfile:[[0,60]], widthProfile:[[0,40]],
+    hullHollow:false, closedBottom:true, features:null, ...extra });
+
+  // highest material on the line (x,y) — the roof a top view sees at that spot
+  const roofAt = (g, x, y) => {
+    const P = g.positions, I = g.indices;
+    let best = -Infinity, found = false;
+    for (let q = 0; q < I.length; q += 3) {
+      const A=I[q]*3, B=I[q+1]*3, C=I[q+2]*3;
+      const au=P[A], av=P[A+1], bu=P[B], bv=P[B+1], cu=P[C], cv=P[C+1];
+      const den=(bv-cv)*(au-cu)+(cu-bu)*(av-cv); if (Math.abs(den) < 1e-12) continue;
+      const w0=((bv-cv)*(x-cu)+(cu-bu)*(y-cv))/den, w1=((cv-av)*(x-cu)+(au-cu)*(y-cv))/den, w2=1-w0-w1;
+      if (w0<-1e-9 || w1<-1e-9 || w2<-1e-9) continue;
+      const h = w0*P[A+2] + w1*P[B+2] + w2*P[C+2];
+      if (h > best) { best = h; found = true; }
+    }
+    return found ? best : null;
+  };
+
+  t("face-local: a top-view pocket cuts every roof it can see, from that roof", () => {
+    const D = 3;
+    const plain = API.makeVisualHull(body({}));
+    const cut = API.makeVisualHull(body({
+      features:[{ kind:"poly", view:"top", poly:BOX, depth:-D, soft:0.02, name:"skim" }] }));
+    /* The saddle floor sits 39mm below the high roof. Both are visible from above, so both
+       must be cut — each measured from ITSELF, not from whichever surface happens to be
+       nearest in 3D and not from the top of the bounding box. */
+    for (const [x, where] of [[10,"front deck"], [60,"saddle floor"], [110,"rear deck"]]) {
+      const a = roofAt(plain, x, 0), b = roofAt(cut, x, 0);
+      ok(a !== null && b !== null, `${where}: both builds must have a roof at x=${x}`);
+      near(a - b, D, 1.1, `${where} (x=${x}) should lose ${D}mm from its own surface`);
+    }
+  });
+
+  t("face-local: a pocket may not reach past its own depth", () => {
+    /* The failure this exists for: material moving far from the face the feature was drawn
+       on. Nothing anywhere may move by more than the depth asked for, plus a grid cell. */
+    const D = 3, cell = 120/60;
+    const plain = API.makeVisualHull(body({}));
+    const cut = API.makeVisualHull(body({
+      features:[{ kind:"poly", view:"top", poly:BOX, depth:-D, soft:0.02, name:"skim" }] }));
+    /* Measured DOWNWARD only. A "highest material" probe is not a depth gauge at a vertical
+       step: shortening the saddle wall by 3mm moves the step sideways, so one column that used
+       to read the low floor now reads the high deck and the difference reads as a 33mm jump
+       UPWARD. That is the wall being cut correctly, not material moving 33mm — the giveaway is
+       the sign. A pocket may only ever take material away, so only downward movement is a
+       depth, and a column that gained height is a step that shifted. */
+    let worst = 0, at = 0;
+    for (let x = 4; x <= 116; x += 2) {
+      const a = roofAt(plain, x, 0), b = roofAt(cut, x, 0);
+      if (a === null || b === null) continue;
+      const lost = a - b;                        // positive = material removed here
+      if (lost > worst) { worst = lost; at = x; }
+    }
+    ok(worst <= D + cell,
+       `nothing may lose more than ${D}mm + a cell; worst was ${worst.toFixed(2)}mm at x=${at}`);
+    /* And the step may only ever move INTO the pocket, never outward — a column that gains
+       height by more than the depth would mean the carve had built something. */
+    let gained = 0;
+    for (let x = 4; x <= 116; x += 2) {
+      const a = roofAt(plain, x, 0), b = roofAt(cut, x, 0);
+      if (a === null || b === null) continue;
+      const g2 = b - a;
+      if (g2 > gained) gained = g2;
+    }
+    ok(gained <= (roofAt(plain, 10, 0) - roofAt(plain, 60, 0)) + D + cell,
+       `no column may rise more than the saddle step allows (rose ${gained.toFixed(2)}mm)`);
+  });
+
+  t("face-local: depth is measured from the face, not from the bounding box", () => {
+    /* The distinction that took longest to get right. A body is not a solid block: at wheel
+       height this saddle is two separate runs of material along the cut axis. The face a view
+       sees is the OUTERMOST material on each line — so a surface standing proud deep inside
+       the bounding box is still visible and still gets cut, while a surface hiding behind
+       another one does not, however close it is.
+       Checked here on the low middle: it sits 39mm inside the box from above, and must be cut
+       exactly as much as the roof that stands at the box's own top. Measuring from the box
+       would leave it untouched; measuring from the nearest surface in any direction would cut
+       things the view cannot see. */
+    const D = 3;
+    const plain = API.makeVisualHull(body({}));
+    const cut = API.makeVisualHull(body({
+      features:[{ kind:"poly", view:"top", poly:BOX, depth:-D, soft:0.02, name:"skim" }] }));
+    const roof = roofAt(plain, 10, 0), floor = roofAt(plain, 60, 0);
+    ok(roof - floor > 30, `the fixture must actually have a saddle (${(roof-floor).toFixed(1)}mm)`);
+    const cutRoof = roof - roofAt(cut, 10, 0), cutFloor = floor - roofAt(cut, 60, 0);
+    ok(Math.abs(cutRoof - cutFloor) < 0.8,
+       `both surfaces must lose the same amount: roof ${cutRoof.toFixed(2)}mm vs floor ${cutFloor.toFixed(2)}mm`);
+  });
+
+  t("face-local: a flat surface at the drawing's own height is found exactly", () => {
+    /* A surface is where the field is ZERO, and a roof built to the drawing's own height puts
+       samples exactly on it. A scan testing `v < 0` walks straight past that and reports the
+       face half a step low, which made a 3mm pocket cut 3.99mm — while a saddle a few
+       millimetres lower came out at a correct 3.00mm. That difference between two surfaces on
+       the same model is the signature, so it is pinned here directly. */
+    const D = 3;
+    const plain = API.makeVisualHull(body({}));
+    const cut = API.makeVisualHull(body({
+      features:[{ kind:"poly", view:"top", poly:BOX, depth:-D, soft:0.02, name:"skim" }] }));
+    // topProfile says 60, so the roof sits exactly on a round number: the awkward case
+    near(roofAt(plain, 30, 0), 60, 0.3, "the fixture's roof should sit at its drawn height");
+    near(roofAt(plain, 30, 0) - roofAt(cut, 30, 0), D, 0.5,
+         "a pocket on a roof at the drawn height must cut the depth asked for");
+  });
+
+  t("face-local: a pocket removes material, it never adds any", () => {
+    // 153 pockets on the real model once made it HEAVIER, because the carve was reaching
+    // surfaces the view could not see and the shell grew lining around them.
+    const vol = g => { let V=0; const P=g.positions, I=g.indices;
+      for (let q=0;q<I.length;q+=3){ const a=I[q]*3,b=I[q+1]*3,c=I[q+2]*3;
+        V += (P[a]*(P[b+1]*P[c+2]-P[c+1]*P[b+2]) - P[a+1]*(P[b]*P[c+2]-P[c]*P[b+2])
+            + P[a+2]*(P[b]*P[c+1]-P[c]*P[b+1]))/6; }
+      return Math.abs(V); };
+    const plain = vol(API.makeVisualHull(body({})));
+    const cut = vol(API.makeVisualHull(body({
+      features:[{ kind:"poly", view:"top", poly:BOX, depth:-3, soft:0.02, name:"skim" }] })));
+    ok(cut < plain, `a pocket must remove material (${(plain/1000).toFixed(1)} -> ${(cut/1000).toFixed(1)} cm3)`);
+    ok(cut > plain * 0.8, "but it must not gut the body");
+  });
+}
+
+
+// =====================================================================================
+// A POCKET IN A SHELL MUST NOT THIN THE WALL UNDER IT.
+//
+// Carving a hollow part is where a detail turns into a weak spot. If the outer skin is
+// pushed in and the cavity left where it was, the wall under the pocket is thinner by the
+// pocket's depth — and nothing in a watertight check or a volume total shows it. Measured on
+// a 5mm-wall box with a 3mm pocket: the vertex-push path left 2.5mm of wall under the pocket
+// while reporting a 5.00mm median everywhere else, because the thin patch is a small part of
+// a big surface. The field carve keeps 5.1mm because the cavity follows the pocket down.
+//
+// This also explains why a carved shell holds MORE material, which looks wrong until you see
+// where it goes: the pocket's own lining is new wall. A shell that gets LIGHTER when you
+// carve it has taken the material out of its wall.
+// =====================================================================================
+{
+  const BOX = [[0,0],[1,0],[1,1],[0,1]];
+  const PATCH = [[0.25,0.30],[0.75,0.30],[0.75,0.70],[0.25,0.70]];
+  const WALL = 5, DEPTH = 3;
+  const blk = extra => ({ length:120, topProfile:[[0,60],[1,60]], widthProfile:[[0,40],[1,40]],
+    sidePoly:BOX, topPoly:BOX, frontPoly:BOX, hullCrisp:1, wallThickness:WALL,
+    hullHollow:true, closedBottom:true, hullRes:64, mode:"projection", features:null, ...extra });
+
+  // every z the surface is crossed on the way straight down through (x,y)
+  const columnAt = (g, x, y) => {
+    const P = g.positions, I = g.indices, hits = [];
+    for (let q = 0; q < I.length; q += 3) {
+      const A=I[q]*3, B=I[q+1]*3, C=I[q+2]*3;
+      const au=P[A], av=P[A+1], bu=P[B], bv=P[B+1], cu=P[C], cv=P[C+1];
+      const den=(bv-cv)*(au-cu)+(cu-bu)*(av-cv); if (Math.abs(den) < 1e-12) continue;
+      const w0=((bv-cv)*(x-cu)+(cu-bu)*(y-cv))/den, w1=((cv-av)*(x-cu)+(au-cu)*(y-cv))/den, w2=1-w0-w1;
+      if (w0<-1e-9 || w1<-1e-9 || w2<-1e-9) continue;
+      hits.push(w0*P[A+2] + w1*P[B+2] + w2*P[C+2]);
+    }
+    hits.sort((a,b) => a-b);
+    const keep = [];
+    for (const h of hits) if (!keep.length || h - keep[keep.length-1] > 1e-3) keep.push(h);
+    return keep;
+  };
+
+  t("carved shell: the wall under a pocket is still the wall you asked for", () => {
+    const g = API.makeVisualHull(blk({
+      features:[{ kind:"poly", view:"top", poly:PATCH, depth:-DEPTH, soft:0.02, name:"dish" }] }));
+    const col = columnAt(g, 60, 0);          // straight down the middle of the pocket
+    ok(col.length >= 4, `expected floor, cavity, skin: got crossings [${col.map(v=>v.toFixed(1))}]`);
+    const skin = col[col.length-1], cavity = col[col.length-2];
+    const under = skin - cavity;
+    ok(under > WALL * 0.8,
+       `the wall under the pocket is ${under.toFixed(2)}mm, asked for ${WALL}mm ` +
+       `(skin ${skin.toFixed(1)}, cavity roof ${cavity.toFixed(1)})`);
+  });
+
+  t("carved shell: the pocket is the depth drawn, measured on the outside", () => {
+    const plain = API.makeVisualHull(blk({}));
+    const g = API.makeVisualHull(blk({
+      features:[{ kind:"poly", view:"top", poly:PATCH, depth:-DEPTH, soft:0.02, name:"dish" }] }));
+    const outside = columnAt(plain, 60, 0), inside = columnAt(g, 60, 0);
+    near(outside[outside.length-1] - inside[inside.length-1], DEPTH, 0.6,
+         "the pocket must be as deep as it was drawn");
+  });
+
+  t("carved shell: carving does not make the shell lighter", () => {
+    /* The counter-intuitive one, and the reason it is written down. A pocket removes material
+       from the OUTSIDE, but a uniform wall following it adds the pocket's lining — so a
+       correctly carved shell weighs slightly MORE, not less. A shell that gets lighter has
+       taken the difference out of its own wall thickness. */
+    const vol = g => { let V=0; const P=g.positions, I=g.indices;
+      for (let q=0;q<I.length;q+=3){ const a=I[q]*3,b=I[q+1]*3,c=I[q+2]*3;
+        V += (P[a]*(P[b+1]*P[c+2]-P[c+1]*P[b+2]) - P[a+1]*(P[b]*P[c+2]-P[c]*P[b+2])
+            + P[a+2]*(P[b]*P[c+1]-P[c]*P[b+1]))/6; }
+      return Math.abs(V); };
+    const plain = vol(API.makeVisualHull(blk({})));
+    const carved = vol(API.makeVisualHull(blk({
+      features:[{ kind:"poly", view:"top", poly:PATCH, depth:-DEPTH, soft:0.02, name:"dish" }] })));
+    ok(carved > plain * 0.995,
+       `a carved shell must not lose material from its wall (${(plain/1000).toFixed(1)} -> ${(carved/1000).toFixed(1)} cm3)`);
+    ok(carved < plain * 1.10, "but the lining should be a small addition, not a filled body");
+  });
+}
+
+
+// =====================================================================================
+// TWO CARVING ENGINES, SELECTABLE. Neither is going away yet.
+//
+// "field" (default): features are prisms in the distance field, meshed together with the
+//   body. Exact depths, and the cavity follows a pocket so the wall under it survives.
+// "stamp": the original. Mesh the plain body, then push the vertices under each outline.
+//   Much faster on a heavily-featured model, and the only path the exact-STEP backend has
+//   ever seen, so it stays reachable.
+//
+// Measured on the real 153-feature model: field 10.1s / wall p10 3.87mm, stamp 3.1s / wall
+// p10 2.21mm, against a 4.2mm request. That is the trade, and it is the user's to make on
+// real parts — so the job of these tests is to keep BOTH paths honest, not to pick one.
+// =====================================================================================
+{
+  const BOX = [[0,0],[1,0],[1,1],[0,1]];
+  const PATCH = [[0.25,0.30],[0.75,0.30],[0.75,0.70],[0.25,0.70]];
+  const blk = extra => ({ length:120, topProfile:[[0,60],[1,60]], widthProfile:[[0,40],[1,40]],
+    sidePoly:BOX, topPoly:BOX, frontPoly:BOX, hullCrisp:1, wallThickness:5,
+    hullHollow:true, closedBottom:true, hullRes:64, mode:"projection", features:null, ...extra });
+  const DISH = [{ kind:"poly", view:"top", poly:PATCH, depth:-3, soft:0.02, name:"dish" }];
+
+  const column = (g, x, y) => {
+    const P = g.positions, I = g.indices, hits = [];
+    for (let q = 0; q < I.length; q += 3) {
+      const A=I[q]*3, B=I[q+1]*3, C=I[q+2]*3;
+      const au=P[A], av=P[A+1], bu=P[B], bv=P[B+1], cu=P[C], cv=P[C+1];
+      const den=(bv-cv)*(au-cu)+(cu-bu)*(av-cv); if (Math.abs(den) < 1e-12) continue;
+      const w0=((bv-cv)*(x-cu)+(cu-bu)*(y-cv))/den, w1=((cv-av)*(x-cu)+(au-cu)*(y-cv))/den, w2=1-w0-w1;
+      if (w0<-1e-9 || w1<-1e-9 || w2<-1e-9) continue;
+      hits.push(w0*P[A+2] + w1*P[B+2] + w2*P[C+2]);
+    }
+    hits.sort((a,b) => a-b);
+    const keep = [];
+    for (const h of hits) if (!keep.length || h - keep[keep.length-1] > 1e-3) keep.push(h);
+    return keep;
+  };
+
+  t("carve mode: the field engine is the default", () => {
+    const dflt = API.makeVisualHull(blk({ features:DISH }));
+    const field = API.makeVisualHull(blk({ features:DISH, carveMode:"field" }));
+    ok(dflt.indices.length === field.indices.length, "an unset carveMode must mean field");
+    const stamp = API.makeVisualHull(blk({ features:DISH, carveMode:"stamp" }));
+    ok(stamp.indices.length !== field.indices.length || stamp.volume !== field.volume,
+       "stamp must actually be a different engine, not an alias");
+  });
+
+  t("carve mode: both engines cut a pocket where it was drawn", () => {
+    const plain = API.makeVisualHull(blk({}));
+    const roof = column(plain, 60, 0).slice(-1)[0];
+    for (const carveMode of ["field", "stamp"]) {
+      const g = API.makeVisualHull(blk({ features:DISH, carveMode }));
+      const c = column(g, 60, 0);
+      const cut = roof - c[c.length-1];
+      ok(cut > 1.5, `${carveMode}: the pocket must be visible (cut ${cut.toFixed(2)}mm)`);
+      ok(cut <= 3 + 1, `${carveMode}: and no deeper than drawn (cut ${cut.toFixed(2)}mm)`);
+      watertight(g, `carveMode ${carveMode}`);
+      // and it must not disturb the far side of the body
+      const edge = column(g, 8, 0);
+      near(edge[edge.length-1], roof, 0.6, `${carveMode}: material away from the pocket must not move`);
+    }
+  });
+
+  t("carve mode: neither engine may run twice", () => {
+    /* Both engines active at once builds every feature twice — a real bug this project
+       shipped, where a 2mm badge stood 4.40mm proud. Selecting one must silence the other,
+       so a raise stands exactly as proud as it was asked to. */
+    const RAISE = [{ kind:"poly", view:"top", poly:PATCH, depth:2, soft:0.02, name:"pad" }];
+    const plain = API.makeVisualHull(blk({}));
+    const roof = column(plain, 60, 0).slice(-1)[0];
+    for (const carveMode of ["field", "stamp"]) {
+      const g = API.makeVisualHull(blk({ features:RAISE, carveMode }));
+      /* Highest vertex, not a ray cast. A ray through one point can land on a degenerate
+         sliver and come back NaN, which then reads as a failure of the thing being tested
+         rather than of the probe — it did exactly that here while both engines were in fact
+         building the raise correctly. The tallest point is the boss top by definition. */
+      let top = -Infinity;
+      for (let i = 2; i < g.positions.length; i += 3)
+        if (g.positions[i] > top) top = g.positions[i];
+      const proud = top - roof;
+      ok(proud === proud, `${carveMode}: the mesh must have a finite top (got ${proud})`);
+      ok(proud > 2 * 0.5, `${carveMode}: a 2mm raise must actually stand proud (${proud.toFixed(2)}mm)`);
+      ok(proud <= 2 * 1.75,
+         `${carveMode}: a 2mm raise stands ${proud.toFixed(2)}mm — near double means both engines ran`);
+    }
+  });
+
+  t("carve mode: the field engine keeps the wall under a pocket", () => {
+    /* The reason field is the default. Both are watertight and both report a healthy MEDIAN
+       wall, because a thin patch is a small part of a big surface — so the difference only
+       shows if you look underneath the pocket specifically. */
+    const under = carveMode => {
+      const g = API.makeVisualHull(blk({ features:DISH, carveMode }));
+      const c = column(g, 60, 0);
+      return c[c.length-1] - c[c.length-2];
+    };
+    const f = under("field"), st = under("stamp");
+    ok(f > 5 * 0.8, `field must keep the 5mm wall under the pocket (got ${f.toFixed(2)}mm)`);
+    ok(f > st + 1, `and must beat the stamp path there (field ${f.toFixed(2)} vs stamp ${st.toFixed(2)})`);
+  });
+
+  t("carve mode: every coordinate the mesher emits is a number", () => {
+    /* NaN in a mesh is not a rounding problem, it is a file no slicer can open — and nothing
+       else in this suite would notice, because a NaN vertex still counts as a vertex and the
+       edge bookkeeping still balances. It happened here: `look` clamped its table coordinates
+       only when asked to GROW, so a sample from the padding ring kept a negative index,
+       `T.d[-3]` came back undefined, and undefined arithmetic is NaN. 8,644 poisoned field
+       nodes, 1,488 NaN coordinates in the finished mesh.
+       It showed on RAISES only, because a raise enlarges the grid padding to make room for
+       the boss and pushes sampling further outside the tables than a plain body ever goes —
+       which is why it survived until a test built a raise on a hollow shell. */
+    const RAISE = [{ kind:"poly", view:"top", poly:PATCH, depth:2, soft:0.02, name:"pad" }];
+    for (const carveMode of ["field", "stamp"]) {
+      for (const feats of [null, DISH, RAISE]) {
+        const g = API.makeVisualHull(blk({ features:feats, carveMode }));
+        let bad = 0;
+        for (let i = 0; i < g.positions.length; i++)
+          if (!(g.positions[i] === g.positions[i])) bad++;
+        ok(bad === 0,
+           `${carveMode}, ${feats ? (feats[0].depth > 0 ? "raise" : "pocket") : "plain"}: ` +
+           `${bad} non-finite coordinates in the mesh`);
+      }
+    }
+  });
+
+  t("carve mode: a pocket never makes the body taller", () => {
+    // a carve removes material, so nothing may end up outside the plain body's envelope.
+    // The rim of a pocket is where a dual contour is most tempted to place a vertex high.
+    const plain = API.makeVisualHull(blk({}));
+    let top = -Infinity;
+    for (let i = 2; i < plain.positions.length; i += 3)
+      if (plain.positions[i] > top) top = plain.positions[i];
+    for (const carveMode of ["field", "stamp"]) {
+      const g = API.makeVisualHull(blk({ features:DISH, carveMode }));
+      let t2 = -Infinity;
+      for (let i = 2; i < g.positions.length; i += 3)
+        if (g.positions[i] > t2) t2 = g.positions[i];
+      ok(t2 <= top + 1.0,
+         `${carveMode}: carved body reaches ${t2.toFixed(2)}mm, plain body ${top.toFixed(2)}mm`);
+    }
+  });
+
+  t("carve mode: with no features at all the engines agree exactly", () => {
+    const a = API.makeVisualHull(blk({ carveMode:"field" }));
+    const b = API.makeVisualHull(blk({ carveMode:"stamp" }));
+    ok(a.indices.length === b.indices.length, "same triangle count on a plain body");
+    near(a.volume, b.volume, 1, "and the same material");
+  });
+}
+
+
+// =====================================================================================
+// THE MESH ITSELF MUST BE SOUND — not just closed.
+//
+// "Watertight" is a low bar. A mesh can have every edge shared by exactly two faces and still
+// be unfit to print: coordinates that are not numbers, faces with no area, or two separate
+// sheets welded together at a point. Each of those has shipped in this project at least once,
+// and none of them is caught by boundary/non-manifold counts:
+//   - 1,488 NaN coordinates rode through every existing check (a NaN vertex still balances).
+//   - 94 zero-area faces from a dual contour placing two cells' vertices on the same point.
+//   - and the fix for THOSE, welding blindly, merged the outer skin to the inner wall on a
+//     thin-walled shell and made 8 non-manifold edges — the fin problem wearing a hat.
+// So this block checks the mesh as an object, on a spread of models, in both carve engines.
+// =====================================================================================
+{
+  const BOX = [[0,0],[1,0],[1,1],[0,1]];
+  const PATCH = [[0.25,0.30],[0.75,0.30],[0.75,0.70],[0.25,0.70]];
+  const shapes = {
+    "plain block": {},
+    "thin wall":   { wallThickness:1.5 },
+    "thick wall":  { wallThickness:9 },
+    "solid":       { hullHollow:false },
+    "open bottom": { closedBottom:false },
+  };
+  const feats = {
+    "no features": null,
+    "pocket": [{ kind:"poly", view:"top", poly:PATCH, depth:-3, soft:0.02, name:"dish" }],
+    "raise":  [{ kind:"poly", view:"top", poly:PATCH, depth:2,  soft:0.02, name:"pad" }],
+  };
+  const blk = extra => ({ length:120, topProfile:[[0,60],[1,60]], widthProfile:[[0,40],[1,40]],
+    sidePoly:BOX, topPoly:BOX, frontPoly:BOX, hullCrisp:1, wallThickness:5,
+    hullHollow:true, closedBottom:true, hullRes:56, mode:"projection", features:null, ...extra });
+
+  const audit = g => {
+    const P = g.positions, I = g.indices;
+    let nonFinite = 0, zeroArea = 0, collapsed = 0;
+    for (let i = 0; i < P.length; i++) if (!Number.isFinite(P[i])) nonFinite++;
+    for (let q = 0; q < I.length; q += 3) {
+      const a = I[q], b = I[q+1], c = I[q+2];
+      if (a === b || b === c || c === a) { collapsed++; continue; }
+      const A = a*3, B = b*3, C = c*3;
+      const ux=P[B]-P[A], uy=P[B+1]-P[A+1], uz=P[B+2]-P[A+2];
+      const vx=P[C]-P[A], vy=P[C+1]-P[A+1], vz=P[C+2]-P[A+2];
+      if (0.5*Math.hypot(uy*vz-uz*vy, uz*vx-ux*vz, ux*vy-uy*vx) < 1e-9) zeroArea++;
+    }
+    // edges, for the closure check
+    const seen = new Map();
+    for (let q = 0; q < I.length; q += 3) {
+      const t = [I[q], I[q+1], I[q+2]];
+      for (let k = 0; k < 3; k++) {
+        const a = t[k], b = t[(k+1)%3], key = a < b ? a+"_"+b : b+"_"+a;
+        seen.set(key, (seen.get(key)||0) + 1);
+      }
+    }
+    let boundary = 0, nonMani = 0;
+    for (const c of seen.values()) { if (c === 1) boundary++; else if (c > 2) nonMani++; }
+    return { nonFinite, zeroArea, collapsed, boundary, nonMani, tris: I.length/3 };
+  };
+
+  for (const [sName, sExtra] of Object.entries(shapes)) {
+    t(`mesh audit: ${sName} is sound in both engines, with and without features`, () => {
+      for (const carveMode of ["field", "stamp"]) {
+        for (const [fName, f] of Object.entries(feats)) {
+          const g = API.makeVisualHull(blk({ ...sExtra, features:f, carveMode }));
+          const r = audit(g);
+          const who = `${sName} / ${fName} / ${carveMode}`;
+          ok(r.tris > 0, `${who}: produced no triangles at all`);
+          ok(r.nonFinite === 0, `${who}: ${r.nonFinite} non-finite coordinates`);
+          ok(r.collapsed === 0, `${who}: ${r.collapsed} faces with a repeated corner`);
+          ok(r.zeroArea === 0, `${who}: ${r.zeroArea} faces with no area`);
+          ok(r.boundary === 0, `${who}: ${r.boundary} open edges — the solid has a hole`);
+          ok(r.nonMani === 0, `${who}: ${r.nonMani} non-manifold edges — sheets are welded together`);
+        }
+      }
+    });
+  }
+
+  t("mesh audit: welding may not merge the inner wall into the outer skin", () => {
+    /* The specific trap. Coincident vertices are welded so a dual contour's duplicate points
+       do not leave zero-area faces — but on a thin shell the outer skin and the inner wall
+       can put vertices at the SAME point without being the same surface. Welding those pinches
+       the shell into a non-manifold edge. A shell must stay two closed sheets. */
+    for (const wallThickness of [1.5, 2.5, 5, 9]) {
+      const g = API.makeVisualHull(blk({ wallThickness }));
+      const r = audit(g);
+      ok(r.nonMani === 0, `wall ${wallThickness}: ${r.nonMani} non-manifold edges after welding`);
+      ok(r.boundary === 0, `wall ${wallThickness}: ${r.boundary} open edges after welding`);
+      ok(r.zeroArea === 0, `wall ${wallThickness}: ${r.zeroArea} zero-area faces survived`);
+    }
+  });
+}
+
+
+// =====================================================================================
+// THE MESH ITSELF MUST BE SOUND — not just closed.
+//
+// "Watertight" is a low bar. A mesh can have every edge shared by exactly two faces and still
+// be unfit to print: coordinates that are not numbers, faces with no area, or two separate
+// sheets welded together at a point. Each of those has shipped in this project at least once,
+// and none of them is caught by boundary/non-manifold counts:
+//   - 1,488 NaN coordinates rode through every existing check (a NaN vertex still balances).
+//   - 94 zero-area faces from a dual contour placing two cells' vertices on the same point.
+//   - and the fix for THOSE, welding blindly, merged the outer skin to the inner wall on a
+//     thin-walled shell and made 8 non-manifold edges — the fin problem wearing a hat.
+// So this block checks the mesh as an object, on a spread of models, in both carve engines.
+// =====================================================================================
+{
+  const BOX = [[0,0],[1,0],[1,1],[0,1]];
+  const PATCH = [[0.25,0.30],[0.75,0.30],[0.75,0.70],[0.25,0.70]];
+  const shapes = {
+    "plain block": {},
+    "thin wall":   { wallThickness:1.5 },
+    "thick wall":  { wallThickness:9 },
+    "solid":       { hullHollow:false },
+    "open bottom": { closedBottom:false },
+  };
+  const feats = {
+    "no features": null,
+    "pocket": [{ kind:"poly", view:"top", poly:PATCH, depth:-3, soft:0.02, name:"dish" }],
+    "raise":  [{ kind:"poly", view:"top", poly:PATCH, depth:2,  soft:0.02, name:"pad" }],
+  };
+  const blk = extra => ({ length:120, topProfile:[[0,60],[1,60]], widthProfile:[[0,40],[1,40]],
+    sidePoly:BOX, topPoly:BOX, frontPoly:BOX, hullCrisp:1, wallThickness:5,
+    hullHollow:true, closedBottom:true, hullRes:56, mode:"projection", features:null, ...extra });
+
+  const audit = g => {
+    const P = g.positions, I = g.indices;
+    let nonFinite = 0, zeroArea = 0, collapsed = 0;
+    for (let i = 0; i < P.length; i++) if (!Number.isFinite(P[i])) nonFinite++;
+    for (let q = 0; q < I.length; q += 3) {
+      const a = I[q], b = I[q+1], c = I[q+2];
+      if (a === b || b === c || c === a) { collapsed++; continue; }
+      const A = a*3, B = b*3, C = c*3;
+      const ux=P[B]-P[A], uy=P[B+1]-P[A+1], uz=P[B+2]-P[A+2];
+      const vx=P[C]-P[A], vy=P[C+1]-P[A+1], vz=P[C+2]-P[A+2];
+      if (0.5*Math.hypot(uy*vz-uz*vy, uz*vx-ux*vz, ux*vy-uy*vx) < 1e-9) zeroArea++;
+    }
+    // edges, for the closure check
+    const seen = new Map();
+    for (let q = 0; q < I.length; q += 3) {
+      const t = [I[q], I[q+1], I[q+2]];
+      for (let k = 0; k < 3; k++) {
+        const a = t[k], b = t[(k+1)%3], key = a < b ? a+"_"+b : b+"_"+a;
+        seen.set(key, (seen.get(key)||0) + 1);
+      }
+    }
+    let boundary = 0, nonMani = 0;
+    for (const c of seen.values()) { if (c === 1) boundary++; else if (c > 2) nonMani++; }
+    return { nonFinite, zeroArea, collapsed, boundary, nonMani, tris: I.length/3 };
+  };
+
+  for (const [sName, sExtra] of Object.entries(shapes)) {
+    t(`mesh audit: ${sName} is sound in both engines, with and without features`, () => {
+      for (const carveMode of ["field", "stamp"]) {
+        for (const [fName, f] of Object.entries(feats)) {
+          const g = API.makeVisualHull(blk({ ...sExtra, features:f, carveMode }));
+          const r = audit(g);
+          const who = `${sName} / ${fName} / ${carveMode}`;
+          ok(r.tris > 0, `${who}: produced no triangles at all`);
+          ok(r.nonFinite === 0, `${who}: ${r.nonFinite} non-finite coordinates`);
+          ok(r.collapsed === 0, `${who}: ${r.collapsed} faces with a repeated corner`);
+          ok(r.zeroArea === 0, `${who}: ${r.zeroArea} faces with no area`);
+          ok(r.boundary === 0, `${who}: ${r.boundary} open edges — the solid has a hole`);
+          ok(r.nonMani === 0, `${who}: ${r.nonMani} non-manifold edges — sheets are welded together`);
+        }
+      }
+    });
+  }
+
+  t("mesh audit: welding may not merge the inner wall into the outer skin", () => {
+    /* The specific trap. Coincident vertices are welded so a dual contour's duplicate points
+       do not leave zero-area faces — but on a thin shell the outer skin and the inner wall
+       can put vertices at the SAME point without being the same surface. Welding those pinches
+       the shell into a non-manifold edge. A shell must stay two closed sheets. */
+    for (const wallThickness of [1.5, 2.5, 5, 9]) {
+      const g = API.makeVisualHull(blk({ wallThickness }));
+      const r = audit(g);
+      ok(r.nonMani === 0, `wall ${wallThickness}: ${r.nonMani} non-manifold edges after welding`);
+      ok(r.boundary === 0, `wall ${wallThickness}: ${r.boundary} open edges after welding`);
+      ok(r.zeroArea === 0, `wall ${wallThickness}: ${r.zeroArea} zero-area faces survived`);
+    }
+  });
+}
+
+
+// =====================================================================================
+// THE WALL SAFETY GATE — for parts that have to hold, not just look right.
+//
+// A percentile cannot see a local thin patch, and that is exactly the failure that matters.
+// Measured on a 5mm-wall box with one 3mm pocket: the vertex-push carve leaves 2.5mm of wall
+// under the pocket and the MEDIAN still reads 5.00mm, because the thin patch is a small share
+// of a big surface. `min` is no better — it is a single reading, so it swings with the sample
+// count (4.91mm at 300 samples, 3.76mm at 2000, on a shell that is genuinely fine).
+//
+// So the gate clusters under-spec readings by proximity and reports the worst REGION with its
+// position: "a 2.5mm patch, here", which is something a person can act on. A lone reading is
+// noise — a ray grazing a fold — so a cluster needs at least three.
+// =====================================================================================
+{
+  const BOX = [[0,0],[1,0],[1,1],[0,1]];
+  const PATCH = [[0.25,0.30],[0.75,0.30],[0.75,0.70],[0.25,0.70]];
+  const blk = extra => ({ length:120, topProfile:[[0,60],[1,60]], widthProfile:[[0,40],[1,40]],
+    sidePoly:BOX, topPoly:BOX, frontPoly:BOX, hullCrisp:1, wallThickness:5,
+    hullHollow:true, closedBottom:true, hullRes:64, mode:"projection", features:null, ...extra });
+  const DISH = [{ kind:"poly", view:"top", poly:PATCH, depth:-3, soft:0.02, name:"dish" }];
+  const gate = (p, wall) => {
+    const g = API.makeVisualHull(blk(p));
+    return API.shellWallStats(g.positions, g.indices, { wall, samples:1200 });
+  };
+
+  t("wall gate: a healthy shell is not flagged, at any wall", () => {
+    /* A gate that cries wolf gets switched off, so the false-positive case is tested first
+       and on a spread — a thin wall, a thick one, an open underside and a solid body. */
+    for (const [label, extra, wall] of [
+      ["wall 5", {}, 5], ["wall 9", { wallThickness:9 }, 9], ["wall 3", { wallThickness:3 }, 3],
+      ["open bottom", { closedBottom:false }, 5], ["solid", { hullHollow:false }, 5],
+    ]) {
+      const s = gate(extra, wall);
+      ok(!s.worstPatch,
+         `${label}: flagged ${s.worstPatch && s.worstPatch.min.toFixed(2)}mm over ` +
+         `${s.worstPatch && s.worstPatch.n} readings on a shell that is fine`);
+    }
+  });
+
+  t("wall gate: a thin patch under a pocket is found, and located", () => {
+    const s = gate({ features:DISH, carveMode:"stamp" }, 5);
+    ok(s.worstPatch, "the 2.5mm patch under the pocket must be reported");
+    ok(s.worstPatch.min < 5 * 0.75,
+       `and reported as thin: ${s.worstPatch.min.toFixed(2)}mm against a 5mm wall`);
+    ok(s.worstPatch.n >= 3, "a patch is several readings, not one stray");
+    // the pocket is centred on the body, x 30..90 of 120, and near the roof
+    const [x, , z] = s.worstPatch.at;
+    ok(x > 25 && x < 95, `the patch should be under the pocket, got x=${x.toFixed(0)}`);
+    ok(z > 40, `and near the roof it was carved into, got z=${z.toFixed(0)}`);
+  });
+
+  t("wall gate: the median would have missed it entirely", () => {
+    /* Pinning WHY the gate exists. If this ever starts failing because the median moved, the
+       gate can be simplified — but until then a percentile is not a safety check. */
+    const s = gate({ features:DISH, carveMode:"stamp" }, 5);
+    near(s.median, 5, 0.4, "the median reads healthy on a shell with a 2.5mm patch");
+    ok(s.worstPatch && s.worstPatch.min < s.median - 1.5,
+       "which is exactly why the patch is reported separately");
+  });
+
+  t("wall gate: the field engine leaves no thin patch where the stamp does", () => {
+    // the reason field is the default: the cavity follows the pocket, so the wall survives
+    const f = gate({ features:DISH, carveMode:"field" }, 5);
+    const st = gate({ features:DISH, carveMode:"stamp" }, 5);
+    ok(st.worstPatch, "stamp must still flag (if not, this test has lost its subject)");
+    ok(!f.worstPatch,
+       `field should leave no thin patch, got ${f.worstPatch && f.worstPatch.min.toFixed(2)}mm`);
+  });
+}
+
+
+// =====================================================================================
+// CARVING FROM ANY ANGLE — the bridge to building from photographs.
+//
+// The engine already carves the intersection of what the outlines allow: material only where
+// a point lands inside side AND top AND front. Nothing in that rule needs the views to be
+// axis-aligned, so `p.extraViews` accepts silhouettes from arbitrary directions and folds
+// them into the same intersection.
+//
+// This is the shape of the photo problem. Current image-to-3D pipelines work by generating
+// several consistent ORTHOGRAPHIC views and reconstructing from those — which is exactly this
+// input. Three axis views is a person tracing; N arbitrary views is a camera.
+//
+// The test is a sphere, because a sphere is a circle from EVERY direction, so the right
+// answer is known in closed form and every view is the same outline. Three orthogonal views
+// of a sphere do not give a sphere: they give the intersection of three cylinders, which is
+// 8(2-sqrt2)r^3 — about 12% too fat. Adding views must shrink it monotonically toward
+// 4/3 pi r^3 and never past it. One number checks the whole projection.
+// =====================================================================================
+{
+  const R = 40;
+  const ring = (n, r) => Array.from({length:n}, (_, i) => {
+    const a = i/n*Math.PI*2; return [Math.cos(a)*r, Math.sin(a)*r];
+  });
+  const unitRing = n => Array.from({length:n}, (_, i) => {
+    const a = i/n*Math.PI*2; return [0.5 + Math.cos(a)*0.5, 0.5 + Math.sin(a)*0.5];
+  });
+  // evenly spread directions (golden angle), so added views are not clustered on one side
+  const spread = n => Array.from({length:n}, (_, i) => {
+    const y = 1 - (i + 0.5)/n*2;
+    const r = Math.sqrt(Math.max(0, 1 - y*y));
+    const th = Math.PI*(1 + Math.sqrt(5))*i;
+    return [Math.cos(th)*r, y, Math.sin(th)*r];
+  });
+  const ball = extra => ({
+    mode:"projection", length:2*R, stations:52, hullCrisp:1, hullRes:60,
+    sidePoly:unitRing(64), topPoly:unitRing(64), frontPoly:unitRing(64),
+    topProfile:[[0,2*R]], widthProfile:[[0,R]],
+    hullHollow:false, closedBottom:true, features:null, ...extra });
+  const vol = g => { let V=0; const P=g.positions, I=g.indices;
+    for (let q=0;q<I.length;q+=3){ const a=I[q]*3,b=I[q+1]*3,c=I[q+2]*3;
+      V += (P[a]*(P[b+1]*P[c+2]-P[c+1]*P[b+2]) - P[a+1]*(P[b]*P[c+2]-P[c]*P[b+2])
+          + P[a+2]*(P[b]*P[c+1]-P[c]*P[b+1]))/6; }
+    return Math.abs(V)/1000; };
+  const SPHERE = 4/3*Math.PI*R*R*R/1000;
+
+  t("any-angle: with no extra views nothing changes at all", () => {
+    const a = API.makeVisualHull(ball({}));
+    const b = API.makeVisualHull(ball({ extraViews:[] }));
+    ok(a.indices.length === b.indices.length, "an empty view list must be a no-op");
+    // and a malformed view must be ignored rather than throwing or carving nonsense
+    const c = API.makeVisualHull(ball({ extraViews:[{ dir:[0,0,0], poly:ring(8,R) }, { poly:null }] }));
+    ok(c.indices.length === a.indices.length, "a view with no direction or no outline is skipped");
+  });
+
+  t("any-angle: extra views only ever remove material", () => {
+    /* A silhouette says where the object CANNOT be. Carving with one more can only take
+       material away — if a build ever grows, the projection has put the outline in the wrong
+       place and the intersection has become a union somewhere. */
+    let prev = Infinity;
+    for (const n of [0, 4, 10]) {
+      const v = vol(API.makeVisualHull(ball({
+        extraViews: spread(n).map(d => ({ dir:d, poly:ring(48, R) })) })));
+      ok(v <= prev + 0.5, `${n} views gave ${v.toFixed(1)}cm3, more than the ${prev.toFixed(1)}cm3 before it`);
+      prev = v;
+    }
+  });
+
+  t("any-angle: more views converge on the true sphere", () => {
+    const none = vol(API.makeVisualHull(ball({})));
+    const many = vol(API.makeVisualHull(ball({
+      extraViews: spread(14).map(d => ({ dir:d, poly:ring(48, R) })) })));
+    /* Three axis views give the three-cylinder solid, ~12% fat. That is not a defect — it is
+       the most three silhouettes can know. */
+    ok(none > SPHERE*1.05,
+       `3 axis views should be visibly fat (${none.toFixed(1)} vs sphere ${SPHERE.toFixed(1)}cm3)`);
+    ok(Math.abs(many - SPHERE) < SPHERE*0.03,
+       `14 views should land within 3% of a sphere (${many.toFixed(1)} vs ${SPHERE.toFixed(1)}cm3)`);
+    ok(many < none, "and be tighter than three views alone");
+  });
+
+  t("any-angle: a carve from many angles is still a printable solid", () => {
+    const g = API.makeVisualHull(ball({
+      extraViews: spread(12).map(d => ({ dir:d, poly:ring(48, R) })) }));
+    watertight(g, "sphere carved from 15 directions");
+    for (let i = 0; i < g.positions.length; i++)
+      ok(Number.isFinite(g.positions[i]), "every coordinate must be a number");
+  });
+
+  t("perspective: a camera far enough away IS an orthographic view", () => {
+    /* The cheapest check that the perspective divide is even wired: push the lens away and
+       the cone becomes a slab, so the answer must walk onto the orthographic one. If the
+       divide were missing this would be wrong at every distance; if the image distance were
+       not scaled back to millimetres it would drift as the camera moves. */
+    const dirs = spread(12);
+    const ortho = vol(API.makeVisualHull(ball({
+      extraViews: dirs.map(d => ({ dir:d, poly:ring(48, R) })) })));
+    const far = vol(API.makeVisualHull(ball({
+      extraViews: dirs.map(u => {
+        const D = 20000;
+        return { from:[u[0]*D,u[1]*D,u[2]*D], dir:[-u[0],-u[1],-u[2]],
+                 poly: ring(48, R/Math.sqrt(D*D - R*R)) };
+      }) })));
+    ok(Math.abs(far - ortho) < 0.5,
+       `a lens 20m away should match the orthographic carve (${far.toFixed(2)} vs ${ortho.toFixed(2)} cm3)`);
+  });
+
+  t("perspective: the silhouette is the tangent cone, not the naive radius", () => {
+    /* The mistake this exists to catch. A sphere of radius r at distance D does NOT project to
+       a circle of radius r/D — the silhouette is where the TANGENT cone touches, giving
+       sin(theta)=r/D and an image radius of tan(asin(r/D)) = r/sqrt(D^2-r^2), always larger.
+       Fed the correct radius the carve lands on the sphere; fed r/D it comes out 14% small at
+       close range. Both are checked, because only the pair proves the divide is right rather
+       than the tolerance being loose. */
+    const D = 120;
+    const cams = radius => spread(14).map(u => ({
+      from:[u[0]*D,u[1]*D,u[2]*D], dir:[-u[0],-u[1],-u[2]], poly: ring(48, radius) }));
+    const right = vol(API.makeVisualHull(ball({ extraViews: cams(R/Math.sqrt(D*D - R*R)) })));
+    const wrong = vol(API.makeVisualHull(ball({ extraViews: cams(R/D) })));
+    ok(Math.abs(right - SPHERE) < SPHERE*0.03,
+       `tangent-cone silhouettes should give a sphere (${right.toFixed(1)} vs ${SPHERE.toFixed(1)} cm3)`);
+    ok(wrong < SPHERE*0.93,
+       `and the naive r/D should visibly under-carve (${wrong.toFixed(1)} cm3) — if it does not, ` +
+       `the perspective divide is not doing anything`);
+  });
+
+  t("perspective: material behind the lens is never kept", () => {
+    /* A silhouette cone opens FORWARD from the lens. Points behind the camera project to the
+       same image coordinates as points in front of it — a divide by a negative depth flips
+       the sign — so without an explicit check a camera placed inside the model would carve a
+       mirror image of the silhouette out the back of it. */
+    const g = API.makeVisualHull(ball({ extraViews:[{
+      from:[0,0,-10], dir:[0,0,1], poly: ring(24, 0.35) }] }));
+    watertight(g, "camera close in front of the body");
+    let behind = 0;
+    for (let i = 0; i < g.positions.length; i += 3)
+      if (g.positions[i+2] < -R - 5) behind++;   // material well behind the lens
+    ok(behind === 0, `${behind} vertices were kept behind the camera`);
+  });
+
+  t("any-angle: the outline is read in the view's own frame, not the world's", () => {
+    /* A HALF-width outline from one direction must flatten the ball along THAT direction and
+       leave the perpendicular alone. If the projection axes were wrong, the flattening would
+       land on some other axis — which a bounding box catches immediately. */
+    const squash = { dir:[0,0,1], poly:ring(48, R).map(([u,v]) => [u*0.5, v]) };
+    const g = API.makeVisualHull(ball({ extraViews:[squash] }));
+    const mn = [1e9,1e9,1e9], mx = [-1e9,-1e9,-1e9];
+    for (let i = 0; i < g.positions.length; i += 3)
+      for (let k = 0; k < 3; k++) {
+        if (g.positions[i+k] < mn[k]) mn[k] = g.positions[i+k];
+        if (g.positions[i+k] > mx[k]) mx[k] = g.positions[i+k];
+      }
+    const size = [mx[0]-mn[0], mx[1]-mn[1], mx[2]-mn[2]];
+    // looking down z, the view's own u axis is squashed; z itself must be untouched
+    ok(size[2] > R*1.8, `the look direction must NOT be flattened (z spans ${size[2].toFixed(1)}mm)`);
+    const flattened = Math.min(size[0], size[1]);
+    ok(flattened < R*1.4, `one perpendicular axis must be squashed (smallest span ${flattened.toFixed(1)}mm)`);
+  });
+}
+
+
+// =====================================================================================
+// A DETAIL TOO SMALL FOR THE GRID — say so, rather than hand back the wrong shape.
+//
+// A dual contour places one vertex per cell. A feature narrower than a voxel has no grid
+// point inside it, so the mesher has nothing to place a surface from and extrapolates.
+// Measured on a 200mm body at res 70 (2.86mm cells), asking for a 6mm-tall badge:
+//     20mm wide -> 6.00mm proud     correct
+//     10mm wide -> 6.00mm proud     correct
+//      4mm wide -> 6.00mm proud     correct
+//      2mm wide -> 9.29mm proud     WRONG, and silently so
+//      1mm wide -> 0.15mm proud     effectively gone
+// A finer grid is the only real remedy and it is cubic in cost, so the choice belongs to the
+// person — but they can only choose if they are told.
+// =====================================================================================
+{
+  const BOX = [[0,0],[1,0],[1,1],[0,1]];
+  const sq = f => [[0.5-f/2,0.5-f/2],[0.5+f/2,0.5-f/2],[0.5+f/2,0.5+f/2],[0.5-f/2,0.5+f/2]];
+  const blk = extra => ({ length:200, topProfile:[[0,80],[1,80]], widthProfile:[[0,50],[1,50]],
+    sidePoly:BOX, topPoly:BOX, frontPoly:BOX, hullCrisp:1, wallThickness:4,
+    hullHollow:true, closedBottom:true, hullRes:70, mode:"projection", features:null, ...extra });
+  const badge = f => [{ kind:"poly", view:"front", poly:sq(f), depth:6, soft:0.03, name:"badge" }];
+
+  t("too small: a detail the grid can resolve is not flagged", () => {
+    /* False positives first. Warning about a detail that came out perfectly would teach
+       someone to ignore the banner, which is worse than not having it. */
+    for (const f of [0.40, 0.20, 0.08]) {
+      const g = API.makeVisualHull(blk({ features:badge(f) }));
+      ok(!g.tooSmall, `a ${(f*50).toFixed(0)}mm badge builds correctly and must not be flagged`);
+    }
+    ok(!API.makeVisualHull(blk({})).tooSmall, "a model with no features has nothing to flag");
+  });
+
+  t("too small: a detail narrower than the grid IS flagged, with its size", () => {
+    const g = API.makeVisualHull(blk({ features:badge(0.04) }));   // 2mm on a 2.86mm grid
+    ok(g.tooSmall && g.tooSmall.length === 1, "the 2mm badge must be reported");
+    const one = g.tooSmall[0];
+    ok(one.name === "badge", `and named, so it can be found (got ${JSON.stringify(one.name)})`);
+    ok(one.span < one.cell*1.5, `span ${one.span.toFixed(2)}mm must be under the ${(one.cell*1.5).toFixed(2)}mm bar`);
+    ok(one.cell > 0, "and the cell size reported, so the message can say what would fix it");
+  });
+
+  t("too small: the bar is the cell, not a number of millimetres", () => {
+    /* What decides this is the detail measured against the CELL, and the cell divides the
+       model — so scaling the whole thing changes nothing, and only the detail's share of the
+       body matters. Two things worth knowing, both learned by getting this test wrong twice:
+       raising hullRes cannot rescue a small detail (resolution is capped at 80), and shrinking
+       the model cannot either (the cell shrinks with it). The only remedies are a bigger
+       detail or a coarser one, which is why this is reported rather than fixed. */
+    const mk = (f, len) => API.makeVisualHull(blk({ features:badge(f), length:len,
+      topProfile:[[0,len*0.4],[1,len*0.4]], widthProfile:[[0,len*0.25],[1,len*0.25]] }));
+    // same fraction of the body, wildly different absolute sizes: the verdict must agree
+    const a = mk(0.04, 200), b = mk(0.04, 40);
+    ok(!!a.tooSmall === !!b.tooSmall,
+       "the same detail as a fraction of the body must get the same verdict at any scale");
+    // and the verdict must turn over when the detail's SHARE grows
+    const wide = mk(0.20, 200);
+    ok(a.tooSmall && !wide.tooSmall,
+       "a bigger share of the same body must clear the bar that a smaller share failed");
+    // the reported cell is what the message needs to say what would fix it
+    if (a.tooSmall) ok(a.tooSmall[0].cell > 0 && a.tooSmall[0].span < a.tooSmall[0].cell*1.5,
+       "the report carries both the detail's size and the cell it must beat");
+  });
+
+  t("too small: it survives the path the app actually calls", () => {
+    // the readout reads this off makeBody, not makeVisualHull, so the field has to travel
+    const g = API.makeBody(blk({ features:badge(0.04) }));
+    ok(g.tooSmall && g.tooSmall.length === 1, "makeBody must pass the report through");
+  });
+}
+
+
+// =====================================================================================
+// BUILD QUALITY — the way out of "this detail is too small".
+//
+// Cell size decides the smallest detail that can exist: a feature narrower than about one and
+// a half cells has no grid point inside it, so the mesher extrapolates and hands back the
+// wrong shape. Before this setting there was NO way to build a 2mm badge on a 200mm car at
+// any setting the app allowed, and the warning could only say so.
+//
+// Quality scales the resolution REQUEST as well as the cap. Scaling the cap alone would do
+// nothing for most models — profile_7 asks for 72 and is capped at 80, so a higher cap leaves
+// it exactly where it was.
+// =====================================================================================
+{
+  const BOX = [[0,0],[1,0],[1,1],[0,1]];
+  const sq = f => [[0.5-f/2,0.5-f/2],[0.5+f/2,0.5-f/2],[0.5+f/2,0.5+f/2],[0.5-f/2,0.5+f/2]];
+  const blk = extra => ({ length:200, topProfile:[[0,80],[1,80]], widthProfile:[[0,50],[1,50]],
+    sidePoly:BOX, topPoly:BOX, frontPoly:BOX, hullCrisp:1, wallThickness:4,
+    hullHollow:true, closedBottom:true, hullRes:70, mode:"projection", features:null, ...extra });
+  const badge = f => [{ kind:"poly", view:"front", poly:sq(f), depth:6, soft:0.03, name:"badge" }];
+  const proud = (f, q) => {
+    const g = API.makeVisualHull(blk({ features:badge(f), hullQuality:q }));
+    const b = API.makeVisualHull(blk({ hullQuality:q }));
+    let m = -1e9, n = -1e9;
+    for (let i = 0; i < g.positions.length; i += 3) if (g.positions[i] > m) m = g.positions[i];
+    for (let i = 0; i < b.positions.length; i += 3) if (b.positions[i] > n) n = b.positions[i];
+    return m - n;
+  };
+
+  t("quality: the default is Normal, and Normal is exactly today's build", () => {
+    /* The setting must be free to exist. Anything that changes an unset build changes every
+       saved model at once. */
+    const a = API.makeVisualHull(blk({ features:badge(0.20) }));
+    const b = API.makeVisualHull(blk({ features:badge(0.20), hullQuality:"normal" }));
+    ok(a.indices.length === b.indices.length, "an unset quality must mean Normal");
+    near(a.volume, b.volume, 1, "and produce the same material");
+    const junk = API.makeVisualHull(blk({ features:badge(0.20), hullQuality:"enormous" }));
+    ok(junk.indices.length === a.indices.length, "an unrecognised value falls back to Normal");
+  });
+
+  t("quality: the steps really are coarser and finer", () => {
+    const n = f => API.makeVisualHull(blk({ features:badge(0.20), hullQuality:f })).indices.length;
+    ok(n("fast") < n("normal"), "Fast must build a lighter mesh than Normal");
+    ok(n("fine") > n("normal"), "and Fine a heavier one");
+  });
+
+  t("quality: Fine builds a detail that Normal cannot", () => {
+    /* The reason the setting exists. A 2mm badge on a 200mm body is under Normal's cell, so
+       the mesher extrapolates: measured, 9.29mm proud of a 6mm ask. At Fine it is resolvable
+       and comes out right. */
+    const atNormal = proud(0.04, "normal"), atFine = proud(0.04, "fine");
+    ok(Math.abs(atNormal - 6) > 1.5,
+       `Normal should get this visibly wrong (${atNormal.toFixed(2)}mm for a 6mm ask) — ` +
+       `if it does not, this test has lost its subject`);
+    ok(Math.abs(atFine - 6) < 1.0,
+       `Fine should build it correctly (${atFine.toFixed(2)}mm for a 6mm ask)`);
+  });
+
+  t("quality: the report names the step that would fix it, and only when one would", () => {
+    const flagged = API.makeVisualHull(blk({ features:badge(0.04) }));
+    ok(flagged.tooSmall, "a 2mm badge is still flagged at Normal");
+    ok(flagged.tooSmall[0].fixedBy === "fine",
+       `and must name Fine as the way out (got ${JSON.stringify(flagged.tooSmall[0].fixedBy)})`);
+    /* And it must not promise a rescue that does not exist. A detail small enough that no step
+       reaches it has to say so, or someone follows the advice and is told the same thing
+       again. */
+    const hopeless = API.makeVisualHull(blk({ features:badge(0.015) }));
+    ok(hopeless.tooSmall, "a 0.75mm badge is flagged");
+    ok(!hopeless.tooSmall[0].fixedBy,
+       "and must NOT name a step, because none of them is enough");
+    const atFine = API.makeVisualHull(blk({ features:badge(0.015), hullQuality:"fine" }));
+    ok(atFine.tooSmall && !atFine.tooSmall[0].fixedBy,
+       "still flagged at Fine, with nothing finer to offer");
+  });
+
+  t("quality: every step still builds a sound solid", () => {
+    for (const q of ["fast", "normal", "fine"]) {
+      const g = API.makeVisualHull(blk({ features:badge(0.20), hullQuality:q }));
+      watertight(g, `quality ${q}`);
+      for (let i = 0; i < g.positions.length; i++)
+        ok(Number.isFinite(g.positions[i]), `quality ${q}: every coordinate must be a number`);
+    }
+  });
+}
+
+
+// =====================================================================================
+// ADAPTIVE WALL — retired, and pinned so it cannot come back by accident.
+//
+// The idea was to thin the wall where a section is too thin to hold two walls plus a cavity,
+// so something hollow survives instead of the section going solid. Measured across ten
+// geometries (heights 20/26/40/60/90mm, walls 4 and 8mm):
+//     wall 4mm — saved 0.0% every time. It never acted.
+//     wall 8mm — saved 1.6-4.3%, and opened a thin patch EVERY time, down to 0.00mm.
+// Not one clean win. That is not a trade between material and strength, it is a few percent
+// of filament for a hole in the wall. The case it was written for is already handled: field
+// hollow leaves a too-thin section solid by construction, which is the right answer.
+//
+// The flag is still honoured so an old saved file loads unchanged. These tests exist so that
+// if anyone turns it back on, they find out what it does before a customer does.
+// =====================================================================================
+{
+  const BOX = [[0,0],[1,0],[1,1],[0,1]];
+  const body = (h, wall, extra) => ({ length:160, topProfile:[[0,h],[1,h]], widthProfile:[[0,50],[1,50]],
+    sidePoly:BOX, topPoly:BOX, frontPoly:BOX, hullCrisp:1, wallThickness:wall,
+    hullHollow:true, closedBottom:true, hullRes:64, mode:"projection", features:null, ...extra });
+  const column = (g, x, y) => {
+    const P = g.positions, I = g.indices, hits = [];
+    for (let q = 0; q < I.length; q += 3) {
+      const A=I[q]*3, B=I[q+1]*3, C=I[q+2]*3;
+      const au=P[A], av=P[A+1], bu=P[B], bv=P[B+1], cu=P[C], cv=P[C+1];
+      const den=(bv-cv)*(au-cu)+(cu-bu)*(av-cv); if (Math.abs(den) < 1e-12) continue;
+      const w0=((bv-cv)*(x-cu)+(cu-bu)*(y-cv))/den, w1=((cv-av)*(x-cu)+(au-cu)*(y-cv))/den, w2=1-w0-w1;
+      if (w0<-1e-9 || w1<-1e-9 || w2<-1e-9) continue;
+      hits.push(w0*P[A+2] + w1*P[B+2] + w2*P[C+2]);
+    }
+    hits.sort((a,b) => a-b);
+    const keep = [];
+    for (const h of hits) if (!keep.length || h - keep[keep.length-1] > 1e-3) keep.push(h);
+    return keep;
+  };
+
+  t("adaptive wall: it is off unless a saved file explicitly asks for it", () => {
+    const off = API.makeVisualHull(body(40, 8, {}));
+    const explicit = API.makeVisualHull(body(40, 8, { adaptiveWall:false }));
+    ok(off.indices.length === explicit.indices.length, "the default must be off");
+    const on = API.makeVisualHull(body(40, 8, { adaptiveWall:true }));
+    ok(on.indices.length !== off.indices.length || on.volume !== off.volume,
+       "and an old file that asks for it must still get it, not be silently ignored");
+  });
+
+  t("adaptive wall: a thick body keeps its full wall", () => {
+    /* The bug that retired it, and the one thing that MUST stay fixed regardless. `reach()`
+       marches for the far side of a section and used to return its own march limit when it
+       did not find one — described in the code as making "thick" the safe default. It is the
+       opposite: the caller adds two opposing reaches and thins when the sum is small, so a
+       small stand-in for an unknown makes a THICK section read thin. A point 2.5mm under the
+       roof of a 90mm body reported 11.25mm to the far side instead of 87.5, and the wall was
+       cut from 8mm to 5mm on a body with nothing thin about it. Infinity is the honest answer
+       for "further than I looked". */
+    const g = API.makeVisualHull(body(90, 8, { adaptiveWall:true }));
+    const c = column(g, 80, 0);
+    ok(c.length >= 4, `expected floor, cavity, roof: got [${c.map(v=>v.toFixed(1))}]`);
+    const floor = c[1] - c[0], roof = c[c.length-1] - c[c.length-2];
+    ok(floor > 8*0.9, `floor wall must survive on a 90mm body (${floor.toFixed(2)}mm of 8mm)`);
+    ok(roof  > 8*0.9, `roof wall must survive on a 90mm body (${roof.toFixed(2)}mm of 8mm)`);
+  });
+
+  t("adaptive wall: turning it on is still not free, and the gate says so", () => {
+    /* Pinning WHY it is retired. If this ever stops failing to find a patch, adaptive wall has
+       become safe and can be reconsidered — but it should be a deliberate finding, not a
+       silent drift. */
+    const on = API.makeVisualHull(body(26, 8, { adaptiveWall:true }));
+    const s = API.shellWallStats(on.positions, on.indices, { wall:8, samples:1200 });
+    ok(s.worstPatch,
+       "adaptive wall is expected to open a thin patch — if it no longer does, re-measure the " +
+       "sweep in STATUS and reconsider retiring it");
+  });
+
+  t("adaptive wall: the plain build it replaced is clean", () => {
+    // the comparison that makes retiring it the right call rather than a shrug
+    for (const h of [26, 40, 90]) {
+      const g = API.makeVisualHull(body(h, 8, {}));
+      const s = API.shellWallStats(g.positions, g.indices, { wall:8, samples:1200 });
+      ok(!s.worstPatch,
+         `a ${h}mm body without adaptive wall must have no thin patch ` +
+         `(found ${s.worstPatch && s.worstPatch.min.toFixed(2)}mm)`);
+    }
+  });
+}
+
+
+// =====================================================================================
+// A CAVITY THAT CANNOT OPEN MUST CLOSE, not collapse into slivers.
+//
+// Where the gap between the two walls is narrower than the grid can carry, the cavity used to
+// collapse into slivers of air a fraction of a millimetre wide, hugging the inside of the
+// wall. Measured on a 200mm slab at an 8mm wall: a 6mm cavity left an 82.8mm SOLID core with
+// a 0.24mm air sliver down each side. Two things wrong with that — the part reported itself
+// hollow when it was a solid block, and the wall safety gate measured across a sliver and
+// called it a 0.28mm wall, a false alarm on a part with nothing wrong with it.
+//
+// An air cell with material on BOTH sides along any axis is a sliver, not a cavity. Bilateral
+// by design: the same distinction the adaptive wall got wrong by testing only the nearest
+// side. A real cavity is at least two cells across, so its interior cells have air neighbours
+// and survive.
+// =====================================================================================
+{
+  const BOX = [[0,0],[1,0],[1,1],[0,1]];
+  const slab = h => ({ length:200, topProfile:[[0,h],[1,h]], widthProfile:[[0,50],[1,50]],
+    sidePoly:BOX, topPoly:BOX, frontPoly:BOX, hullCrisp:1, wallThickness:8,
+    hullHollow:true, closedBottom:true, hullRes:64, mode:"projection", features:null });
+  // material/air runs straight across the width at mid-height
+  const runs = (g, x, z) => {
+    const P = g.positions, I = g.indices, hits = [];
+    for (let q = 0; q < I.length; q += 3) {
+      const A=I[q]*3, B=I[q+1]*3, C=I[q+2]*3;
+      const au=P[A], av=P[A+2], bu=P[B], bv=P[B+2], cu=P[C], cv=P[C+2];
+      const den=(bv-cv)*(au-cu)+(cu-bu)*(av-cv); if (Math.abs(den) < 1e-12) continue;
+      const w0=((bv-cv)*(x-cu)+(cu-bu)*(z-cv))/den, w1=((cv-av)*(x-cu)+(au-cu)*(z-cv))/den, w2=1-w0-w1;
+      if (w0<-1e-9 || w1<-1e-9 || w2<-1e-9) continue;
+      hits.push(w0*P[A+1] + w1*P[B+1] + w2*P[C+1]);
+    }
+    hits.sort((a,b) => a-b);
+    const k = [];
+    for (const h of hits) if (!k.length || h - k[k.length-1] > 1e-3) k.push(h);
+    const air = [];
+    for (let i = 1; i + 1 < k.length; i += 2) air.push(k[i+1] - k[i]);
+    return { crossings:k, air };
+  };
+
+  t("narrow cavity: no sliver of air survives at any height", () => {
+    for (const h of [18, 20, 22, 26, 34, 50]) {
+      const g = API.makeVisualHull(slab(h));
+      watertight(g, `slab ${h}mm`);
+      for (const a of runs(g, 100, h/2).air)
+        ok(a > 1.0, `slab ${h}mm left a ${a.toFixed(2)}mm sliver of air — a cavity or nothing`);
+    }
+  });
+
+  t("narrow cavity: a gap too small to build becomes solid, not fake-hollow", () => {
+    /* A 4mm gap on this grid cannot be meshed, so the honest answer is a solid rib. What must
+       NOT happen is a part that reports hollow while being solid with slivers in it. */
+    const g = API.makeVisualHull(slab(20));      // 20 - 8 - 8 = 4mm of intended cavity
+    const r = runs(g, 100, 10);
+    ok(r.air.length === 0 || r.air.every(a => a > 1.0),
+       `a 4mm cavity must close cleanly, got air runs [${r.air.map(a=>a.toFixed(2))}]`);
+  });
+
+  t("narrow cavity: a cavity that CAN be built still is", () => {
+    // the fix must not close cavities that were fine — 10mm and up were always clean
+    for (const h of [26, 34, 50]) {
+      const r = runs(API.makeVisualHull(slab(h)), 100, h/2);
+      ok(r.air.some(a => a > 20),
+         `slab ${h}mm must still be hollow across the middle, got [${r.air.map(a=>a.toFixed(1))}]`);
+    }
   });
 }
 
