@@ -93,6 +93,18 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
   .stamp.warn{border-color:var(--warn);color:var(--warn);box-shadow:inset 0 0 8px rgba(245,179,66,.16), 0 0 12px rgba(245,179,66,.2)}
   .stamp .t{font-weight:700;font-size:12.5px;letter-spacing:.12em}
   .stamp .d{font-size:8.5px;letter-spacing:.16em;opacity:.85;text-transform:uppercase}
+  /* Thin-wall warning. Uses --warn, the same amber the stamp already uses for "look at this",
+     rather than an error red: a thin wall is a judgement to make, not a broken file. */
+  .thinwarn{display:flex;align-items:center;gap:9px;margin:7px 0 0;padding:7px 11px;
+    border:1.5px solid var(--warn);border-radius:7px;color:var(--warn);font-size:12.5px;
+    line-height:1.3;box-shadow:inset 0 0 8px rgba(245,179,66,.14)}
+  .thinwarn[hidden]{display:none}
+  .tw-i{flex:0 0 17px;height:17px;border-radius:50%;border:1.5px solid var(--warn);
+    font-weight:700;font-size:11px;display:flex;align-items:center;justify-content:center}
+  .tw-t{flex:1 1 auto}
+  .tw-b{flex:0 0 auto;background:transparent;color:var(--warn);border:1.5px solid var(--warn);
+    border-radius:6px;padding:3px 9px;font:inherit;font-size:11.5px;cursor:pointer;white-space:nowrap}
+  .tw-b:hover{background:rgba(245,179,66,.14)}
 
   /* ---------- main layout ---------- */
   main{display:grid;grid-template-columns:316px 1fr;height:calc(100% - 54px)}
@@ -485,6 +497,14 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
     <div class="stat"><b id="rArea" class="mono">—</b><span>Surface</span></div>
     <div id="stamp" class="stamp"><span class="t">SOLID SHAPE</span><span class="d">sealed ✓ watertight ✓</span></div>
   </div>
+  <!-- Thin-wall warning. Hidden unless there is something to say, because a warning that is
+       always showing stops being read. Sits UNDER the readout rather than in it: this is not
+       another statistic, it is something that needs a decision before printing. -->
+  <div id="thinWarn" class="thinwarn" hidden>
+    <span class="tw-i" aria-hidden="true">!</span>
+    <span class="tw-t"></span>
+    <button type="button" id="thinShow" class="tw-b">Show me</button>
+  </div>
 </header>
 
 <main>
@@ -561,6 +581,27 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
         <div class="hint" id="modeHint"><b>Smooth</b> &mdash; a flowing, rounded body. Best for cars, boats, anything streamlined. Features here are dents and bumps.<br><b>Follow my drawing</b> &mdash; carves out exactly what your outlines say, corners and all. Use it for angular things, and it's the only mode that can <b>cut a window clean through</b>.</div>
         <div class="field" id="crispField"><label>Edge crispness <span class="val"><span id="vCrisp">0.50</span></span></label><input type="range" id="sCrisp" min="0" max="1" value="0.5" step="0.05"></div>
         <div class="hint">Only used by <b>Follow my drawing</b>. <b>0</b> = the smooth rounded body (same as Smooth mode); <b>1</b> = exactly your traced outline, corners and all. In between it shifts from smooth toward your lines.</div>
+        <!-- How DETAILS are cut. Deliberately its own control rather than a third button in
+             the row above: that row picks how the BODY is built, and the two choices combine.
+             Only meaningful in Follow my drawing, because the carved-field engine lives in the
+             projection builder — Smooth mode has no field to carve and always presses. -->
+        <div class="field" id="carveField" style="margin-top:10px">
+          <label>How details are cut</label>
+          <div class="seg" id="carveSeg" style="width:100%">
+            <button data-c="field" class="on">Cut into the shape</button>
+            <button data-c="stamp">Press on the surface</button>
+          </div>
+        </div>
+        <div class="field" id="qualField" style="margin-top:10px">
+          <label>Build quality</label>
+          <div class="seg" id="qualSeg" style="width:100%">
+            <button data-q="fast">Fast</button>
+            <button data-q="normal" class="on">Normal</button>
+            <button data-q="fine">Fine</button>
+          </div>
+        </div>
+        <div class="hint" id="qualHint">How fine a grid the shape is built on. <b>Fine</b> can hold smaller details but takes several times longer and makes a much heavier file &mdash; on a 200mm model, Normal builds in about a second per 5,000 triangles, Fine in roughly three. Reach for it when a detail is too small to come out, not by default.</div>
+        <div class="hint" id="carveHint"><b>Cut into the shape</b> &mdash; details are cut out of the solid before it is hollowed, so a pocket keeps its full wall underneath and comes out the depth you asked for. Slower on models with a lot of detail.<br><b>Press on the surface</b> &mdash; the older, faster way: the shape is built first and details are pressed into the skin afterwards. Quick, but a pocket thins the wall beneath it.</div>
       </div>
     </details>
     <details class="sec">
@@ -1464,15 +1505,41 @@ function embossHull(p,positions,indices,crisp,wall){
   if(p.plainFrame) return 0;                       // "Plain frame" — press nothing into the skin
   /* A BLOCK OF STOCK, AND EVERYTHING ELSE CUT AWAY.
      Three kinds of shape come out of a drawing, not two:
-       depth < 0   carve it away
-       depth = 0   LEAVE IT STANDING — this is the mask, and it is how a badge pops out
-       depth > 0   push the skin outward (see the warning on that below)
-     A mask used to mean "does nothing", which is only true if you think of a feature as a
-     dent applied to a surface. Think of it the way a carver does — stock, and the parts you
-     don't cut — and a shape you leave alone is the whole point: you cut the grille down and
-     the pony is what's left. Nothing is added, the part never grows past the box it was
-     measured in, and it is exactly what the drawing already says. */
-  const carves=(p.features||[]).filter(f=>f.depth && !(f.through && f.depth<0));
+       depth < 0   carve it away  — now done in the DISTANCE FIELD (makeVisualHull), where a
+                   pocket is a real prism with a flat floor at the exact asked depth and the
+                   surface cannot fold, so it is no longer stamped here at all. Stamping it as
+                   well was double-cutting every pocket to twice its depth.
+       depth = 0   LEAVE IT STANDING — the mask, how a badge pops out
+       depth > 0   RAISE it proud of the skin
+     Raises and masks still live here: a raise adds material outside the surface, which the
+     field (built before the surface exists) is the wrong place for, and a mask only protects
+     what the carves around it remove. Negative carves have moved to the field. */
+  /* NOTHING IS STAMPED ON THE MESH ANY MORE — the field does all of it.
+     The carve rewrite moved negative depths into the distance field and left this filter
+     selecting `depth>0`, on the reasoning that a raise adds material outside the surface and
+     the field is built before the surface exists. But the field block DOES build raises — it
+     has a boss branch, and the grid padding is sized from the tallest raise specifically so
+     there is room for one. So every raise was being built twice: once as a real boss in the
+     field, then again as a vertex push here. Measured on a plain block: a 2mm badge stood
+     4.40mm proud and a 6mm badge stood 13.64mm. With the stamp removed the field alone gives
+     2.00mm and 3.00mm, exact.
+     Masks were never in this list (they are depth 0), and through-cuts are handled
+     separately, so this leaves nothing for the stamp to do. The call below is kept as a
+     no-op rather than torn out, because sculpt strokes still run through the same path. */
+  /* p.carveMode picks which of the two carving engines runs. Both are kept deliberately:
+       "field"  (default) — features are prisms in the distance field, meshed with the body.
+                            Exact depths, and the cavity follows a pocket so the wall under it
+                            stays the thickness asked for.
+       "stamp"            — the original: mesh the plain body, then push the vertices under
+                            each outline. Much faster on a heavily-featured model, and the
+                            only path the exact-STEP backend has ever seen.
+     The stamp path needs the vertex list here; the field path has already done the work in
+     F() and must NOT stamp on top of it, or every raise is built twice. That double-build is
+     a real bug this project shipped once: a 2mm badge stood 4.40mm proud. */
+  const stampMode = p.carveMode==="stamp";
+  const carves = stampMode
+    ? (p.features||[]).filter(f=>f.depth && !f.through && f.poly && f.poly.length>2)
+    : [];
   const masks =(p.features||[]).filter(f=>!f.depth && f.poly && f.poly.length>2);
   const list=carves;
   if((!list.length && !masks.length) || crisp<=0.001) return 0;
@@ -1754,7 +1821,7 @@ function shellWallStats(positions,indices,opts){
     const tt=(e2x*qx+e2y*qy+e2z*qz)*inv;
     return tt>1e-4?tt:-1;
   };
-  const out=[];
+  const out=[], spots=[];        // spots keeps each reading WITH where it was taken
   /* Optionally sample only faces in a height band. The rim you see at an opening is the
      band of material between the outer skin and the inner wall, and "is the rim a clean
      band or a row of teeth" is a question about that strip specifically — so it has to be
@@ -1810,15 +1877,52 @@ function shellWallStats(positions,indices,opts){
       }
       if(near>0&&(best<0||near<best))best=near;
     }
-    if(best>0)out.push(best);
+    if(best>0){ out.push(best); spots.push(cx,cy,cz,best); }
   }
   if(!out.length) return {n:0,min:0,median:0,p10:0,want:want,thin:0};
   out.sort((x,y)=>x-y);
   const at=f=>out[Math.min(out.length-1,Math.max(0,Math.round(f*(out.length-1))))];
   const thinBar=want>0?want*0.75:0;
   let thin=0; for(let i=0;i<out.length;i++) if(out[i]<thinBar) thin++;
+  /* A PERCENTILE CANNOT SEE A LOCAL THIN PATCH, and that is the whole problem for a part
+     that has to hold. Measured on a 5mm-wall box with one 3mm pocket: the vertex-push path
+     leaves 2.5mm of wall under the pocket, and the median still reads 5.00mm because the thin
+     patch is a small share of a big surface. `min` is no better — it is one reading, so it
+     swings with the sample count (4.91mm at 300 samples, 3.76mm at 2000 on a shell that is
+     genuinely fine).
+     What a safety gate needs is a REGION: several thin readings close enough together to be
+     the same piece of wall. Cluster the under-spec readings by proximity and report the worst
+     cluster with its position, so the answer is "there is a 2.5mm patch here", not a number
+     with no address. */
+  const bar = want>0 ? want*0.75 : 0;
+  let worst=null;
+  if(want>0){
+    const under=[];
+    for(let i=0;i<spots.length;i+=4) if(spots[i+3]<bar) under.push([spots[i],spots[i+1],spots[i+2],spots[i+3]]);
+    const reachSq = Math.pow(Math.max(0.5,(o.clusterReach||want*2)),2);
+    const used=new Uint8Array(under.length);
+    for(let i=0;i<under.length;i++){
+      if(used[i])continue;
+      const grp=[under[i]]; used[i]=1;
+      for(let q=0;q<grp.length;q++){
+        const g0=grp[q];
+        for(let j=0;j<under.length;j++){
+          if(used[j])continue;
+          const dx=under[j][0]-g0[0], dy=under[j][1]-g0[1], dz=under[j][2]-g0[2];
+          if(dx*dx+dy*dy+dz*dz<=reachSq){ used[j]=1; grp.push(under[j]); }
+        }
+      }
+      /* One stray reading is noise — a ray grazing a fold, or a sliver. A patch of wall is
+         several of them together, which is also what a printer actually experiences. */
+      if(grp.length<3)continue;
+      let mn=Infinity, sx=0, sy=0, sz=0;
+      for(const g2 of grp){ if(g2[3]<mn)mn=g2[3]; sx+=g2[0]; sy+=g2[1]; sz+=g2[2]; }
+      if(!worst || mn<worst.min || (mn===worst.min && grp.length>worst.n))
+        worst={ min:mn, n:grp.length, at:[sx/grp.length, sy/grp.length, sz/grp.length] };
+    }
+  }
   return { n:out.length, min:out[0], median:at(0.5), p10:at(0.10), want:want,
-           thin: want>0?thin/out.length:0 };
+           thin: want>0?thin/out.length:0, worstPatch:worst };
 }
 function dropStrayShells(positions,indices,expect){
   const nTri=indices.length/3; if(!nTri)return indices;
@@ -2356,10 +2460,11 @@ function makeVisualHull(p){
   // window can genuinely be REMOVED, not merely dented. That's the one thing the lofted
   // shell can never do, and it needs no server.
   const soft0=Math.max(L,W,H)*0.5;
-  const feats=(p.features||[]).map(f=>{
+  /* In stamp mode the field builds a PLAIN body and embossHull does the features afterwards,
+     so this list stays empty — otherwise both engines run and every feature lands twice. */
+  const feats=(p.carveMode==="stamp"?[]:(p.features||[])).map(f=>{
     if(!f||!f.poly||f.poly.length<3||!f.depth)return null;      // text/mask stay surface-only
     const view=f.view||"side";
-    let pts,kind;
     /* WHICH PLANE A FEATURE BELONGS TO — the whole list, not "side, top, and everything else".
        sideR used to fall through the else and be built on the yz plane, so detail traced on
        the RIGHT view was pressed into the nose: measured on a plain block, a right-side
@@ -2369,11 +2474,44 @@ function makeVisualHull(p){
        top/bottom carry a second correction: featNormalize stores v screen-UP for every view,
        while normPoly stores topPoly/bottomPoly v screen-DOWN. Reading one in the other's
        frame put plan-view detail on the opposite flank from the one it was drawn on. */
+    let pts,kind;
     if(view==="side"||view==="sideR"){pts=f.poly.map(q=>[(view==="sideR"?1-q[0]:q[0])*L,q[1]*H]); kind="xz";}
     else if(view==="top"||view==="bottom"){pts=f.poly.map(q=>[q[0]*L,(1-q[1])*W]); kind="xy";}
     else {pts=f.poly.map(q=>[(view==="rear"?1-q[0]:q[0])*W,q[1]*H]); kind="yz";}
-    return {pts,kind,depth:f.depth,through:!!f.through&&f.depth<0,
-            soft:Math.max(0.35,(f.soft==null?0.1:f.soft)*soft0)};
+    /* THE CUT AXIS AND WHICH WAY IT GOES IN.
+       A carve is a prism: the feature footprint on one face, swept straight in along the
+       axis that face looks down, stopping at a flat floor `depth` mm below the surface. So
+       each feature needs the axis it cuts along ('x'|'y'|'z'), which face of that axis it
+       enters from (the near face at the max coordinate, or the far face at 0), and how deep.
+       side/sideR look down y (the flank); top/bottom look down z; front/rear look down x.
+       A carve at depth<0 removes material; depth>0 is handled as a raised boss, still by the
+       field, so both are real geometry rather than a surface push. */
+    const axis = (view==="side"||view==="sideR") ? "y" : (view==="top"||view==="bottom") ? "z" : "x";
+    // which face it enters from: the flank a side view sees, the top for a plan view, etc.
+    const nearMax = (view==="side")   ? false     // left flank is -y (the min side)
+                  : (view==="sideR")  ? true      // right flank is +y
+                  : (view==="top")    ? true      // top is +z
+                  : (view==="bottom") ? false     // underside is -z
+                  : (view==="rear")   ? false     // tail is -x
+                  :                     true;      // front/nose is +x
+    /* The footprint's own extent, so a grid point outside it can be rejected with four
+       comparisons instead of a table lookup. Most features cover a small patch of one face,
+       and a model like profile_7 carries 153 of them — without this every sample pays for
+       every feature, which is what turned the feature pass from 2.1s into 18.1s. */
+    let u0=Infinity,u1=-Infinity,v0=Infinity,v1=-Infinity;
+    for(const q of pts){ if(q[0]<u0)u0=q[0]; if(q[0]>u1)u1=q[0];
+                         if(q[1]<v0)v0=q[1]; if(q[1]>v1)v1=q[1]; }
+    const pad=Math.max(0.35,(f.soft==null?0.1:f.soft)*soft0);
+    /* Keep the footprint's true size and its name, so the build can say afterwards which
+       features were too small for the grid to resolve. A feature narrower than a voxel has no
+       grid point inside it, so the mesher has nothing to place a surface from and
+       extrapolates: measured, a 2mm badge on a 2.86mm grid built 9.29mm proud of a 6mm ask,
+       and converged to 5.78mm only once the cell was 1.43mm. That is inherent to voxel
+       meshing, so the honest answer is to SAY SO rather than silently hand back a wrong shape. */
+    return {pts,kind,depth:f.depth,through:!!f.through&&f.depth<0,axis,nearMax,
+            span:Math.min(u1-u0,v1-v0), name:f.name||"",
+            u0:u0-pad,u1:u1+pad,v0:v0-pad,v1:v1+pad,
+            soft:pad};
   }).filter(Boolean);
   /* Each outline only depends on TWO of the three coordinates — the side view never cares
      about y, the top view never cares about z. So this field is SEPARABLE: work the three
@@ -2388,16 +2526,147 @@ function makeVisualHull(p){
       for(let j=0;j<=nv;j++)d[i*R+j]=sdPoly(poly,x,j/nv*hSpan);}
     return {nu,nv,w:wSpan,h:hSpan,R,d};
   };
-  const look=(T,x,y)=>{
+  const look=(T,x,y,grow)=>{
     let fu=x/T.w*T.nu, fv=y/T.h*T.nv;
-    fu=fu<0?0:(fu>T.nu?T.nu:fu); fv=fv<0?0:(fv>T.nv?T.nv:fv);
+    /* The table only covers the drawing's own extent, and sampling past it used to clamp and
+       hand back the value AT the edge — so outside the body the field went flat at 0 and
+       stayed there however far out you went. Nothing inside the body ever noticed, because
+       only the sign matters there. A RAISE lives entirely outside the skin, and a field that
+       is 0 everywhere outside cannot say where a boss ends: the isosurface fell on the last
+       negative grid node instead, which is why a badge came out ceil(depth/cell) cells tall
+       — 2.86mm for a 2mm ask on a 2.857mm grid, and 8.57mm for a 6mm one.
+       The polygon is inside the domain, so for a point outside it the distance is the walk
+       back to the domain plus whatever the edge reported. Exact when the nearest bit of
+       outline is on the edge, a slight under-estimate otherwise, and either way it grows at
+       one millimetre per millimetre instead of not at all. */
+    let outside=0;
+    /* Growing outside the domain is OPT-IN, and only the body silhouette asks for it.
+       A FEATURE footprint must not: its outline is drawn on one view, and a distance that
+       keeps growing past the edge of that view is still a distance the pocket can reach
+       around a corner with. A sideR pocket started denting the nose the moment this applied
+       to footprints too. Face-local means the footprint stops at its own drawing. */
+    if(grow&&(fu<0||fu>T.nu||fv<0||fv>T.nv)){  // rare: only the padding ring and raised bosses
+      const cu=fu<0?0:(fu>T.nu?T.nu:fu), cv=fv<0?0:(fv>T.nv?T.nv:fv);
+      const du=(fu-cu)*T.w/T.nu, dv=(fv-cv)*T.h/T.nv;
+      /* Math.hypot is a lot slower than it looks — it guards against overflow the sqrt does
+         not — and this sits in the innermost sampling loop. These are millimetres on a model
+         a few hundred millimetres across, so there is nothing to overflow. */
+      outside=du?(dv?Math.sqrt(du*du+dv*dv):(du<0?-du:du)):(dv<0?-dv:dv);
+      fu=cu; fv=cv;
+    }
+    /* CLAMP ALWAYS, not only when growing. Without `grow` the clamp above never ran, so a
+       sample from the padding ring kept a negative fu — and `fu|0` on a negative number gives
+       a negative index, `T.d[-3]` is undefined, and undefined arithmetic is NaN. That NaN
+       flowed into the field array and out into vertex coordinates: 8,644 poisoned field nodes
+       and 1,488 NaN coordinates in the finished mesh. It only showed on RAISES because a
+       raise enlarges PAD to make room for the boss, pushing the grid further outside the
+       tables than a plain body ever goes.
+       Clamping here is right for both callers: with grow, `outside` has already recorded how
+       far out the point was, and without it the clamped edge value is exactly the old
+       behaviour a footprint expects. */
+    if(fu<0)fu=0; else if(fu>T.nu)fu=T.nu;
+    if(fv<0)fv=0; else if(fv>T.nv)fv=T.nv;
     const i=fu>=T.nu?T.nu-1:fu|0, j=fv>=T.nv?T.nv-1:fv|0;
     const tu=fu-i, tv=fv-j, R=T.R, o=i*R+j;
     const a=T.d[o], b=T.d[o+R], c=T.d[o+1], e=T.d[o+R+1];
     const top=a+(b-a)*tu, bot=c+(e-c)*tu;
-    return top+(bot-top)*tv;
+    return (top+(bot-top)*tv)+outside;
   };
   let Tside,TsideR,Ttop,Tfront;                 // filled once the grid size is known
+
+  /* EXTRA VIEWS FROM ANY ANGLE — the same carving rule, freed from the three axes.
+     The engine already carves the intersection of what three orthographic outlines allow:
+     material only where a point lands inside side AND top AND front. Nothing about that rule
+     needs the views to be axis-aligned. A view is just a direction to look from and an
+     outline of what the object covers from there, and the carve is the same max().
+     This matters because it is the bridge to building from photographs. The current
+     image-to-3D pipelines work by generating several consistent ORTHOGRAPHIC views of an
+     object and reconstructing from those — which is exactly this input. Three axis views is
+     a person tracing; N arbitrary views is a camera, or a model that imagined them.
+     Each entry: { dir:[x,y,z] (which way the camera looks), up:[x,y,z] (optional),
+                   poly:[[u,v],...] in millimetres about the object's centre }
+     Left empty, nothing changes: existing models take exactly the path they always did. */
+  const EXTRA=[];
+  for(const v of (p.extraViews||[])){
+    if(!v||!v.poly||v.poly.length<3)continue;
+    let d=v.dir||[0,1,0];
+    const dl=Math.hypot(d[0],d[1],d[2]); if(dl<1e-9)continue;
+    d=[d[0]/dl,d[1]/dl,d[2]/dl];
+    /* Build the view's own two image axes. `up` is whatever the caller gave, made
+       perpendicular to the look direction; if they gave nothing, or something parallel to it,
+       pick any perpendicular — for a silhouette the roll only has to be consistent with the
+       polygon that was traced in it. */
+    let up=v.up||(Math.abs(d[1])>0.9?[0,0,1]:[0,1,0]);
+    let rx=up[1]*d[2]-up[2]*d[1], ry=up[2]*d[0]-up[0]*d[2], rz=up[0]*d[1]-up[1]*d[0];
+    let rl=Math.hypot(rx,ry,rz);
+    if(rl<1e-6){ up=(Math.abs(d[0])>0.9?[0,1,0]:[1,0,0]);
+      rx=up[1]*d[2]-up[2]*d[1]; ry=up[2]*d[0]-up[0]*d[2]; rz=up[0]*d[1]-up[1]*d[0];
+      rl=Math.hypot(rx,ry,rz); }
+    const R=[rx/rl,ry/rl,rz/rl];
+    const U=[d[1]*R[2]-d[2]*R[1], d[2]*R[0]-d[0]*R[2], d[0]*R[1]-d[1]*R[0]];
+    /* A camera position turns the view from orthographic into PERSPECTIVE, which is what a
+       real photograph is. Without `from`, the outline is a slab of parallel lines through
+       the shape; with it, the outline is a CONE from the lens through the silhouette, and a
+       point is inside only if it falls in that cone.
+       `poly` is then in normalised image coordinates — (pixel - centre) / focal length, the
+       standard output of a calibrated camera — rather than millimetres. */
+    const from=v.from||null;
+    /* PRECOMPUTE THE OUTLINE INTO A TABLE, exactly as the three axis views already are.
+       Without this every grid sample runs sdPoly over every view's polygon — 48 vertices,
+       times the number of views, times a few hundred thousand samples. Measured before:
+       1.7s at 0 extra views, 21s at 60. Sampling the outline once into a small grid and
+       interpolating makes an extra view nearly as cheap as an axis view, which is what makes
+       reconstruction from a realistic number of photographs practical at all.
+       The table is built over the outline's own bounding box, padded, because an extra view's
+       coordinates are centred on the object (or normalised image units for a camera) rather
+       than running 0..L like the axis tables. Offsetting the polygon to sit in the positive
+       quadrant lets mkTable and look be reused unchanged rather than reimplemented. */
+    let u0=Infinity,u1=-Infinity,v0=Infinity,v1=-Infinity;
+    for(const q of v.poly){ if(q[0]<u0)u0=q[0]; if(q[0]>u1)u1=q[0];
+                            if(q[1]<v0)v0=q[1]; if(q[1]>v1)v1=q[1]; }
+    const padU=Math.max(1e-6,(u1-u0)*0.25), padV=Math.max(1e-6,(v1-v0)*0.25);
+    u0-=padU; u1+=padU; v0-=padV; v1+=padV;
+    const shifted=v.poly.map(q=>[q[0]-u0,q[1]-v0]);
+    const N=Math.max(24,Math.min(96,Math.round((p.hullFast?32:64))));
+    const T=mkTable(shifted,u1-u0,v1-v0,N,N);
+    EXTRA.push({R,U,D:d,T,u0,v0,
+                C: from?[from[0],from[1],from[2]]:null});
+  }
+  /* Distance to the silhouette of view `v` from a point, measured in the view's own image
+     plane. Negative inside, so it drops straight into the same max() as the three axis
+     views. Coordinates are about the object's centre, which is what a traced outline from a
+     camera naturally is — nothing here depends on where the grid happens to start. */
+  const cXv=L/2, cYv=W/2, cZv=H/2;
+  const extraAt=(x,y,z)=>{
+    if(!EXTRA.length)return -Infinity;            // no extra views: never constrains anything
+    const px2=x-cXv, py2=y-cYv, pz2=z-cZv;
+    let worst=-Infinity;
+    for(let i=0;i<EXTRA.length;i++){
+      const e=EXTRA[i];
+      let d2;
+      if(e.C){
+        const rx2=px2-e.C[0], ry2=py2-e.C[1], rz2=pz2-e.C[2];
+        const t=rx2*e.D[0]+ry2*e.D[1]+rz2*e.D[2];        // how far along the lens axis
+        /* Behind the lens is not "just outside" — it is not in this view's cone at all, and
+           it must never be talked into being material by another view. */
+        if(t<=1e-6){ worst=BIG; break; }
+        const u=(rx2*e.R[0]+ry2*e.R[1]+rz2*e.R[2])/t;
+        const vv=(rx2*e.U[0]+ry2*e.U[1]+rz2*e.U[2])/t;
+        /* sdPoly answers in IMAGE units, and the field is in millimetres. At depth t an image
+           unit spans t millimetres, so multiplying back is what makes a perspective view's
+           distance comparable with the axis views' in the same max(). Skip it and a far-away
+           camera contributes a field an order of magnitude too shallow, and the isosurface
+           lands in the wrong place instead of merely being mis-scaled. */
+        d2=look(e.T,u-e.u0,vv-e.v0,1)*t;
+      } else {
+        const u=px2*e.R[0]+py2*e.R[1]+pz2*e.R[2];
+        const vv=px2*e.U[0]+py2*e.U[1]+pz2*e.U[2];
+        d2=look(e.T,u-e.u0,vv-e.v0,1);
+      }
+      if(d2>worst)worst=d2;
+    }
+    return worst;
+  };
   const sdFeat=(f,x,y,z)=> f.kind==="xz"?look(f.T,x,z) : f.kind==="xy"?look(f.T,x,y) : look(f.T,y,z);
 
   // inside all three outlines = the largest of the three distances, then features applied
@@ -2433,19 +2702,22 @@ function makeVisualHull(p){
      second drawing is bit-for-bit unchanged (t is never consulted). */
   const sweep=(TA,TB2)=>TB2
     ? (x,y,z)=>{ const t=smoothstep(clamp(y/(W||1),0,1));
-                 const a2=look(TA,x,z), b2=look(TB2,x,z); return a2+(b2-a2)*t; }
-    : (x,y,z)=>look(TA,x,z);
+                 const a2=look(TA,x,z,1), b2=look(TB2,x,z,1); return a2+(b2-a2)*t; }
+    : (x,y,z)=>look(TA,x,z,1);
   let sideAt=null, envSideAt=null;   // bound once the tables exist
-  const F=(x,y,z)=>{
+  /* The body as drawn, with no features on it. Hoisted out of F so a carve can ask where the
+     skin is along its own cut axis — F itself cannot be used for that, because by the time a
+     feature is being applied F would answer with the features already in it. */
+  const bodyAt=(x,y,z)=>{
     const Es=envSideAt(x,y,z), Et=look(Etop,x,y), Ef=look(Efront,y,z);
     let hull=Math.max(Es,Et,Ef);                       // the body, notches filled in
     if(p.notchFaceOnly){   // opt-in: a notch stops short of the far side (leaves a block behind it)
       // a notch cuts inward from its OWN face only, never through the frame
       const Ts=sideAt(x,y,z);    if(Ts>0 && Es<=0 && -Et<notch) hull=Math.max(hull,Ts);
-      const Tt=look(Ttop,x,y);   if(Tt>0 && Et<=0 && -Es<notch) hull=Math.max(hull,Tt);
-      const Tf=look(Tfront,y,z); if(Tf>0 && Ef<=0 && Math.min(-Es,-Et)<notch) hull=Math.max(hull,Tf);
+      const Tt=look(Ttop,x,y,1);   if(Tt>0 && Et<=0 && -Es<notch) hull=Math.max(hull,Tt);
+      const Tf=look(Tfront,y,z,1); if(Tf>0 && Ef<=0 && Math.min(-Es,-Et)<notch) hull=Math.max(hull,Tf);
     } else {
-      hull=Math.max(hull, sideAt(x,y,z), look(Ttop,x,y), look(Tfront,y,z));
+      hull=Math.max(hull, sideAt(x,y,z), look(Ttop,x,y,1), look(Tfront,y,z,1), extraAt(x,y,z));
     }
     let d;
     if(crisp>=0.999 || !loftBox){ d=hull; }
@@ -2477,6 +2749,345 @@ function makeVisualHull(p){
        a hole is not.
        Indents are still stamped on the built surface instead (embossHull), so they land on
        the face they were drawn on rather than everywhere at once. */
+    return d;
+  };
+  const F=(x,y,z)=>{
+    let d=bodyAt(x,y,z);
+    /* CARVE AND RAISE ARE FIELD OPERATIONS, NOT SURFACE PUSHES.
+       A carve is the feature footprint swept straight in along its view axis to a flat floor
+       `depth` mm below the surface — a prism subtracted from the solid. Because it acts on
+       the distance field before the surface is meshed, the floor is genuinely flat and lands
+       at exactly the asked-for depth (proven: a 6mm pocket floors at surface-6.0, a 20mm one
+       at surface-20.0, and the surrounding face never moves). There is no gradient limiter
+       and no travel cap because a field subtraction cannot fold the surface over itself the
+       way pushing a vertex along its normal can — the whole class of spikes and self-collision
+       simply cannot arise. Depth<0 removes; depth>0 adds the same prism as a raised boss.
+       The old path stamped these onto the finished mesh in embossHull, which is where the
+       clamps, the folding and the 2.77mm-instead-of-6mm ceilings all came from. */
+  /* WHERE THE BODY ENDS ALONG AN AXIS — the surface a view actually sees.
+     "Nearest surface along +x" is not that. A body with open wheel arches is several separate
+     runs of material along x, so a point inside an arch pillar has a surface a couple of
+     millimetres away that no front view can see past. This walks the whole line once, from
+     outside inward, and reports the FIRST material it meets — which is the outermost surface,
+     by definition. Cached per line and per axis, because the answer depends only on the other
+     two coordinates: on profile_7 that is a few thousand scans instead of one per sample. */
+  const outerCache=new Map();
+  const outerAt=(x,y,z,axis,nearMax)=>{
+    /* Cache on the grid line, and SCAN that same line. The first cut of this keyed on rounded
+       coordinates but then scanned using the caller's raw x,y,z — so the answer computed for
+       one line was handed back for every neighbour that rounded to the same key, and a nose
+       pocket appeared to reach x=97 on a 200mm body. Snap the line first, then scan it: the
+       key and the geometry it describes are now the same thing, which is the only way a cache
+       can be trusted. */
+    /* Written out one axis at a time. The first attempt packed the mapping into nested
+       conditionals and got it wrong — it keyed on one pair of coordinates and scanned with
+       another, so a line's answer was handed to its neighbours and a nose pocket appeared to
+       reach x=22 on a 200mm body. Three plain branches cannot make that mistake. */
+    const cell=Math.max(hx,hy,hz);
+    let a,b2,span;                                  // the two fixed coords, and the scan length
+    if(axis==="x"){ a=y; b2=z; span=L; }
+    else if(axis==="y"){ a=x; b2=z; span=W; }
+    else { a=x; b2=y; span=H; }
+    /* Cache on the grid line, but SCAN THE REAL ONE. Snapping the scan as well made the
+       answer a neighbour's face, which on a 2mm grid is up to 1mm out — and that was exactly
+       the over-cut seen: a 3mm pocket taking 4mm off a flat roof while the saddle a few
+       millimetres lower came out at a correct 3.00mm. The field samples are cheap enough that
+       scanning the true line and keying the cache loosely is the right trade; a caller half a
+       cell away gets its own scan rather than a plausible-looking wrong one. */
+    const ia=Math.round(a/cell*64), ib=Math.round(b2/cell*64);  // effectively exact keying
+    const key=axis+(nearMax?"+":"-")+ia+","+ib;
+    const hit=outerCache.get(key);
+    if(hit!==undefined)return hit;
+    const sa=a, sb=b2;                              // the caller's own line, not a snapped one
+    const step=cell*0.5;
+    /* Start OUTSIDE the body, not on it. The scan used to begin exactly at the span — but the
+       span is the drawing's own height, and a flat roof sits precisely there, so the first
+       sample was already inside material and the crossing was reported one step late. That
+       put the face a step deeper and a 3mm pocket cut 4mm on a full-height roof while cutting a
+       correct 3mm on a saddle a few millimetres lower. Begin a margin clear of the body and
+       refine the crossing linearly, so the answer is the surface rather than the first grid
+       step past it. */
+    const margin=cell*2;
+    let found=null, prev=null, prevM=null;
+    for(let t=-margin;t<=span+margin;t+=step){
+      const m=nearMax?(span-t):t;                   // walk inward from the outside
+      let v;
+      if(axis==="x") v=bodyAt(m,sa,sb);
+      else if(axis==="y") v=bodyAt(sa,m,sb);
+      else v=bodyAt(sa,sb,m);
+      /* A surface is where the field is ZERO, and on a flat roof built to the drawing's own
+         height the samples land on it exactly. `v<0` steps straight past that — measured, a
+         roof truly at 59.98 was reported at 59.00, half a step low, and a 3mm pocket then cut
+         3.99mm. Testing `v<=0` alone overshoots the other way, because the refinement divides
+         by (prev-v) and a zero sample makes that step meaningless. So: stop at zero, and only
+         interpolate when there is a genuine sign change to interpolate across. */
+      /* The field answers NaN outside its own tables, and every comparison with NaN is false —
+         so a scan that stepped off the domain found nothing, silently, and reported "no body
+         on this line". That killed the LEFT flank specifically: the leading margin puts the
+         first samples at negative y, where the field has nothing to say, and a side-view
+         pocket removed 0.000cm3 while the right flank worked perfectly. An unanswerable
+         sample means "not there yet", not "finished". */
+      if(!(v===v)){ prev=null; prevM=null; continue; }
+      if(v===0){ found=m; break; }
+      if(v<0){
+        if(prev!==null&&prev>0){                    // a real crossing: find where it hit zero
+          const f2=prev/(prev-v);
+          found=prevM+(m-prevM)*(f2>0&&f2<1?f2:0);
+        } else found=m;
+        break;
+      }
+      prev=v; prevM=m;
+    }
+    outerCache.set(key,found);
+    return found;
+  };
+    /* The skin every feature on this pass measures itself against. Taken once, before any
+       feature has touched d, so a pocket and a boss over the same spot both refer to the body
+       as drawn rather than to whatever the feature before them happened to leave behind. */
+    const d0=d;
+    for(let q=0;q<feats.length;q++){
+      const f=feats[q];
+      if(f.through)continue;                    // through-cuts handled below (full penetration)
+      if(!f.depth)continue;
+      // cheap rejection first: is this point even over the footprint's patch of the face?
+      const fu=f.kind==="xz"?x:f.kind==="xy"?x:y, fv=f.kind==="xz"?z:f.kind==="xy"?y:z;
+      if(fu<f.u0||fu>f.u1||fv<f.v0||fv>f.v1)continue;
+      const foot=sdFeat(f,x,y,z);               // 2D distance to the footprint on this face (<0 inside)
+      if(foot>=f.soft)continue;                 // far outside the footprint: nothing to do
+      /* HOW DEEP ARE WE — measured from the BODY, not from the box around it.
+         This read `faceMax - coord`: the distance in from the face of the sampling box. But
+         that box is the drawing's bounding box and the body sits INSIDE it — a car's nose
+         does not touch the front face and its roof does not touch the top. So every pocket
+         came out shallower than asked by however much clearance there was, and any pocket
+         shallower than that clearance never appeared at all. Measured on a plain block whose
+         roof sits 3mm below the box: a 2mm pocket cut 0.00mm, a 4mm cut 1.01mm, a 6mm cut
+         3.00mm — every one exactly 3mm short. Five of the suite's red tests were reporting
+         precisely this ("the detail must still press in (moved 0.00mm)"). They were right,
+         and they were not encoding old surface-stamp behaviour.
+         The body field already knows where the surface is: zero on it, negative inside. So
+         depth below the surface is just -d0, and it is correct on a curved or inset face
+         without needing to know anything about the box. d0 is the field BEFORE any feature
+         on this pass, so the depth is always measured from the original skin and two
+         features over the same spot cannot compound each other's reference. */
+      /* DEPTH FROM THE ENTRY FACE, NOT FROM WHICHEVER SURFACE HAPPENS TO BE NEAREST.
+         `-d0` is the distance to the nearest skin in any direction, which is right for how
+         DEEP we are but says nothing about WHICH face we came in through. Used alone the
+         pocket forms at every surface inside the footprint at once: a right-flank feature on
+         a 30mm-wide block gouged 60mm — both flanks, straight through. Face-local means the
+         cut enters from one face only.
+         So walk out along the cut axis from this point to where the body ends, and take the
+         depth from THAT crossing. march() steps until the field turns positive and refines
+         the last step linearly, so it is the true entry point on a curved nose or a domed
+         roof, not a bounding-box guess. Capped just past D because a pocket deeper than its
+         own depth is of no interest, which keeps this to a handful of samples. */
+      const D=Math.abs(f.depth);
+      /* Only points that could possibly be in the pocket pay for the march. A point outside
+         the footprint, or already deeper than the pocket can reach, is not going to be carved
+         whatever the march says — and the march costs up to 20 more evaluations of the whole
+         body field, per feature, per grid point. Measured without this gate: 2.9s -> 23.6s on
+         profile_7, which has 153 features. */
+      /* A skip must never be a CLIFF. Bailing out here leaves the field at its raw body value
+         while the neighbouring point carries the pocket's, and the mesher finds a surface by
+         interpolating along the grid edge between the two — so a jump lands the pocket floor
+         wherever the cliff happened to fall rather than at the depth asked for. Measured: the
+         field ran smoothly to -0.50 and then jumped to -4.75 one quarter-millimetre later,
+         and a 4mm pocket built 3.08mm.
+         These two skips are safe because they are exactly the cases where the feature has
+         NOTHING to contribute: outside the footprint the pocket's own distance is positive
+         and max() would keep the body value anyway, and past its reach the pocket is behind
+         solid stock. The bound below is what has to be continuous, so it is written to reach
+         the body value smoothly rather than to stop short of it. */
+      if(foot>0) continue;                        // outside the footprint: max() would keep d anyway
+      /* d0 is a true signed distance, so a point further inside than the pocket is deep can
+         never be reached by it — whatever direction the entry face lies in. Checking that
+         BEFORE marching turns the deep interior, which is most of a solid model's grid, from
+         twenty body-field evaluations into one comparison. The margin keeps the hand-over
+         continuous: bail only once the pocket's own term could not influence a crossing. */
+      if(f.depth<0 && d0 < -(D+Math.max(hx,hy,hz)*2)) continue;
+      const march=()=>{
+        /* Step size is the pocket's own depth, not the grid's. A half-cell step is far too
+           coarse for a shallow pocket — on a 2.7mm grid a 2mm ask floored at 1.95mm and at
+           res 80 it fell to 1.73mm, because the bracket the crossing was found in was wider
+           than the whole feature. Sixteen steps across D keeps the error proportional to what
+           was asked for instead of to the mesh, and the linear refinement on the last step
+           then lands it on the millimetre. */
+        /* Reach far enough that the field is still CONTINUOUS where this stops mattering.
+           The limit used to be D plus a few steps, so the march found the face down to a
+           depth of about D and then returned null one step later — and the null was skipped,
+           leaving the raw body value beside a pocket value. The mesher interpolates along the
+           grid edge between neighbouring samples, so that jump put the floor wherever the
+           cliff fell: measured, depthIn ran cleanly to 4.500 and then vanished, and a 4mm
+           pocket built 3.08mm. Marching a clear cell beyond the deepest point that can still
+           influence a crossing means the hand-over to the body value happens where the two
+           already agree. */
+        /* Start the walk where the surface can actually be, instead of from zero.
+           d0 is a true signed distance, so the skin is at LEAST -d0 away in any direction and
+           therefore at least that far along this axis too. Stepping from there skips the
+           whole solid interior, which is where nearly all the samples were being spent: on
+           profile_7 (153 features) the march cost 3.4s -> 20.6s, a six-fold regression on a
+           model that has to build on a phone. */
+        /* BISECT TO THE FACE — AND CHECK IT IS THE FACE YOU CAN SEE FROM THAT VIEW.
+           Bisection is right for the depth: d0 is a true signed distance, so the skin is at
+           least -d0 away along this axis, which brackets the crossing, and 12 halvings pin it
+           to a thousandth of a millimetre at fixed cost. Crawling a sixteenth of a cell at a
+           time cost 68 MILLION body-field evaluations on profile_7 and an 18-second feature
+           pass; this costs 14 and is exact.
+           But "the nearest surface along +x" is NOT the same as "the face a front view sees".
+           A body with open wheel arches has interior surfaces everywhere: stand inside an
+           arch pillar at mid-body and the nearest surface along +x is the pillar's own far
+           wall, a couple of millimetres away. The old march accepted that as the entry face,
+           so a front-view pocket carved the arch pillars — measured, a nose feature applied
+           at every x from 0 to 200 on a 200mm body, and the arch walls shifted inward by the
+           pocket depth through the whole lower body.
+           The face a view sees is the OUTERMOST surface along that axis. So after finding a
+           crossing, check that we are actually outside for good: step a further margin out
+           and require it to still be outside. An interior wall fails that immediately,
+           because past it is more body. This costs two extra samples, not another search. */
+        const lim=D+Math.max(hx,hy,hz)*2;
+        const dx=f.axis==="x"?(f.nearMax?1:-1):0;
+        const dy=f.axis==="y"?(f.nearMax?1:-1):0;
+        const dz=f.axis==="z"?(f.nearMax?1:-1):0;
+        let lo=Math.max(0, Math.min(-d0*0.999, lim)), hi=lim;
+        if(bodyAt(x+dx*lo, y+dy*lo, z+dz*lo)>=0) lo=0;    // bound was not conservative: start over
+        if(bodyAt(x+dx*hi, y+dy*hi, z+dz*hi)<0) return null;   // still solid at the limit
+        for(let it=0;it<12;it++){
+          const mid=(lo+hi)/2;
+          if(bodyAt(x+dx*mid, y+dy*mid, z+dz*mid)<0) lo=mid; else hi=mid;
+        }
+        const at=(lo+hi)/2;
+        /* Is this the face the view sees, or an interior wall? No LOCAL probe can tell: on
+           profile_7 at wheel height the body is three separate runs along x — wheels at
+           1..32, 85..106 and 174..200 with open arches between — so the gaps are ~50mm and
+           anything short of a full scan clears them. What settles it is the outer bound: the
+           view can only see material within D of the body's own outermost surface along this
+           axis, and outerAt() has that for this (u,v) line already, measured once per line
+           rather than per sample. A point whose crossing is not the outermost one is behind
+           stock as far as this view is concerned. */
+        /* DEPTH IS MEASURED FROM THE FACE THE VIEW SEES — and that is the whole measurement,
+           not a sanity check on a nearer one. This first compared depth-from-the-outer-face
+           against the locally-found crossing plus a cell; at x=22 on a 200mm body both are
+           about 178mm, so the test passed and the pocket applied anyway. The local crossing
+           is not wanted at all: a front view sees the nose, so the depth of a point IS how
+           far it lies behind the nose, whatever interior walls happen to sit in between. */
+        const out=outerAt(x,y,z,f.axis,f.nearMax);
+        if(out===null) return null;                 // no body on this line
+        const here=f.axis==="x"?x:f.axis==="y"?y:z;
+        const depth=f.nearMax?(out-here):(here-out);
+        /* A hair in front of the face is still ON the face. `depth<0` rejected the surface
+           itself: outerAt refines its crossing by interpolation, so on a flank that sits
+           exactly at the field's own y=0 it returns something like 1e-16 rather than a clean
+           zero, and every sample on that surface came out at -1e-16 and was thrown away. That
+           is what made a LEFT-side pocket remove 0.000cm3 while the right side worked
+           perfectly — 1694 of its 2350 samples were discarded at this line, and the few that
+           survived were too sparse to change the mesh. The right flank never hit it because
+           its face is at y=W, where the interpolation lands cleanly inside the domain.
+           Half a cell of tolerance: anything closer than that to the face is the face. */
+        const skin=Math.max(hx,hy,hz)*0.5;
+        if(depth<-skin || depth>lim) return null;   // in front of the face, or behind stock
+        if(depth<0) return 0;                       // on the face: zero depth, not a rejection
+        return depth;
+        return null;
+      };
+      /* A boss lives OUTSIDE the skin, where marching further outward never crosses back into
+         the body — so the inward march is not the right question for it. `look` now measures
+         properly beyond the body, which makes d0 a true signed distance on both sides of the
+         surface, and for a raise that is exactly the depth wanted: 0 on the skin, negative
+         outside. Reserve the march for pockets, where "which face did we enter through" is
+         the thing that actually matters. */
+      /* A raise reads its depth straight off the body field — but that field answers NaN
+         outside its own lookup tables, and the padding ring around the grid is exactly there.
+         NaN then flows through the boss SDF into the field array and out into vertex
+         coordinates: measured, 8,644 poisoned field nodes and 1,488 NaN coordinates in the
+         finished mesh, on raises only. A point the body cannot describe has no depth, so it
+         gets no feature rather than a NaN one. */
+      if(!(d0===d0)) continue;
+      let depthIn = f.depth<0 ? march() : -d0;
+      if(!(depthIn===depthIn)) continue;
+      if(depthIn===null){
+        /* No entry face within reach. For a POCKET that means this point sits behind solid
+           stock and cannot be carved, so skip it. For a RAISE it means the opposite: a boss
+           stands outside the skin, so marching further outward was never going to cross back
+           into the body. There the plain distance to the surface is exactly what is wanted,
+           and skipping the point deleted the boss entirely. */
+        if(f.depth<0)continue;
+        /* A boss stands outside the skin, so marching inward never crosses back into the body
+           and the loop above legitimately gives up. Walk the other way instead — from here
+           back along the cut axis until the body starts — and negate it, so depthIn keeps its
+           meaning: 0 at the surface, negative outside. Using -d0 here does not work, because
+           that is the distance to the NEAREST skin in any direction, and just off the nose of
+           a body the nearest skin is the flank; the boss then never found its own face and
+           snapped to whole grid cells (2.885mm for a 2mm ask on a 2.857mm grid). */
+        const st=Math.min(Math.max(hx,hy,hz),D)/16, lim=D+st*4;
+        const dx=f.axis==="x"?(f.nearMax?-1:1):0;
+        const dy=f.axis==="y"?(f.nearMax?-1:1):0;
+        const dz=f.axis==="z"?(f.nearMax?-1:1):0;
+        let prev=d0, hit=null;
+        for(let m=st;m<=lim;m+=st){
+          const v=bodyAt(x+dx*m, y+dy*m, z+dz*m);
+          if(v<=0){ const t=prev/(prev-v); hit=m-st+(t>0&&t<1?t*st:0); break; }
+          prev=v;
+        }
+        if(hit===null)continue;          // further out than this boss is tall
+        depthIn = -hit;
+      }
+      if(f.depth<0){
+        /* REMOVE: the pocket is the footprint prism from the face to a flat floor at depth D.
+           The obvious SDF is max(footprint, depthIn-D), but that is only a true distance on
+           the faces, not near the concave rim where floor meets wall — and the dual-contour
+           QEF, fitting planes through the crossings, extrapolates that crease and lands the
+           floor vertex at ~2D instead of D (measured: a 2mm ask meshed at 4mm). Using the
+           exact distance to the pocket solid — negative distance to the rectangular box that
+           is (footprint ∩ depth-slab) — gives the mesher the right gradient at the corner, so
+           the floor lands at exactly D. Outside the box it is the positive Euclidean distance;
+           inside, the (negative) distance to the nearest face. */
+        const a=foot;                    // signed dist to footprint in the face plane (<0 inside)
+        let floorDepth=D;
+        // a mask on this face holds the carve out to its own floor, so protected stock stands
+        const hold=maskHold(x,y,z,d0);
+        if(hold<floorDepth)floorDepth=Math.max(0,hold);
+        const b=depthIn - floorDepth;    // signed dist to the (possibly mask-limited) floor
+        let pocket;
+        if(a<0 && b<0){                  // inside the pocket box: nearest face, negative
+          pocket=Math.max(a,b);
+        } else {                         // outside: true Euclidean distance to the box
+          const ea=Math.max(a,0), eb=Math.max(b,0);
+          pocket=Math.hypot(ea,eb);
+        }
+        d=Math.max(d, -pocket);
+      } else {
+        /* RAISE: a boss standing D proud of the surface — the footprint prism grown outward
+           from the face. In the field this is a UNION (min with a negative SDF): a point is
+           inside the boss when it is inside the footprint AND within D of the face on the
+           outside. depthIn is 0 at the surface and negative just outside it, so the outside
+           slab is depthIn in [-D, 0]. As a box SDF (<0 inside): the footprint distance for
+           the in-plane extent, and (-D - depthIn) and (depthIn) bounding the slab. */
+        const a=foot;                    // in-plane footprint distance (<0 inside)
+        /* A boss is a UNION with the body, so it must not be bounded on the inside.
+           This carried a third term, `hi = depthIn`, meaning "only outside the face". With
+           depth now measured from the skin that term is exactly -distance-to-skin, so it
+           drove the boss field back to zero AT the original surface as well as at the boss
+           top — a tent, touching zero at both ends instead of crossing once. A dual contour
+           cannot place a surface on a value that merely touches zero, so the boss stopped
+           being resolved and snapped to whole cells instead: on a 200mm body at res 70
+           (2.857mm cells) a 2mm badge came out 2.857mm and a 6mm badge 8.571mm, both exactly
+           ceil(D/cell) cells.
+           Dropping it leaves the honest box: inside the footprint, and within D of the skin.
+           Inside the body that is already material, so the union changes nothing there. */
+        /* `look` now measures properly outside the body, so d0 is a real distance on both
+           sides of the skin and the boss needs nothing else: it is the footprint, out to D
+           beyond the surface. An earlier cut of this added the axial distance past the box
+           face to compensate for the flat field — with the field fixed that double-counts,
+           and a 6mm badge grew at two millimetres per millimetre. */
+        const lo=(-depthIn) - D;         // = d0 - D, negative while still within D of the skin
+        let boss;
+        if(a<0 && lo<0){                 // inside the boss: distance to its nearest face
+          boss=Math.max(a, lo);
+        } else {                         // outside: Euclidean distance to the box
+          boss=Math.hypot(Math.max(a,0), Math.max(lo,0));
+        }
+        d=Math.min(d, boss);
+      }
+    }
     for(let q=0;q<feats.length;q++){
       const f=feats[q]; if(!f.through)continue;
       d=Math.max(d, -sdFeat(f,x,y,z));
@@ -2484,7 +3095,23 @@ function makeVisualHull(p){
     // level base: outside below the cut, so the solid finishes flat instead of rounding off
     return baseCut>-1e29 ? Math.max(d, baseCut-z) : d;
   };
-  const res=Math.max(20,Math.min(80,Math.round(p.hullRes||Math.max(p.stations||48,40))));
+  /* HOW FINE A GRID TO BUILD ON.
+     The resolution is asked for by the drawing (its station count, or an explicit hullRes)
+     and then capped. Quality scales BOTH: the request and the cap. Scaling only the cap would
+     do nothing for most models — profile_7 asks for 72 and is capped at 80, so raising the cap
+     alone leaves it exactly where it was.
+     Why this is worth having at all: cell size decides the smallest detail that can exist. A
+     feature narrower than about one and a half cells has no grid point inside it, so the
+     mesher extrapolates and hands back the wrong shape. Before this there was NO setting that
+     would build a 3mm badge on a 200mm car — the warning could only say "you cannot have
+     this". Now it can say which step would.
+     Cost is roughly cubic. Measured on profile_7 (200mm): res 72 = 9.3s and 44k triangles,
+     res 110 = 28.9s and 107k. "Fine" is deliberately a bounded step and not an open slider,
+     because the ceiling on a phone is memory, not patience. */
+  const QUAL={fast:{k:0.7,cap:56}, normal:{k:1.0,cap:80}, fine:{k:1.5,cap:120}};
+  const qq=QUAL[p.hullQuality]||QUAL.normal;      // absent means today's behaviour, exactly
+  const asked=Math.round((p.hullRes||Math.max(p.stations||48,40))*qq.k);
+  const res=Math.max(20,Math.min(qq.cap,asked));
   /* NO SECRET RESOLUTION CHANGES.
      An earlier cut of this raised the grid when hollowing, so a wall too thin for the field
      path could still get one. It backfired twice over: the solid build kept the original
@@ -2507,7 +3134,14 @@ function makeVisualHull(p){
      are ordinary interior samples that the surface can land on exactly. */
   const cnx=res, cny=Math.max(10,Math.round(res*W/L)), cnz=Math.max(10,Math.round(res*H/L));
   const hx=L/cnx, hy=W/cny, hz=H/cnz;              // cell size: set by the model, not the padding
-  const PAD=1;
+  /* Enough ring outside the body to hold the tallest RAISED boss. A raise grows the surface
+     outward, so the isosurface leaves the body by up to its depth; with only one cell of
+     padding a 3mm boss on a grid whose cells are ~1.25mm was clipped to almost nothing. One
+     cell is plenty for carves (they go inward) and for the plain body, so pad only as far as
+     the biggest positive-depth feature actually needs. */
+  let maxRaise=0;
+  for(const f of feats) if(f.depth>0 && Math.abs(f.depth)>maxRaise) maxRaise=Math.abs(f.depth);
+  const PAD=Math.max(1, Math.ceil(maxRaise/Math.min(hx,hy,hz))+1);
   const nx=cnx+2*PAD, ny=cny+2*PAD, nz=cnz+2*PAD;  // cells including the ring outside
   const NX=nx+1,NY=ny+1,NZ=nz+1, idx=(i,j,k)=>(i*NY+j)*NZ+k;
   const cell=Math.max(hx,hy,hz);
@@ -2539,6 +3173,43 @@ function makeVisualHull(p){
         : f.kind==="xy" ? mkTable(f.pts,L,W,nx*TB,ny*TB)
         :                 mkTable(f.pts,W,H,ny*TB,nz*TB);
   });
+  /* MASKS AS FIELD REGIONS.
+     A mask is a shape left at depth 0: the material you keep, the pony that stands proud once
+     the grille around it is cut down. With carves now living in the field, the field is where
+     a mask has to take effect too — otherwise the carve removes the pony along with the grille.
+     A mask is not itself geometry; it is a veto on carving. So build the same footprint tables
+     for the depth-0 shapes, tagged with the face they sit on, and where the carve loop is about
+     to remove material, check whether this point falls inside a mask on the SAME face at a
+     shallower depth than the mask protects. If it does, the removal is held back to the mask's
+     own floor, leaving the shape standing. */
+  const masks=(p.features||[]).map(f=>{
+    if(!f||f.depth||!f.poly||f.poly.length<3)return null;      // masks are the depth-0 shapes
+    const view=f.view||"side";
+    let pts,kind;
+    if(view==="side"||view==="sideR"){pts=f.poly.map(q=>[(view==="sideR"?1-q[0]:q[0])*L,q[1]*H]); kind="xz";}
+    else if(view==="top"||view==="bottom"){pts=f.poly.map(q=>[q[0]*L,(1-q[1])*W]); kind="xy";}
+    else {pts=f.poly.map(q=>[(view==="rear"?1-q[0]:q[0])*W,q[1]*H]); kind="yz";}
+    const axis=(view==="side"||view==="sideR")?"y":(view==="top"||view==="bottom")?"z":"x";
+    const nearMax=(view==="side")?false:(view==="sideR")?true:(view==="top")?true:(view==="bottom")?false:(view==="rear")?false:true;
+    return {pts,kind,axis,nearMax,soft:Math.max(0.35,(f.soft==null?0.1:f.soft)*soft0)};
+  }).filter(Boolean);
+  masks.forEach(m=>{
+    m.T = m.kind==="xz" ? mkTable(m.pts,L,H,nx*TB,nz*TB)
+        : m.kind==="xy" ? mkTable(m.pts,L,W,nx*TB,ny*TB)
+        :                 mkTable(m.pts,W,H,ny*TB,nz*TB);
+  });
+  const maskHold=(x,y,z,d0)=>{
+    // deepest surface a mask lets a carve reach at this point (Infinity = no mask here)
+    let hold=Infinity;
+    for(let q=0;q<masks.length;q++){
+      const m=masks[q], foot=sdFeat(m,x,y,z);
+      if(foot>=0)continue;                          // outside this mask footprint
+      // same correction as the carve loop: depth is measured from the skin, not the box
+      const depthIn=-d0;
+      if(depthIn<hold)hold=depthIn;                 // protect from the surface inward
+    }
+    return hold;
+  };
   // per-length floor/roof/half-width, so the crisp<1 ellipse blend costs a lookup, not a solve
   if(crisp<0.999){
     const lz0=new Float32Array(nx+1), lz1=new Float32Array(nx+1), lhw=new Float32Array(nx+1);
@@ -2625,6 +3296,26 @@ function makeVisualHull(p){
        neighbours ARE grid directions, so marching along them is plain array indexing — the
        old probe's ray marching cost roughly a hundred F calls per voxel, which on this model
        would have turned a 3.4s build into something you would not wait for. */
+    /* ADAPTIVE WALL IS RETIRED. The flag is honoured so an old saved file still loads and
+       still means something, but it is off unless explicitly asked for and it is not offered
+       in the UI. Kept rather than deleted so the reasoning is not lost and so a file carrying
+       adaptiveWall:true does not silently change shape.
+
+       WHY, measured across ten geometries (heights 20/26/40/60/90mm, walls 4 and 8mm):
+         wall 4mm  — saved 0.0% in every case. It never acted at all.
+         wall 8mm  — saved 1.6-4.3%, and opened a thin patch in EVERY case, down to 0.00mm.
+       There was not one clean win. It is not a trade between material and strength; it is a
+       few percent of filament in exchange for a hole in the wall.
+
+       And the case it was written for is already handled. Field hollow leaves a section that
+       cannot hold two walls plus a cavity SOLID, by construction, which is the right answer
+       for a thin rib. On a 26mm slab the centre column measures identical with the flag on or
+       off — so the flag was not even delivering on the case it existed for, only thinning
+       corners on the way past.
+       If this is ever revisited, the missing piece is the bilateral test: thin only where two
+       OPPOSING sides are close, never where a single corner is near. That was designed and
+       deliberately not shipped, because on a 7mm rib it converts solid material into 2.8mm
+       walls around a 1.4mm void that a slicer would fill anyway. */
     const AD = !!p.adaptiveWall;
     const dirs=[];
     for(let a=-1;a<=1;a++)for(let b2=-1;b2<=1;b2++)for(let c=-1;c<=1;c++){
@@ -2632,19 +3323,29 @@ function makeVisualHull(p){
       if(a>0||(!a&&b2>0)||(!a&&!b2&&c>0)) dirs.push([a,b2,c,Math.hypot(a*hx,b2*hy,c*hz)]);
     }
     const maxN=Math.max(1,Math.ceil((wall*1.25)/Math.min(hx,hy,hz)));
-    /* How far to the surface from (i,j,k) heading (di,dj,dk). Returns the capped distance if
-       it doesn't reach one, which is what makes "thick" the safe default. */
+    /* How far to the surface from (i,j,k) heading (di,dj,dk), or INFINITY if it does not reach
+       one within the march.
+       It used to return the capped distance instead, described as making "thick" the safe
+       default. That was exactly backwards. The caller adds the two opposing reaches and thins
+       the wall when the sum is small, so substituting a small number for an unknown one makes
+       a THICK section look thin. Measured: a point 2.5mm under the roof of a 90mm-thick body
+       marches down, never finds the far side inside the cap, and reports 11.25mm instead of
+       87.5 — so the section reads 13.75mm thick and the wall is cut from 8mm to 5mm on a body
+       with nothing thin about it anywhere. The wall safety gate flagged a 0.00mm patch over
+       855 readings, which is how this was caught.
+       Infinity is the honest answer for "further than I looked", and it makes the caller
+       leave the wall alone, which is the safe direction. */
     const reach=(i,j,k,di,dj,dk,stepLen)=>{
       let prev=field[idx(i,j,k)];
       for(let n=1;n<=maxN;n++){
         const I2=i+di*n, J2=j+dj*n, K2=k+dk*n;
-        if(I2<0||I2>=NX||J2<0||J2>=NY||K2<0||K2>=NZ) return n*stepLen;
+        if(I2<0||I2>=NX||J2<0||J2>=NY||K2<0||K2>=NZ) return n*stepLen;   // left the grid: a real edge
         const v=field[idx(I2,J2,K2)];
-        if(v>=BIG*0.5) return n*stepLen;      // sentinel ring: don't interpolate against it
+        if(v>=BIG*0.5) return n*stepLen;      // sentinel ring: also a real edge
         if(v>=0){ const f=prev/(prev-v); return (n-1+(f>0&&f<1?f:0))*stepLen; }
         prev=v;
       }
-      return maxN*stepLen;                    // never found it: treat as thick
+      return Infinity;                        // never found it: unknown, so assume thick
     };
     /* The floor is not a taste setting. A wall below about one and a half cells cannot be
        meshed at all — the outer and inner surfaces land in the same cell and cancel — so
@@ -2669,6 +3370,17 @@ function makeVisualHull(p){
       const gz=(F(xm,ym,zm+eps)-F(xm,ym,zm-eps))/(2*eps);
       const g=Math.hypot(gx,gy,gz)||1;
       const dist=b/g;                              // true perpendicular distance, mm, negative inside
+      /* A CAVITY TOO NARROW TO MESH leaves a sliver of material a fraction of a millimetre
+         thick just inside the wall — measured on a 200mm slab at an 8mm wall, a 4mm cavity
+         left 0.68mm and a 6mm cavity left 0.24mm, while 10mm and above were clean. Both were
+         watertight with a healthy median wall, so only the safety gate saw them.
+         ATTEMPTED AND REVERTED: gating on `(-dist)*2 - wall*2`, i.e. treating twice the
+         distance-to-nearest-surface as the section thickness. It is not. `dist` is the
+         nearest surface in ANY direction, so on a side wall it measures across the width and
+         the gate fired where nothing was wrong — side walls went from 8mm to 11.5-15mm on
+         bodies that had been correct. A real fix needs the thickness along the wall's own
+         normal, which is what the retired adaptive-wall probe was trying to measure and got
+         wrong in its own way. Left as a known limit rather than a half-fix. */
       let wLoc=wall;
       if(AD && wallFloor<wall){
         let T=Infinity;
@@ -2683,6 +3395,29 @@ function makeVisualHull(p){
         const want=T*0.4;
         if(want<wall) wLoc=Math.max(wallFloor, want);
       }
+      /* KNOWN ARTEFACT — a knife edge, diagnosed and deliberately not fixed. Read this before
+         attempting it again; three earlier attempts were made on a WRONG diagnosis.
+         `dist` is b divided by a SAMPLED gradient, so it carries a few percent of noise. Where
+         a section is barely one wall deep, that noise decides material or cavity. Measured on
+         a boxy end cap at res 52, walking in along the length:
+             i=5   b=-5.38  |grad|=1.001  dist=-5.38  -(dist+w)=-2.62  material
+             i=6   b=-7.70  |grad|=0.901  dist=-8.55  -(dist+w)=+0.55  CAVITY   <-- one cell
+             i=7   b=-7.70  |grad|=1.000  dist=-7.70  -(dist+w)=-0.30  material
+         The field bottoms out at 7.70mm against an 8mm wall, so the section should be solid
+         outright; a 10% wobble in |grad| flips that single cell and the mesher puts a surface
+         through it. An 8mm end cap builds as 7.07mm + 0.82mm gap + 2.32mm.
+         It is NOT a collapsed gradient (|grad| is ~1 throughout — an earlier note here said
+         otherwise and was wrong), and NOT a size threshold. It looks like grid alignment
+         (fires at 52 and 54 stations, clean at 46/48/50/60/72) because alignment decides
+         whether any cell lands near enough to the edge for the noise to matter.
+         WHY NO FIX SHIPPED: the obvious rule — where the raw and normalised readings disagree
+         about which side of the wall a cell is on, believe the raw field — cuts the wall under
+         a carved pocket from 5.11mm to 3.54mm, six test failures including the safety property
+         this engine exists for. Under a pocket the gradient legitimately runs about 0.6 and
+         the NORMALISED reading is the correct one there. Restricting the rule to near-unity
+         gradients rescues three of four resolutions and leaves station 54, and tightening the
+         band further is fitting to a fixture.
+         A real fix needs to separate sampling noise from real geometry, not guess a band. */
       shell[o]=Math.max(b, -(dist+wLoc));
     }
     /* WHERE BOTH SKINS WANT THE SAME CELL, THE SOLID ONE WINS.
@@ -2734,6 +3469,34 @@ function makeVisualHull(p){
       for(let a=0;a<8;a++){ const o=off[a]; if(shell[o]>0&&field[o]<0) patch.push(o); }
     }
     for(let q=0;q<patch.length;q++) shell[patch[q]]=field[patch[q]];
+    /* CLOSE A CAVITY THAT COULD NOT OPEN.
+       Where the gap between the two walls is narrower than the grid can carry, the cavity does
+       not simply fail to appear — it collapses into slivers of air a fraction of a millimetre
+       wide, hugging the inside of the wall. Measured on a 200mm slab at an 8mm wall: a 6mm
+       cavity left an 82.8mm SOLID core with a 0.24mm air sliver down each side, and a 4mm
+       cavity left 0.68mm slivers. A 10mm cavity was clean.
+       That is worse than being solid in two ways. The part reports itself hollow when it is
+       not, and the wall safety gate measures across a sliver and calls it a 0.28mm wall — a
+       false alarm on a part that is actually a solid block, which is exactly the kind of thing
+       that teaches someone to ignore the warning.
+       So: an air cell with material on BOTH sides along any axis is a sliver, not a cavity,
+       and gets filled. Bilateral by design — the same distinction that the adaptive wall got
+       wrong by testing only the nearest side. A real cavity is at least two cells across, so
+       its interior cells have air neighbours and survive. */
+    {
+      const solid=o=>shell[o]<=0;
+      const fill=[];
+      for(let i=1;i<NX-1;i++)for(let j=1;j<NY-1;j++)for(let k=1;k<NZ-1;k++){
+        const o=idx(i,j,k);
+        if(shell[o]<=0)continue;                 // already material
+        if(field[o]>=0)continue;                 // outside the body: leave it alone
+        if((solid(idx(i-1,j,k))&&solid(idx(i+1,j,k))) ||
+           (solid(idx(i,j-1,k))&&solid(idx(i,j+1,k))) ||
+           (solid(idx(i,j,k-1))&&solid(idx(i,j,k+1)))) fill.push(o);
+      }
+      // applied after the scan so one filled cell cannot cascade into its neighbours
+      for(let q=0;q<fill.length;q++) shell[fill[q]]=field[fill[q]];
+    }
     for(let o=0;o<NX*NY*NZ;o++) field[o]=shell[o];
   }
   /* NO GUTS. Anywhere the field happens to enclose a pocket of air — where traced cuts cross,
@@ -2800,7 +3563,13 @@ function makeVisualHull(p){
       vy=( a00*(b1*a22-a12*b2) - b0*(a01*a22-a12*a02) + a02*(a01*b2-b1*a02))/det;
       vz=( a00*(a11*b2-b1*a12) - a01*(a01*b2-b1*a02) + b0*(a01*a12-a11*a02))/det;
     }
-    // never let the solve fling a vertex out of its own cell — that would tear the surface
+    /* Never let the solve fling a vertex out of its own cell — that would tear the surface.
+       The quarter-cell of slack on each side is DELIBERATE and was tried without: clamping
+       hard to the cell removes a 0.47mm bump at a pocket rim, but it snaps vertices onto
+       shared cell edges and produced non-manifold edges on other models — 14 on one traced
+       body, 7 on a thick-walled shell, and 4 edges wound the same way twice. A hair of
+       overshoot at a rim is a cosmetic defect; a non-manifold edge is a broken solid. Keep
+       the slack. */
     const cx0=px(i),cy0=py(j),cz0=pz(k);
     vx=Math.max(cx0-hx*0.25,Math.min(cx0+hx*1.25,vx));
     vy=Math.max(cy0-hy*0.25,Math.min(cy0+hy*1.25,vy));
@@ -3187,7 +3956,88 @@ function makeVisualHull(p){
      path pulls in about 0.4mm — so "did the outside move?" only has a sharp answer once you
      know which one ran. It also lets the app tell someone why a 1.5mm wall behaves unlike a
      6mm one on the same model, instead of leaving it as a mystery. */
+  /* WELD COINCIDENT VERTICES — BUT ONLY WITHIN ONE SHEET.
+     A dual contour places one vertex per cell, and where a surface passes exactly through a
+     grid plane two neighbouring cells can put theirs at the same point. The triangles between
+     them then have zero area: 94 of them on a raised badge here, from 47 duplicated
+     positions, 43 on the x=0 boundary. They carry no normal and an exact-STEP export will
+     refuse them.
+     Welding blindly is worse than the problem. A hollow shell has an outer skin and an inner
+     wall, and where the wall pinches they can put vertices at the same point WITHOUT being
+     the same surface — merging those pinches the two sheets together and makes a non-manifold
+     edge, which is the fin problem in another guise (measured: 8 non-manifold edges on a
+     thin-walled model). So a pair is only welded when the two vertices already share a
+     triangle edge: that proves they are neighbours on ONE sheet, and a zero-area triangle
+     between them is exactly that case. Two sheets that merely touch share no edge and are
+     left alone. */
+  {
+    const q = Math.min(hx,hy,hz)*1e-3;
+    const key=i=>Math.round(positions[i*3]/q)+"_"+Math.round(positions[i*3+1]/q)+"_"+Math.round(positions[i*3+2]/q);
+    // which vertices sit at the same point at all
+    const at=new Map();
+    for(let i=0;i<positions.length/3;i++){
+      const k=key(i); let L=at.get(k); if(!L){L=[];at.set(k,L);} L.push(i);
+    }
+    let anyDup=false; for(const L of at.values()) if(L.length>1){anyDup=true;break;}
+    if(anyDup){
+      // of those, which pairs are joined by an edge of some triangle (same sheet)
+      const mate=new Int32Array(positions.length/3);
+      for(let i=0;i<mate.length;i++)mate[i]=i;
+      const find=x=>{while(mate[x]!==x)x=mate[x]=mate[mate[x]];return x;};
+      for(let t=0;t<indices.length;t+=3){
+        const v=[indices[t],indices[t+1],indices[t+2]];
+        for(let e=0;e<3;e++){
+          const a2=v[e], b2=v[(e+1)%3];
+          if(a2!==b2 && key(a2)===key(b2)){ const ra=find(a2), rb=find(b2); if(ra!==rb)mate[ra]=rb; }
+        }
+      }
+      // compact, keeping the first survivor of each welded group
+      const remap=new Int32Array(mate.length).fill(-1);
+      const out=[];
+      for(let i=0;i<mate.length;i++){
+        const r=find(i);
+        if(remap[r]<0){ remap[r]=out.length/3; out.push(positions[r*3],positions[r*3+1],positions[r*3+2]); }
+        remap[i]=remap[r];
+      }
+      if(out.length/3 < positions.length/3){
+        const tris=[];
+        for(let t=0;t<indices.length;t+=3){
+          const a2=remap[indices[t]], b2=remap[indices[t+1]], c2=remap[indices[t+2]];
+          if(a2===b2||b2===c2||c2===a2)continue;   // collapsed onto a point: gone, and it bounded nothing
+          tris.push(a2,b2,c2);
+        }
+        positions=new Float32Array(out); indices=tris;
+      }
+    }
+  }
+  /* Which features the grid could not resolve. Reported rather than fixed: a finer grid is
+     the only real remedy and it is cubic in cost, so the choice belongs to the person. The
+     bar is a cell and a half across — below that the two sides of the footprint fall in the
+     same cell and the mesher has nothing to interpolate between. */
+  const tooSmall=[];
+  { const cell=Math.max(hx,hy,hz);
+    /* Which quality step WOULD resolve it — the difference between a dead end and a decision.
+       The cell scales inversely with the resolution actually built, so a step that reaches
+       resolution r gives a cell of cell*res/r. Only steps finer than the current one are
+       offered, and only when they would genuinely be enough. */
+    const order=["fast","normal","fine"];
+    const cur=order.indexOf(p.hullQuality&&QUAL[p.hullQuality]?p.hullQuality:"normal");
+    const wouldFix=span=>{
+      for(let i=cur+1;i<order.length;i++){
+        const q2=QUAL[order[i]];
+        const r2=Math.max(20,Math.min(q2.cap,Math.round((p.hullRes||Math.max(p.stations||48,40))*q2.k)));
+        if(r2<=res)continue;                       // no finer than we already are
+        if(span >= cell*(res/r2)*1.5) return order[i];
+      }
+      return null;
+    };
+    for(const f of feats){
+      if(!f||!(f.span>0))continue;
+      if(f.span < cell*1.5) tooSmall.push({name:f.name, span:f.span, cell:cell, fixedBy:wouldFix(f.span)});
+    }
+  }
   return {positions,indices,volume:Math.abs(vol),hollow:(hollow&&wall>0),openBottom:openedBottom,
+          tooSmall:tooSmall.length?tooSmall:null,
           fieldHollow,hullRes:res};
 }
 function checkManifold(indices){
@@ -3234,13 +4084,20 @@ function toSTL(positions,indices){
 function dedupeVerts(positions, weld){
   const q = weld || 1e-4;                 // mm grid the weld snaps to (0.1µm default = essentially exact)
   const seen = new Map(), out = [];
+  /* `index` maps each ORIGINAL vertex to its welded one. Point-cloud export never needed it —
+     it only wants the distinct points — but welding a MESH does, because the triangles have
+     to be re-pointed at the survivors. Returned alongside the old fields so every existing
+     caller is untouched. */
+  const index = new Int32Array(positions.length/3);
   for(let i=0;i<positions.length;i+=3){
     const x=positions[i],y=positions[i+1],z=positions[i+2];
     const key = Math.round(x/q)+"_"+Math.round(y/q)+"_"+Math.round(z/q);
-    if(seen.has(key))continue;
-    seen.set(key,1); out.push(x,y,z);
+    const hit = seen.get(key);
+    if(hit!==undefined){ index[i/3]=hit; continue; }
+    const at = out.length/3;
+    seen.set(key,at); index[i/3]=at; out.push(x,y,z);
   }
-  return { pts:new Float32Array(out), n:out.length/3 };
+  return { pts:new Float32Array(out), n:out.length/3, index };
 }
 
 // Scatter `target` points across the surface, density proportional to triangle area, so a
@@ -3469,7 +4326,7 @@ const PRESETS={
   sedan :{len:230,nose:30,cowl:44,roof:62,roofPos:.52,tail:46,sill:9, nw:22,mw:46,wp:.5 ,tw:40,round:1.8},
   suv   :{len:210,nose:38,cowl:56,roof:84,roofPos:.5 ,tail:74,sill:14,nw:26,mw:52,wp:.5 ,tw:48,round:2.2},
 };
-const S={...PRESETS.hotrod, wall:1.8, st:72, seg:56, opacity:.55, mode:"projection", sepBottom:true, shape:"loft", revShape:"sphere", revSize:50, widMM:0, hgtMM:0, widK:1, hgtK:1, hullCrisp:0.5,
+const S={...PRESETS.hotrod, wall:1.8, st:72, seg:56, opacity:.55, mode:"projection", carveMode:"field", quality:"normal", sepBottom:true, shape:"loft", revShape:"sphere", revSize:50, widMM:0, hgtMM:0, widK:1, hgtK:1, hullCrisp:0.5,
   wallTop:1.8, wallSide:1.8, wallBottom:1.8, wallPerFace:false, noDetail:false, openArches:false, hullHollow:true /* a frame is always a shell */};
 // NOTE: revolve primitives (sphere/cylinder/dome/cone) are retired from the UI — this tool
 // is for IMPORTED shapes. makeRevolve() stays so old saved files still load.
@@ -3565,6 +4422,9 @@ function currentProfile(){
     // one published to the library — silently lost its underside outline on load, and
     // closedBottom then recomputed false and levelled a base that shouldn't have been.
     sidePoly:traced.sidePoly, sidePolyR:traced.sidePolyR, topPoly:traced.topPoly, frontPoly:traced.frontPoly, bottomPoly:traced.bottomPoly, hullCrisp:S.hullCrisp,
+    carveMode:S.carveMode,   // which engine cuts the details; saved with the model so it reloads the same
+    hullQuality:S.quality,   // how fine a grid; saved too, so a part reopens the size it was built
+
     plainFrame:!!S.noDetail,
     closedBottom:!!traced.bottomPoly,
     hullRes:(qFast?hullDragRes:null), hullFast:qFast,   // self-tuning mid-drag, full on release
@@ -3640,7 +4500,8 @@ function rebuild(){
   requestRender();
   const prof=currentProfile();
   const t0=performance.now();
-  const {positions,indices,volume,hollow}=makeBody(prof);
+  const lastBuild=makeBody(prof);
+  const {positions,indices,volume,hollow}=lastBuild;
 
   const geo=new THREE.BufferGeometry();
   geo.setAttribute("position",new THREE.Float32BufferAttribute(positions,3));
@@ -3713,6 +4574,66 @@ function rebuild(){
     const el=document.getElementById("rArea");
     if(el){el.textContent=(sa/100).toFixed(1)+" cm²";el.title="Total surface area — paint, plating, or wrap estimates.";}
   }
+
+  /* THIN-WALL WARNING — the half of the safety gate the person actually sees.
+     A hollow frame can be watertight, report a healthy volume, and still have a patch of wall
+     too thin to survive being handled. The median cannot show it (5.00mm on a shell with a
+     2.5mm patch, because the patch is a small share of a big surface), so shellWallStats
+     clusters the under-spec readings and reports the worst REGION with its position.
+     Only shown when there is something to say. Skipped entirely on solid bodies, which have
+     no wall to be thin, and during a drag, where the mesh is provisional and a warning that
+     flickers is worse than none. */
+  try{
+    const warn=document.getElementById("thinWarn");
+    if(warn){
+      let patch=null;
+      if(hollow && S.wall>0 && !prof.hullFast){   // prof carries the drag flag; S does not
+        const r=shellWallStats(positions,indices,{wall:S.wall,samples:900});
+        patch=r&&r.worstPatch;
+      }
+      /* Features the grid could not resolve. A detail narrower than a voxel has no grid point
+         inside it, so the mesher extrapolates and the result is visibly wrong — a 2mm badge on
+         a 2.86mm grid built 9.29mm proud of a 6mm ask, and a 1mm one nearly vanished. The
+         person cannot tell that from looking at it, and no amount of care in the drawing fixes
+         it: the remedy is a finer grid or a bigger detail, and both are their call. */
+      const tiny=(!prof.hullFast && lastBuild && lastBuild.tooSmall) || null;
+      const msgs=[];
+      if(patch){
+        /* Say the consequence, not the statistic. "0.55mm of 4.2mm" means nothing to someone
+           who has not been staring at this; "may snap" is the decision they have to make. */
+        const pct=Math.round(100*patch.min/S.wall);
+        msgs.push(`Thin wall: ${fmtLen(patch.min)} where you asked for ${fmtLen(S.wall)}`
+          +` (${pct}%). This spot may snap when printed or handled.`);
+      }
+      if(tiny){
+        const one=tiny[0];
+        const who=tiny.length>1?`${tiny.length} details are`:(one.name?`“${one.name}” is`:"A detail is");
+        /* Naming the way out is the whole point. Before Build quality existed this could only
+           say "you cannot have this"; now it can say which step would, and stays honest when
+           no step is enough rather than sending someone round a loop. */
+        const fix=one.fixedBy
+          ? ` Set Build quality to ${one.fixedBy[0].toUpperCase()+one.fixedBy.slice(1)} to build it.`
+          : ` No quality setting can resolve it — make the detail bigger, or the model bigger.`;
+        msgs.push(`${who} too small for this size of model — ${fmtLen(one.span)} across, `
+          +`under the ${fmtLen(one.cell*1.5)} this build can resolve.`
+          +` It will come out the wrong shape.${fix}`);
+      }
+      if(msgs.length){
+        warn.querySelector(".tw-t").textContent=msgs.join(" ");
+        warn.hidden=false;
+        /* The Show me button only means something for a thin patch, which has a place. A
+           feature that is too small is wrong everywhere it appears, so hide the button
+           rather than send the camera somewhere arbitrary. */
+        const btn=document.getElementById("thinShow");
+        if(btn) btn.hidden=!patch;
+        if(patch) warn.dataset.at=patch.at.join(",");
+        else delete warn.dataset.at;
+      } else {
+        warn.hidden=true;
+        delete warn.dataset.at;
+      }
+    }
+  }catch(e){ /* a warning must never be the thing that breaks a build */ }
   const uf=UNIT_MM[displayUnit], ud=(displayUnit==="mm"||displayUnit==="px")?0:1;
   const buildMs=performance.now()-t0; hullTune(buildMs);
   dims.textContent=`bbox  L ${(dx/uf).toFixed(ud)} × W ${(dy/uf).toFixed(ud)} × H ${(dz/uf).toFixed(ud)} ${displayUnit}${hollow?`  ·  hollow shell · ${fmtLen(S.wall)} wall`:""}  ·  ${buildMs.toFixed(0)} ms`;
@@ -3733,6 +4654,22 @@ function resize(){
   const v=document.getElementById("viewThree");
   const w=v.clientWidth||800,h=v.clientHeight||600;
   renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix();requestRender();
+}
+/* "Show me" — put the thin spot in the middle of the screen. A warning that says a wall is
+   thin somewhere is only half an answer on a model with a hundred surfaces; the person needs
+   to see it to judge whether it matters. Reads the mesh-space position recorded when the
+   warning was raised and applies the same placement the body mesh got, so it stays correct
+   whatever the model's own origin is. */
+function showThinSpot(){
+  const warn=document.getElementById("thinWarn");
+  if(!warn || warn.hidden || !warn.dataset.at || !bodyMesh) return;
+  const a=warn.dataset.at.split(",").map(Number);
+  if(a.length!==3 || a.some(v=>!isFinite(v))) return;
+  const p=bodyMesh.position;
+  // field is (x, y, z-up); the scene is y-up, matching how the mesh itself was built
+  target.set(a[0]+p.x, a[2]+p.y, a[1]+p.z);
+  cam.rad=Math.max(8, S.len*0.45);          // close enough to see a wall, not so close it is abstract
+  updateCam();
 }
 function updateCam(){
   cam.pol=clamp(cam.pol,0.15,Math.PI-0.15);cam.rad=clamp(cam.rad,Math.max(5,S.len*0.12),S.len*14);
@@ -5753,6 +6690,7 @@ function loadImageFile(file){
     toast(`${activeView[0].toUpperCase()+activeView.slice(1)} view loaded.${(activeView==="front"||activeView==="rear")?" Trace the outline — no scale needed.":" <span class='mono'>Set scale</span>, then trace two edges."}`);};
   img.src=url;
 }
+{ const b=document.getElementById("thinShow"); if(b) b.onclick=()=>showThinSpot(); }
 document.getElementById("bAuto").onclick=()=>{
   const v=cv();
   if(!v.img){toast("No drawing on this view yet \u2014 load one in <b>Import Sheet</b> and press <b>Send views to Reference &amp; Trace</b>.");return;}
@@ -6036,12 +6974,31 @@ document.getElementById("clearWidth").onclick=()=>{V.top.A=[];V.top.B=[];traced.
 document.getElementById("clearSection").onclick=()=>{V.front.A=[];V.front.B=[];traced.section=null;traced.frontHull=null;if(traced.sections){traced.sections=traced.sections.filter(s=>s.src!=="front");if(!traced.sections.length)traced.sections=null;}markSection(false);refreshSecUI();if(activeView==="front")drawTrace();requestRebuild();};
 function backToParametric(){markSil(false);markWidth(false);markSection(false);}
 document.getElementById("b3D").onclick=()=>switchTab("three");
-function refreshCrispUI(){const f=document.getElementById("crispField");if(f)f.style.display=(S.mode==="projection")?"":"none";}
+function refreshCrispUI(){
+  /* Edge crispness and the carve engine are both meaningful only in Follow my drawing:
+     the carved-field engine lives in the projection builder, so Smooth mode has no field to
+     cut and always presses details onto the surface. Showing the control there would offer a
+     choice that does nothing. */
+  const on=(S.mode==="projection");
+  for(const id of ["crispField","carveField","carveHint"]){
+    const f=document.getElementById(id); if(f)f.style.display=on?"":"none";
+  }
+}
 document.querySelectorAll("#modeSeg button").forEach(b=>b.onclick=()=>{
   document.querySelectorAll("#modeSeg button").forEach(x=>x.classList.remove("on"));b.classList.add("on");
   S.mode=b.dataset.m; refreshCrispUI();
   if(S.mode==="projection"&&!traced.sidePoly)
     toast("Follow my drawing needs at least a traced <b>side</b> outline — it carves the volume your outlines describe.");
+  requestRebuild();
+});
+document.querySelectorAll("#qualSeg button").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll("#qualSeg button").forEach(x=>x.classList.remove("on"));b.classList.add("on");
+  S.quality=b.dataset.q;
+  requestRebuild();
+});
+document.querySelectorAll("#carveSeg button").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll("#carveSeg button").forEach(x=>x.classList.remove("on"));b.classList.add("on");
+  S.carveMode=b.dataset.c;
   requestRebuild();
 });
 document.getElementById("bSaveAll").onclick=async ()=>{
@@ -6347,6 +7304,14 @@ function applyProfile(p){
   traced.sections=(p.sections&&p.sections.length)?p.sections.map(x=>({at:x.at,prof:x.prof,src:x.src||'manual'})):null;
   if(p.mode==="loft"||p.mode==="projection"){S.mode=p.mode;
     document.querySelectorAll("#modeSeg button").forEach(x=>x.classList.toggle("on",x.dataset.m===S.mode));}
+  /* Models saved before this control existed have no carveMode, and they were built by the
+     stamp engine — but they were also saved with whatever geometry that produced, so re-opening
+     them on the field engine would quietly change the part. Default an OLD file to stamp and a
+     new one to what it says, so nothing reshapes itself behind the person's back. */
+  S.quality=(p.hullQuality==="fast"||p.hullQuality==="fine")?p.hullQuality:"normal";
+  document.querySelectorAll("#qualSeg button").forEach(x=>x.classList.toggle("on",x.dataset.q===S.quality));
+  S.carveMode=(p.carveMode==="stamp"||p.carveMode==="field")?p.carveMode:(p.schema?"stamp":"field");
+  document.querySelectorAll("#carveSeg button").forEach(x=>x.classList.toggle("on",x.dataset.c===S.carveMode));
   if(p.sepBottom!=null){S.sepBottom=!!p.sepBottom;const cb=document.getElementById("sepBottom");if(cb)cb.checked=S.sepBottom;}
   if(typeof SC!=="undefined")SC.off=(p.sculpt&&p.sculpt.length)?Float32Array.from(p.sculpt):null;
   if(typeof SC!=="undefined")SC.strokes=(p.sculptStrokes&&p.sculptStrokes.length)?p.sculptStrokes.map(s=>({x:s.x,y:s.y,z:s.z,r:s.r,amt:s.amt,mode:s.mode})):null;
