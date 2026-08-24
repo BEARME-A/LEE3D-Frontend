@@ -4636,6 +4636,112 @@ t("every absolute unit an SVG can state is understood", () => {
   });
 }
 
+
+// =====================================================================================
+// PER-FACE WALL THICKNESS — roof, sides and floor can differ.
+//
+// The studio has offered "Different thickness per face" for a long time and the EXACT builder
+// ignored it: it read wallThickness and nothing else. Asking for a 16mm floor with 6mm walls
+// built a 6mm floor, silently, in the default mode. The smooth builder honoured it all along,
+// so the same model came out two different ways depending on which mode you were in.
+//
+// It matters because it is the load-bearing control — a thick floor to bolt through with thin
+// walls elsewhere. The wall safety gate could not catch it either: a uniform 6mm wall is not
+// THIN, it is exactly what was asked on two of the three faces, and the floor is simply not
+// what the person set.
+//
+// The gradient of the body field IS the surface normal, and it is already computed where the
+// wall is applied, so this costs one blend and no extra sampling.
+// =====================================================================================
+{
+  const BOX = [[0,0],[1,0],[1,1],[0,1]];
+  const blk = extra => ({ length:160, topProfile:[[0,60],[1,60]], widthProfile:[[0,40],[1,40]],
+    sidePoly:BOX, topPoly:BOX, frontPoly:BOX, hullCrisp:1, mode:"projection",
+    hullHollow:true, closedBottom:true, hullRes:64, features:null, ...extra });
+  const vol = g => { let V=0; const P=g.positions, I=g.indices;
+    for (let q=0;q<I.length;q+=3){ const a=I[q]*3,b=I[q+1]*3,c=I[q+2]*3;
+      V += (P[a]*(P[b+1]*P[c+2]-P[c+1]*P[b+2]) - P[a+1]*(P[b]*P[c+2]-P[c]*P[b+2])
+          + P[a+2]*(P[b]*P[c+1]-P[c]*P[b+1]))/6; }
+    return Math.abs(V)/1000; };
+  const column = (g, x, y) => {
+    const P = g.positions, I = g.indices, hits = [];
+    for (let q = 0; q < I.length; q += 3) {
+      const A=I[q]*3, B=I[q+1]*3, C=I[q+2]*3;
+      const au=P[A], av=P[A+1], bu=P[B], bv=P[B+1], cu=P[C], cv=P[C+1];
+      const den=(bv-cv)*(au-cu)+(cu-bu)*(av-cv); if (Math.abs(den) < 1e-12) continue;
+      const w0=((bv-cv)*(x-cu)+(cu-bu)*(y-cv))/den, w1=((cv-av)*(x-cu)+(au-cu)*(y-cv))/den, w2=1-w0-w1;
+      if (w0<-1e-9 || w1<-1e-9 || w2<-1e-9) continue;
+      hits.push(w0*P[A+2] + w1*P[B+2] + w2*P[C+2]);
+    }
+    hits.sort((a,b) => a-b);
+    const k = [];
+    for (const h of hits) if (!k.length || h - k[k.length-1] > 1e-3) k.push(h);
+    return k;
+  };
+  /* NOTE ON THE WALL USED HERE: 6mm, not 2mm. A 2mm wall on this body fails the grid adequacy
+     gate and falls back to the vertex-offset path, which does not do per-face — so a 2mm
+     fixture tests nothing and looks exactly like the feature being broken. It cost me a while
+     to notice. Anything testing field-hollow behaviour needs a wall the grid can hold. */
+
+  t("per-face wall: a uniform wall builds exactly as it always did", () => {
+    // the guard that makes this safe to add at all: three equal values must take the old path
+    const a = API.makeVisualHull(blk({ wallThickness:6 }));
+    const b = API.makeVisualHull(blk({ wallThickness:6, wallTop:6, wallSide:6, wallBottom:6 }));
+    ok(a.indices.length === b.indices.length, "equal per-face values must change nothing");
+    near(vol(a), vol(b), 0.5, "and produce the same material");
+  });
+
+  t("per-face wall: a thicker floor is actually built thicker", () => {
+    /* The load-bearing case, and the one that was silently ignored. */
+    const plain = API.makeVisualHull(blk({ wallThickness:6 }));
+    const thick = API.makeVisualHull(blk({ wallThickness:6, wallTop:6, wallSide:6, wallBottom:16 }));
+    const c = column(thick, 80, 0);
+    ok(c.length >= 4, `expected floor, cavity, roof: got [${c.map(v=>v.toFixed(1))}]`);
+    const floor = c[1] - c[0];
+    ok(floor > 6 * 1.5, `the floor must be thicker than the 6mm walls (got ${floor.toFixed(2)}mm)`);
+    near(floor, 16, 2.5, "and about the 16mm asked for");
+    ok(vol(thick) > vol(plain), "a thicker floor must add material");
+  });
+
+  t("per-face wall: each face responds to its own setting", () => {
+    /* Thickening any ONE face must add material, and none of them may be a no-op — which is
+       what the bug was. Volume is the honest check here: a column probe reads whichever
+       surface happens to be nearest and can miss the face being changed. */
+    const base = vol(API.makeVisualHull(blk({ wallThickness:6 })));
+    for (const [name, extra] of [
+      ["roof",  { wallTop:16, wallSide:6,  wallBottom:6  }],
+      ["side",  { wallTop:6,  wallSide:16, wallBottom:6  }],
+      ["floor", { wallTop:6,  wallSide:6,  wallBottom:16 }],
+    ]) {
+      const v = vol(API.makeVisualHull(blk({ wallThickness:6, ...extra })));
+      ok(v > base * 1.05, `thickening the ${name} must add material (${v.toFixed(1)} vs ${base.toFixed(1)} cm3)`);
+    }
+  });
+
+  t("per-face wall: the shell stays sound whatever the faces are set to", () => {
+    for (const extra of [
+      { wallTop:16, wallSide:6,  wallBottom:6  },
+      { wallTop:6,  wallSide:16, wallBottom:6  },
+      { wallTop:6,  wallSide:6,  wallBottom:16 },
+      { wallTop:14, wallSide:8,  wallBottom:20 },     // all three different
+    ]) {
+      const g = API.makeVisualHull(blk({ wallThickness:6, ...extra }));
+      watertight(g, `per-face ${JSON.stringify(extra)}`);
+      for (let i = 0; i < g.positions.length; i++)
+        ok(Number.isFinite(g.positions[i]), "every coordinate must be a number");
+    }
+  });
+
+  t("per-face wall: the grid gate uses the THINNEST face", () => {
+    /* The gate asks whether the grid can carry the wall. With three walls it has to be the
+       thinnest that decides — if the grid cannot hold that one, the shell would eat itself
+       there even though the other faces are comfortable. */
+    const thinnest = API.makeVisualHull(blk({ wallThickness:16, wallTop:16, wallSide:1, wallBottom:16 }));
+    watertight(thinnest, "a body whose thinnest face is under the grid");
+    ok(thinnest.indices.length > 0, "and it must still build something");
+  });
+}
+
 // --- report ---
 // nothing is counted until every async test has actually settled
 if (PENDING.length) await Promise.all(PENDING);
