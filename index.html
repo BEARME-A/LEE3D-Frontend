@@ -95,9 +95,12 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
   .stamp .d{font-size:8.5px;letter-spacing:.16em;opacity:.85;text-transform:uppercase}
   /* Thin-wall warning. Uses --warn, the same amber the stamp already uses for "look at this",
      rather than an error red: a thin wall is a judgement to make, not a broken file. */
-  .thinwarn{display:flex;align-items:center;gap:9px;margin:7px 0 0;padding:7px 11px;
-    border:1.5px solid var(--warn);border-radius:7px;color:var(--warn);font-size:12.5px;
-    line-height:1.3;box-shadow:inset 0 0 8px rgba(245,179,66,.14)}
+  /* Full width, in the page flow, and never allowed to grow the layout around it: the text
+     scrolls inside its own box rather than pushing anything. flex:0 0 auto keeps it out of the
+     body's flex sizing so the stage below still gets the rest of the screen. */
+  .thinwarn{display:flex;align-items:center;gap:9px;margin:0;padding:7px 11px;flex:0 0 auto;
+    border-bottom:1.5px solid var(--warn);color:var(--warn);font-size:12.5px;
+    line-height:1.3;background:rgba(245,179,66,.08);max-height:4.6em;overflow:auto}
   .thinwarn[hidden]{display:none}
   .tw-i{flex:0 0 17px;height:17px;border-radius:50%;border:1.5px solid var(--warn);
     font-weight:700;font-size:11px;display:flex;align-items:center;justify-content:center}
@@ -497,15 +500,20 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
     <div class="stat"><b id="rArea" class="mono">—</b><span>Surface</span></div>
     <div id="stamp" class="stamp"><span class="t">SOLID SHAPE</span><span class="d">sealed ✓ watertight ✓</span></div>
   </div>
-  <!-- Thin-wall warning. Hidden unless there is something to say, because a warning that is
-       always showing stops being read. Sits UNDER the readout rather than in it: this is not
-       another statistic, it is something that needs a decision before printing. -->
-  <div id="thinWarn" class="thinwarn" hidden>
-    <span class="tw-i" aria-hidden="true">!</span>
-    <span class="tw-t"></span>
-    <button type="button" id="thinShow" class="tw-b">Show me</button>
-  </div>
 </header>
+<!-- Thin-wall warning. Hidden unless there is something to say, because a warning that is
+     always showing stops being read.
+     OUTSIDE the header, and that is not cosmetic. It was inside it, and <header> is a flex ROW
+     with align-items:center and height:auto on mobile — so the moment this appeared its text
+     wrapped to several lines in a phone's width, the header grew to that height, and the whole
+     top bar floated in the middle of a huge empty band. It looked like the app had fallen
+     apart, and it fired on Auto-trace detail because that is what adds features, rebuilds, and
+     finds a thin patch to warn about. A banner belongs in the page flow, not in a toolbar. -->
+<div id="thinWarn" class="thinwarn" hidden>
+  <span class="tw-i" aria-hidden="true">!</span>
+  <span class="tw-t"></span>
+  <button type="button" id="thinShow" class="tw-b">Show me</button>
+</div>
 
 <main>
   <!-- ================= CONTROL RAIL ================= -->
@@ -3111,7 +3119,28 @@ function makeVisualHull(p){
   const QUAL={fast:{k:0.7,cap:56}, normal:{k:1.0,cap:80}, fine:{k:1.5,cap:120}};
   const qq=QUAL[p.hullQuality]||QUAL.normal;      // absent means today's behaviour, exactly
   const asked=Math.round((p.hullRes||Math.max(p.stations||48,40))*qq.k);
-  const res=Math.max(20,Math.min(qq.cap,asked));
+  let res=Math.max(20,Math.min(qq.cap,asked));
+  /* A THIN WALL MUST NOT SILENTLY LOSE THE PLANK FIX.
+     Field hollow needs about one and a half cells across the wall, or its two surfaces land in
+     the same cell and cancel. Below that the build fell back to the vertex-push path — and
+     that path is what plants the plank. So the whole reason field hollow was written stopped
+     applying at exactly the wall thicknesses a toy car actually uses. Measured on this
+     project's reference car at 200mm: a 2mm wall took the fallback, a 4.2mm wall did not, and
+     nothing said so — the readout showed "2 mm wall" and a watertight solid either way.
+     Refine the grid to fit the wall instead of abandoning the method. Past the cap the fallback
+     still applies, which is honest: there the grid genuinely cannot carry the wall. */
+  if(!p.hullFast && p.hullHollow!==false && p.fieldHollow!==false){
+    const wmm=Math.max(0.2, Math.min(
+      p.wallThickness??1.8,
+      p.wallTop??(p.wallThickness??1.8), p.wallSide??(p.wallThickness??1.8),
+      p.wallBottom??(p.wallThickness??1.8)));
+    /* The three cell sizes are L/res and the rounded equivalents for width and height, so the
+       widest cell is not simply L/res — solve for it rather than predict it. */
+    const worstCell=r=>Math.max(L/r, W/Math.max(10,Math.round(r*W/L)), H/Math.max(10,Math.round(r*H/L)));
+    let want=res;
+    while(want<qq.cap && wmm < worstCell(want)*HOLLOW_WALL_CELLS) want++;
+    if(wmm >= worstCell(want)*HOLLOW_WALL_CELLS) res=want;   // only if it actually gets there
+  }
   /* NO SECRET RESOLUTION CHANGES.
      An earlier cut of this raised the grid when hollowing, so a wall too thin for the field
      path could still get one. It backfired twice over: the solid build kept the original
@@ -3254,6 +3283,12 @@ function makeVisualHull(p){
      and a plank is a nicer failure than a body 3.7mm short with skin missing. */
   const fieldHollow = hollow && wall>0 && p.fieldHollow!==false
                    && wall >= Math.max(hx,hy,hz)*HOLLOW_WALL_CELLS;
+  /* When this is false and the model is hollow, the build has fallen back to the vertex-push
+     path — the one that welds a thin section into a plank. It is not a crash and the solid is
+     watertight, so nothing downstream notices; the person just gets a shelf with air under it.
+     Report it so the studio can say so instead of staying silent. */
+  const thinWallFallback = (hollow && wall>0 && p.fieldHollow!==false && !fieldHollow)
+    ? {wall:wall, cell:Math.max(hx,hy,hz)} : null;
   if(fieldHollow){
     const shell=new Float32Array(NX*NY*NZ);
     /* The body field is a max of three separable 2D fields, which is exact at the surface but
@@ -4037,6 +4072,7 @@ function makeVisualHull(p){
     }
   }
   return {positions,indices,volume:Math.abs(vol),hollow:(hollow&&wall>0),openBottom:openedBottom,
+          thinWallFallback,
           tooSmall:tooSmall.length?tooSmall:null,
           fieldHollow,hullRes:res};
 }
@@ -4597,7 +4633,17 @@ function rebuild(){
          person cannot tell that from looking at it, and no amount of care in the drawing fixes
          it: the remedy is a finer grid or a bigger detail, and both are their call. */
       const tiny=(!prof.hullFast && lastBuild && lastBuild.tooSmall) || null;
+      const thin=(!prof.hullFast && lastBuild && lastBuild.thinWallFallback) || null;
       const msgs=[];
+      if(thin){
+        /* The one that matters most, because the shape is WRONG and nothing else says so. At
+           this wall the grid cannot carry two surfaces, so the build falls back to pushing the
+           mesh inward — and on a thin section that welds the two sides into a flat shelf with
+           open air under it. */
+        msgs.push(`A ${fmtLen(thin.wall)} wall is thinner than this build can hollow properly `
+          +`(it needs about ${fmtLen(thin.cell*1.45)} at this size). Thin sections may come out `
+          +`as a flat shelf instead of a hollow box. Use a thicker wall, or a bigger model.`);
+      }
       if(patch){
         /* Say the consequence, not the statistic. "0.55mm of 4.2mm" means nothing to someone
            who has not been staring at this; "may snap" is the decision they have to make. */
@@ -4845,7 +4891,22 @@ function sectionFromTopEdge(pts,base,peak){
 
 function fitTrace(){
   const host=document.getElementById("canvasHost");
-  const w=host.clientWidth,h=host.clientHeight;
+  let w=host.clientWidth,h=host.clientHeight;
+  /* A HOST WITH NO SIZE YET GIVES A CANVAS WITH NO PIXELS, AND A BLACK VIEW.
+     clientWidth/clientHeight are 0 while an element is display:none or before the browser has
+     laid the panel out — and switching to a view calls this immediately, so on a phone the
+     side view could come up dark every time and stay that way, because nothing recomputes it
+     until something else forces a resize. activeView starts as "side", which is why it was
+     always that one.
+     Setting a canvas to 0x0 is not a no-op: it throws the drawing away. So if the host cannot
+     say how big it is yet, keep whatever size the canvas already had and ask again on the next
+     frame, when the layout has settled. */
+  if(w<2||h<2){
+    const prevW=parseFloat(traceCanvas.style.width)||0, prevH=parseFloat(traceCanvas.style.height)||0;
+    if(prevW>=2&&prevH>=2){ w=prevW; h=prevH; }
+    else { requestAnimationFrame(()=>{ const hh=document.getElementById("canvasHost");
+             if(hh&&hh.clientWidth>=2&&hh.clientHeight>=2)fitTrace(); }); return; }
+  }
   traceCanvas.width=w*devicePixelRatio;traceCanvas.height=h*devicePixelRatio;
   traceCanvas.style.width=w+"px";traceCanvas.style.height=h+"px";
   tctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
@@ -6989,7 +7050,16 @@ document.querySelectorAll("#modeSeg button").forEach(b=>b.onclick=()=>{
   S.mode=b.dataset.m; refreshCrispUI();
   if(S.mode==="projection"&&!traced.sidePoly)
     toast("Follow my drawing needs at least a traced <b>side</b> outline — it carves the volume your outlines describe.");
+  /* Frame the model again when the shape style changes.
+     `frameModel()` only ran at startup, so the camera kept whatever angle it had been orbited
+     to — and switching style rebuilds the body from a different method. Someone who had turned
+     the model over to look at its underside, then switched, saw the new build from underneath
+     and read it as the shape coming out flipped. Measured three ways (bounding box,
+     width-by-height, height-along-length) the two builders agree to within a millimetre, so
+     nothing about the geometry is turned around — it was the viewpoint that carried over.
+     Deferred two frames so the rebuild has produced the new mesh before it is framed. */
   requestRebuild();
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{ try{ frameModel(); }catch(e){} }));
 });
 document.querySelectorAll("#qualSeg button").forEach(b=>b.onclick=()=>{
   document.querySelectorAll("#qualSeg button").forEach(x=>x.classList.remove("on"));b.classList.add("on");
