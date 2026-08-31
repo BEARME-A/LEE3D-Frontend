@@ -1995,7 +1995,27 @@ function bottomSkinTris(positions,indices,opts){
       const vx=positions[c*3]-ax,vy=positions[c*3+1]-ay,vz=positions[c*3+2]-az;
       const fz=ux*vy-uy*vx, fl=Math.hypot(uy*vz-uz*vy,uz*vx-ux*vz,fz);
       tarea[t]=fl/2; tz[t]=Math.min(az,positions[b*3+2],positions[c*3+2]);
-      if(fl && fz/fl < -0.5) down[t]=1;                       // genuinely faces the ground
+      /* WHAT COUNTS AS LOOKING AT THE GROUND. This was `< -0.5`, i.e. a surface had to be
+         within 60 degrees of horizontal before the underside trim would open it.
+
+         On a traced car whose underbody SLOPES, that cutoff lands in the middle of the
+         ceiling. Measured on Collin's profile_8 at the station above a wheel arch (x=80,
+         |y|<20, z 29-36): 126 triangles with a normal-z of about -0.5, sitting exactly on the
+         boundary, and roughly half of them failed by a hair. The surviving half stayed as a
+         2.4mm floor at z=31.2 — precisely where his drawing puts the body's underside — and
+         seen through the open arch from the side that floor IS the plank. He reported it for
+         months as "the underbody never hollows".
+
+         -0.35 opens it. Verified on his car (the slab at x=80 disappears, leaving only the
+         roof at 70.9-72.7) and on the same car with its features stripped, both watertight at
+         0 boundary edges and 0 non-manifold.
+
+         It does NOT risk the pinholes the area gate below exists to stop: specks are excluded
+         by AREA, not by this test, so loosening the angle grows the real ceilings without
+         promoting a single speck. -0.25 also works and is not taken — the extra margin buys
+         nothing measured and this is nearer the "starts facing sideways" line the opening was
+         designed around. */
+      if(fl && fz/fl < -0.35) down[t]=1;                       // genuinely faces the ground
     }
     if(!opts.openArches){
       for(let t=0;t<nTri;t++)
