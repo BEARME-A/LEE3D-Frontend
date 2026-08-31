@@ -2448,6 +2448,15 @@ function makeVisualHull(p){
      is left open. With a bottom traced the drawing already says where the underside is, so
      nothing is levelled. */
   const baseCut = p.closedBottom ? -Infinity : baseCutZ(sideP,H);
+  /* "Leave the underside open". The vertex-offset hollow honours it by trimming ground-facing
+     triangles; the FIELD hollow never read it at all, and the field hollow is the one that
+     runs at any normal wall thickness. Measured on Collin's own car, his exact settings:
+         wall 2.1  field OFF  material up the middle 85.5-86.9          open
+         wall 2.5  field ON   material up the middle 5.0-7.5, 85.2-86.8 FLOOR
+         wall 6.0  field ON   material up the middle 5.0-16.8           FLOOR
+     The floor starts at z=5.0, which is his baseCutZ of 5.017 — it is the wall band grown
+     against the levelling plane. That is why turning the thickness up closed the underside. */
+  const openUnder = !p.closedBottom && !!(p.openUnderside || p.openArches);
   /* THE OTHER SIDE, IF THERE IS ONE.
      Trace one side and the body is symmetric — that outline is what you see from either
      hand, which is what almost everything wants. Trace the second and the two are allowed
@@ -2777,7 +2786,7 @@ function makeVisualHull(p){
        the face they were drawn on rather than everywhere at once. */
     return d;
   };
-  const F=(x,y,z)=>{
+  const F=(x,y,z,noCut)=>{
     let d=bodyAt(x,y,z);
     /* CARVE AND RAISE ARE FIELD OPERATIONS, NOT SURFACE PUSHES.
        A carve is the feature footprint swept straight in along its view axis to a flat floor
@@ -3119,6 +3128,12 @@ function makeVisualHull(p){
       d=Math.max(d, -sdFeat(f,x,y,z));
     }
     // level base: outside below the cut, so the solid finishes flat instead of rounding off
+    /* `noCut` returns the body WITHOUT that clip. The clip is an artificial plane, not a
+       surface anybody traced, and the hollow needs to know the difference: a wall band grown
+       against a real surface is the shell, a wall band grown against this plane is a FLOOR
+       across the underside that nobody asked for. Only the cavity term uses it — the outer
+       skin keeps the clipped field and so keeps its exact shape. */
+    if(noCut) return d;
     return baseCut>-1e29 ? Math.max(d, baseCut-z) : d;
   };
   /* HOW FINE A GRID TO BUILD ON.
@@ -3422,7 +3437,24 @@ function makeVisualHull(p){
       const gy=(F(xm,ym+eps,zm)-F(xm,ym-eps,zm))/(2*eps);
       const gz=(F(xm,ym,zm+eps)-F(xm,ym,zm-eps))/(2*eps);
       const g=Math.hypot(gx,gy,gz)||1;
-      const dist=b/g;                              // true perpendicular distance, mm, negative inside
+      /* THE CAVITY IGNORES THE LEVELLING PLANE; THE OUTER SKIN DOES NOT.
+         `b` carries the base-plane clip, and the shell band grows against every surface in it
+         — including that plane, which is not a surface anybody traced. The result is a floor
+         sealing the underside, and it appears only once the wall is thick enough for the field
+         path to switch on. Hence "turn the thickness up and the underbody stops being hollow".
+
+         So the inner wall is drawn from the UNCLIPPED body while `shell` below still takes the
+         outer surface from `b`. Below the plane the unclipped field keeps going, so the cavity
+         runs straight out through the opening and no floor is ever built.
+
+         REJECTED, and measured, so it is not tried again: scaling `wLoc` to zero on
+         ground-facing normals. It removes the floor, but `-(dist+wLoc)` draws BOTH surfaces,
+         so zeroing it deletes the outer bottom skin too — the body's outside moves, and three
+         guard tests fail (the one-wall rim band, "the outside is identical at every wall
+         thickness", and no inner vertex outside the outer skin). Touch the cavity's input,
+         never the term the outer surface is read from. */
+      const bIn = openUnder ? Math.min(b, F(xm,ym,zm,true)) : b;
+      const dist=bIn/g;                            // true perpendicular distance, mm, negative inside
       /* A CAVITY TOO NARROW TO MESH leaves a sliver of material a fraction of a millimetre
          thick just inside the wall — measured on a 200mm slab at an 8mm wall, a 4mm cavity
          left 0.68mm and a 6mm cavity left 0.24mm, while 10mm and above were clean. Both were
@@ -6205,9 +6237,23 @@ function commitTrace(){
     } else traced.natWid=null;
   }
 
+  /* AREA, NOT POINT COUNT — this has to match `_clean` in the backend's hull.py exactly.
+     Three DISTINCT points can still be collinear, and a line has no area to build from. The
+     count check let one through, and both ends then obeyed it as "no constraint at all":
+     the backend's side prism extruded to volume 0.0 and OpenCascade's intersect DISCARDS a
+     zero-volume operand, so the body came out as its full bounding box with no error. The
+     studio's own downstream checks are all `length>2` too, so a flat outline reached the
+     preview mesh the same way.
+     Returning null here is what the 18 `length>2` guards downstream already handle correctly
+     — they fall back to BOX, which is exactly what the backend does with _UNIT_BOX. One
+     rejection at the entry point, and the two ends agree again without touching any of them.
+     Threshold is on NORMALISED 0..1 coords and absolute: a 0.0005-wide sliver still measures
+     3e-4, eight orders above it. Only an exact collapse is caught. */
+  const polyAreaN=(p)=>{let a=0;for(let i=0,j=p.length-1;i<p.length;j=i++)a+=(p[j][0]*p[i][1]-p[i][0]*p[j][1]);return Math.abs(a/2);};
   const normPoly=(pts,flipY)=>{if(!pts||pts.length<3)return null;const xs=pts.map(p=>p.x),ys=pts.map(p=>p.y);
     const minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys),sx=Math.max(1,maxX-minX),sy=Math.max(1,maxY-minY);
-    return pts.map(p=>[(p.x-minX)/sx, flipY?(maxY-p.y)/sy:(p.y-minY)/sy]);};
+    const out=pts.map(p=>[(p.x-minX)/sx, flipY?(maxY-p.y)/sy:(p.y-minY)/sy]);
+    return polyAreaN(out)<=1e-12?null:out;};
   traced.sidePoly =normPoly(V.side.A,true);
   // only when the second side was actually drawn — otherwise the body stays symmetric
   traced.sidePolyR=(V.sideR&&V.sideR.A&&V.sideR.A.length>2)?normPoly(V.sideR.A,true):null;
