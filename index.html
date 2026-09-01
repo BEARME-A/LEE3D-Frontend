@@ -4146,6 +4146,84 @@ function makeVisualHull(p){
       if(f.span < cell*1.5) tooSmall.push({name:f.name, span:f.span, cell:cell, fixedBy:wouldFix(f.span)});
     }
   }
+  /* REPAIR THE INVERTED FACETS AROUND A CARVED RIM.
+     "Cut into the shape" meshes features as prisms in the field, so every pocket brings a
+     sharp concave edge. A dual contour puts ONE vertex in a cell, which cannot represent a
+     sharp step, and the facets around each rim invert. Measured on a real traced car with 153
+     pockets, counting adjacent triangles whose normals disagree by more than 134 degrees:
+
+         no features, either mode      187      <- the model's own baseline
+         press on the surface, 153     196      <- stamp never makes a sharp edge
+         cut into the shape, 153      2530      <- 13x, and this is what "looks awful" is
+
+     It is NOT resolution: measured at res 108/139/165 the count tracks the triangle count and
+     the RATE stays flat at about 2%, while the build goes from 7s to 140s. It is not the wall
+     either (a 4mm wall on the same pockets is worse, not better). It scales with the pockets
+     themselves — 0/38/76/153 features gives 187/1304/2151/2530 — so the tears are AT the rims.
+
+     The existing winding pass cannot see this: it fixes which way a facet faces, not where its
+     vertices are, and an inverted facet here is correctly wound around badly placed points.
+
+     So relax only the vertices that actually carry an inversion, toward the average of their
+     neighbours, capped at half a cell so a rim cannot be rounded away. Same technique already
+     used to fair the underside opening's edge, and for the same reason.
+
+         3 passes, cap 0.5 cells:   2530 -> 465 torn, 88% of the feature-induced tearing gone
+         watertight throughout:     0 boundary edges, 0 non-manifold
+         the OUTSIDE does not move: bbox L 199.503 -> 199.454, W and H unchanged to 3 decimals
+
+     Bounded at three passes on purpose. One pass already takes 2530 to 742; the third is worth
+     277 more and the fourth would start trading crispness for a number. */
+  {
+    const SPIKE_PASSES = 3, SPIKE_CAP = cell * 0.5;
+    const nT = indices.length / 3;
+    const triN = t => {
+      const a = indices[t*3]*3, b = indices[t*3+1]*3, c = indices[t*3+2]*3;
+      const ux = positions[b]-positions[a], uy = positions[b+1]-positions[a+1], uz = positions[b+2]-positions[a+2];
+      const vx = positions[c]-positions[a], vy = positions[c+1]-positions[a+1], vz = positions[c+2]-positions[a+2];
+      let X = uy*vz-uz*vy, Y = uz*vx-ux*vz, Z = ux*vy-uy*vx;
+      const L = Math.hypot(X,Y,Z) || 1; return [X/L, Y/L, Z/L];
+    };
+    const ek = (a,b) => a<b ? a+"_"+b : b+"_"+a;
+    /* TOPOLOGY IS BUILT ONCE. Relaxing moves vertices; it never changes which triangle owns
+       which index, so the edge map and the vertex adjacency are identical on every pass. The
+       first cut of this rebuilt both inside the loop and cost 16.7s against 7.0s for the same
+       model — nearly all of it re-deriving maps that had not changed. */
+    const em = new Map();
+    for (let q=0,t=0; q<indices.length; q+=3,t++) {
+      const T = [indices[q],indices[q+1],indices[q+2]];
+      for (const [u,v] of [[T[0],T[1]],[T[1],T[2]],[T[2],T[0]]]) {
+        const k = ek(u,v); let a2 = em.get(k); if(!a2){a2=[];em.set(k,a2);} a2.push(t); }
+    }
+    const adj = new Map();
+    for (let q=0; q<indices.length; q+=3) {
+      const T = [indices[q],indices[q+1],indices[q+2]];
+      for (const [u,v] of [[T[0],T[1]],[T[1],T[2]],[T[2],T[0]]]) {
+        if(!adj.has(u))adj.set(u,new Set()); if(!adj.has(v))adj.set(v,new Set());
+        adj.get(u).add(v); adj.get(v).add(u); }
+    }
+    for (let pass=0; pass<SPIKE_PASSES; pass++) {
+      const N = []; for (let t=0;t<nT;t++) N.push(triN(t));
+      const bad = new Set();
+      for (const ts of em.values()) {
+        if (ts.length !== 2) continue;
+        const [a,b] = ts;
+        if (N[a][0]*N[b][0] + N[a][1]*N[b][1] + N[a][2]*N[b][2] < -0.7)
+          for (const t of [a,b]) for (const k of [indices[t*3],indices[t*3+1],indices[t*3+2]]) bad.add(k);
+      }
+      if (!bad.size) break;                       // nothing inverted: a plain body pays nothing
+      const orig = new Float32Array(positions);
+      for (const k of bad) {
+        const nb = adj.get(k); if (!nb || nb.size < 3) continue;
+        let sx=0, sy=0, sz=0;
+        for (const j of nb) { sx+=orig[j*3]; sy+=orig[j*3+1]; sz+=orig[j*3+2]; }
+        let dx = sx/nb.size - orig[k*3], dy = sy/nb.size - orig[k*3+1], dz = sz/nb.size - orig[k*3+2];
+        const L = Math.hypot(dx,dy,dz);
+        if (L > SPIKE_CAP) { dx *= SPIKE_CAP/L; dy *= SPIKE_CAP/L; dz *= SPIKE_CAP/L; }
+        positions[k*3] = orig[k*3]+dx; positions[k*3+1] = orig[k*3+1]+dy; positions[k*3+2] = orig[k*3+2]+dz;
+      }
+    }
+  }
   return {positions,indices,volume:Math.abs(vol),hollow:(hollow&&wall>0),openBottom:openedBottom,
           thinWallFallback,
           tooSmall:tooSmall.length?tooSmall:null,
