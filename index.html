@@ -3505,6 +3505,31 @@ function makeVisualHull(p){
         const want=T*0.4;
         if(want<wall) wLoc=Math.max(wallFloor, want);
       }
+      /* ARCH CEILINGS, in the field path.
+         The unclipped cavity above opens the BASE PLANE and nothing else, so the underside of
+         the body where it sits over a wheel arch — a ceiling up at z=31 or z=42 on a real
+         traced car — stayed floored at every field wall thickness. The vertex-offset path
+         opens those through `bottomSkinTris`; the field path had no equivalent at all, which
+         is why turning the thickness up put the floor back.
+
+         Thin the wall to nothing where the surface looks at the ground, so the cavity reaches
+         the outer surface and no ceiling is built.
+
+         **ONLY ABOVE THE BASE PLANE.** Doing it everywhere also strips the flat bottom at the
+         levelled base and lifts the body's lowest material, which is what failed three tests
+         on the first attempt. Above the base plane nothing can move the bounding box, because
+         the extremes are set at the base and the roof.
+
+         This block must sit AFTER `wLoc` is settled — it is declared below `dist`, and placing
+         it earlier is a `Cannot access 'wLoc' before initialization`.
+
+         The ramp reaches zero at down=0.50 rather than 0.70 because a real arch ceiling on a
+         traced car measures about -0.5: the gentler ramp only took the wall to 57% there and
+         left a thinner floor instead of none, opening at 3mm and not at 2.5 or 4. */
+      if(openUnder && zm > baseCut + Math.max(wLoc, cell * 2)){
+        const down = -gz/g;                                  // 1 = looks straight at the ground
+        if(down > 0.30) wLoc *= Math.max(0, 1 - (down - 0.30) / 0.20);
+      }
       /* KNOWN ARTEFACT — a knife edge, diagnosed and deliberately not fixed. Read this before
          attempting it again; three earlier attempts were made on a WRONG diagnosis.
          `dist` is b divided by a SAMPLED gradient, so it carries a few percent of noise. Where
