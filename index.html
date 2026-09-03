@@ -3473,7 +3473,34 @@ function makeVisualHull(p){
          guard tests fail (the one-wall rim band, "the outside is identical at every wall
          thickness", and no inner vertex outside the outer skin). Touch the cavity's input,
          never the term the outer surface is read from. */
-      const bIn = openUnder ? Math.min(b, F(xm,ym,zm,true)) : b;
+      let bIn = openUnder ? Math.min(b, F(xm,ym,zm,true)) : b;
+      /* THE FLOOR BAND JUST ABOVE THE OPENING.
+         The unclipped reading is not deep enough down here to clear a thick wall. Measured on
+         a real traced car at mesh (100,0), wall 5, baseCut 5.017 — the cavity only forms once
+         |bIn| exceeds wLoc:
+
+             z= 5.56  bIn=-4.19  wLoc=5.00  cav=-0.81   MATERIAL
+             z= 7.42  bIn=-4.51  wLoc=5.00  cav=-0.49   MATERIAL
+             z= 9.27  bIn=-4.80  wLoc=5.00  cav=+0.35   cavity
+
+         `bIn` bottoms out at -4.19 and climbs about 0.16/mm, so ANY wall thicker than roughly
+         4.2mm seals the underside and any thinner one does not — which is exactly where the
+         floor was observed to appear, between 4.00 and 4.50. It is bounded there because the
+         body field is a max of three separable 2D fields and the side/front silhouettes carry
+         their own lower edge. That edge sits BELOW the base cut and has been cut away, so it
+         has no business constraining the cavity, but the unclipped reading still sees it.
+
+         So measure the depth from the OPENING instead, which is the surface that actually
+         matters down here.
+
+         BOUNDED AND LOCAL, both deliberately. Only within two walls of the base plane, so it
+         cannot grow without limit — a term that does turns the entire body into cavity, which
+         is recorded above as already tried. And only where the surface looks at the ground, so
+         the SIDE WALLS coming down to the base plane are untouched: they are what holds the
+         body's lowest material, and hollowing them out is what lifts the bbox floor and fails
+         `hollow: the outside is identical at every wall thickness`. */
+      if(openUnder && zm < baseCut + wall*2 && -gz/g > 0.35 && bIn < -wall*0.6)
+        bIn = Math.min(bIn, -(zm - baseCut) - wall - cell);
       const dist=bIn/g;                            // true perpendicular distance, mm, negative inside
       /* A CAVITY TOO NARROW TO MESH leaves a sliver of material a fraction of a millimetre
          thick just inside the wall — measured on a 200mm slab at an 8mm wall, a 4mm cavity
