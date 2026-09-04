@@ -998,6 +998,21 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
         </div>
 
         <div class="ws-sec">
+          <div class="ws-lbl">Site plan underneath</div>
+          <p class="hint" style="margin:2px 0 6px">Drop your plan drawing on the floor and place buildings straight onto it. It is a tracing aid only — it is never part of the model and never exported.</p>
+          <label for="wsPlanFile" class="btn" style="width:100%;display:block;text-align:center">⊹ Choose plan image</label>
+          <input type="file" id="wsPlanFile" accept="image/*" style="width:100%">
+          <label style="margin-top:6px">How wide is the plan in real life
+            <span class="val"><span id="wsPlanWv">80</span> m</span></label>
+          <input type="range" id="wsPlanW" min="1" max="500" value="80" step="1">
+          <label style="margin-top:6px">Drawn at 1:<input type="number" id="wsPlanScale" step="1" min="1" value="200" style="width:70px"></label>
+          <div class="row" style="margin-top:6px">
+            <button class="btn ghost" id="wsPlanHide" style="flex:1">Hide</button>
+            <button class="btn ghost" id="wsPlanClear" style="flex:1">Remove</button>
+          </div>
+        </div>
+
+        <div class="ws-sec">
           <div class="ws-lbl">Save assembly as an object</div>
           <input id="wsName" class="proj-name mono" value="assembly-1" spellcheck="false" style="width:100%">
           <button class="btn primary" id="wsSave" style="width:100%;margin-top:6px">Save assembly to library</button>
@@ -8481,6 +8496,61 @@ function wsUpdateCam(){const c=WS.cam;c.pol=clamp(c.pol,0.12,Math.PI-0.12);c.rad
   const t=WS.target;WS.cameraObj.position.set(t.x+c.rad*Math.sin(c.pol)*Math.cos(c.az),t.y+c.rad*Math.cos(c.pol),t.z+c.rad*Math.sin(c.pol)*Math.sin(c.az));
   WS.cameraObj.lookAt(t);wsRequestRender();}
 function wsRecenter(){WS.target.set(0,WS.ext*0.08,0);WS.cam.rad=WS.ext*1.4;WS.cam.az=-0.9;WS.cam.pol=1.05;wsUpdateCam();}
+/* THE SITE PLAN UNDERLAY.
+   A plan drawing lying on the floor so buildings can be placed ONTO it rather than by eye
+   against a grid. Everything else a site needs — 6-DOF placement, numeric fields, per-instance
+   colour, combined STL, saving the arrangement — Workshop already had; this was the only thing
+   missing, which is that there was nothing to place against.
+
+   **IT IS SCENE FURNITURE, NOT A PART.** It is kept in `WS.planMesh` and never enters
+   `WS.inst`, and that single choice is what keeps it out of everything that matters:
+     wsRecomputeExtent  iterates WS.inst -> the plan cannot blow up the grid or the recenter
+     wsPick             iterates WS.inst -> the plan cannot be selected or dragged by accident
+     wsExportSTL        iterates WS.inst -> the plan can never end up in a printed file
+   Adding it as an instance would have been less code and wrong in three places at once.
+
+   SIZING. The plan's width in the model is (real width) / (scale it is drawn at), which is the
+   same arithmetic the buildings use, so a building dropped on a spot on the drawing lands at
+   that spot in the model. Both numbers are the user's — there is no guessing a scale from an
+   image. */
+function wsPlanApply(){
+  if(!WS.planMesh) return;
+  const realM = +(document.getElementById("wsPlanW")||{}).value || 80;      // metres
+  const denom = Math.max(1, +(document.getElementById("wsPlanScale")||{}).value || 200);
+  const wModel = (realM * 1000) / denom;                                    // mm in the model
+  const ar = WS.planAspect || 1;
+  WS.planMesh.scale.set(wModel, wModel / ar, 1);
+  wsRequestRender();
+}
+function wsPlanSet(url){
+  const tex = new THREE.TextureLoader().load(url, t=>{
+    const im = t.image;
+    WS.planAspect = (im && im.height) ? (im.width / im.height) : 1;
+    wsPlanApply(); wsRequestRender();
+  });
+  if(WS.planMesh){ WS.scene.remove(WS.planMesh);
+    WS.planMesh.geometry.dispose();
+    if(WS.planMesh.material.map) WS.planMesh.material.map.dispose();
+    WS.planMesh.material.dispose(); WS.planMesh=null; }
+  const geo = new THREE.PlaneGeometry(1,1);
+  const mat = new THREE.MeshBasicMaterial({map:tex, transparent:true, opacity:0.85,
+                                           depthWrite:false, side:THREE.DoubleSide});
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.rotation.x = -Math.PI/2;      // lie flat
+  mesh.position.y = -0.15;           // a hair under the floor grid: no z-fighting with it
+  mesh.renderOrder = -1;             // and draw first, so parts always sit on top
+  mesh.userData.isPlan = true;       // a label for anything that walks the scene later
+  WS.scene.add(mesh); WS.planMesh = mesh;
+  wsPlanApply();
+}
+function wsPlanClear(){
+  if(!WS.planMesh) return;
+  WS.scene.remove(WS.planMesh);
+  WS.planMesh.geometry.dispose();
+  if(WS.planMesh.material.map) WS.planMesh.material.map.dispose();
+  WS.planMesh.material.dispose();
+  WS.planMesh = null; wsRequestRender();
+}
 function wsBuildGrid(){wsRequestRender();
   if(WS.gridGroup){WS.scene.remove(WS.gridGroup);WS.gridGroup.traverse(o=>{o.geometry&&o.geometry.dispose();o.material&&o.material.dispose&&o.material.dispose();});}
   WS.gridGroup=new THREE.Group();
@@ -9066,6 +9136,29 @@ document.getElementById("wsDup").onclick=()=>{if(WS.sel)wsDuplicate(WS.sel);};
 document.getElementById("wsDel").onclick=()=>{if(WS.sel)wsDelete(WS.sel);};
 document.getElementById("wsSave").onclick=wsSaveAssembly;
 document.getElementById("wsSTL").onclick=wsExportSTL;
+/* Site plan underlay. Reading the file as a data URL rather than an object URL so the texture
+   survives the page's own lifetime without a revoke to get wrong. */
+(function(){
+  const f=document.getElementById("wsPlanFile"), w=document.getElementById("wsPlanW"),
+        wv=document.getElementById("wsPlanWv"), sc=document.getElementById("wsPlanScale"),
+        hide=document.getElementById("wsPlanHide"), clr=document.getElementById("wsPlanClear");
+  if(!f) return;
+  f.onchange=e=>{
+    const file=e.target.files&&e.target.files[0]; if(!file) return;
+    const r=new FileReader();
+    r.onload=()=>{ wsPlanSet(r.result);
+      toast("Plan on the floor. Set how wide it is in real life and the scale it is drawn at."); };
+    r.onerror=()=>toast("Could not read that image.");
+    r.readAsDataURL(file);
+  };
+  const sync=()=>{ if(wv&&w)wv.textContent=w.value; wsPlanApply(); };
+  if(w) w.oninput=sync;
+  if(sc) sc.oninput=sync;
+  if(hide) hide.onclick=()=>{ if(!WS.planMesh){toast("No plan loaded.");return;}
+    WS.planMesh.visible=!WS.planMesh.visible;
+    hide.textContent=WS.planMesh.visible?"Hide":"Show"; wsRequestRender(); };
+  if(clr) clr.onclick=()=>{ wsPlanClear(); if(hide)hide.textContent="Hide"; toast("Plan removed."); };
+})();
 document.getElementById("wsRecenter").onclick=wsRecenter;
 document.getElementById("wsZoomIn").onclick=()=>{WS.cam.rad*=0.8;wsUpdateCam();};
 document.getElementById("wsZoomOut").onclick=()=>{WS.cam.rad*=1.25;wsUpdateCam();};
