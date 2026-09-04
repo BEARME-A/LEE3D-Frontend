@@ -384,6 +384,34 @@ if (API.autoOutline) {
 // Blueprints often draw the top view rotated 90° (car pointing up). Everything downstream
 // assumes length runs left-to-right, so a sideways view makes the length get measured as
 // the width -> the model came out as a flat slab. This is that bug, pinned down.
+/* THE SITE PLAN UNDERLAY IS NOT A PART. It lies on the Workshop floor so buildings can be
+   placed onto a real drawing, and it must never reach the model. All three of the things that
+   would leak it walk WS.inst, and the plan is deliberately kept out of that list — so this is
+   a source check, not a geometry one. Workshop needs THREE.js and a DOM and cannot be built
+   headlessly, but the property that matters IS statically checkable and worth pinning: a plan
+   in an exported STL would be printed. */
+t("site plan: the underlay never enters WS.inst, so it cannot be picked, sized or exported", () => {
+  ok(/function wsPlanSet\(/.test(html), "wsPlanSet is gone — the underlay has been removed");
+  ok(/WS\.planMesh\s*=\s*mesh/.test(html), "the plan must be held in WS.planMesh, not an instance");
+
+  // it must never be pushed as an instance
+  const pushes = [...html.matchAll(/WS\.inst\.push\(([^)]*)\)/g)].map(m => m[1]);
+  ok(pushes.length > 0, "WS.inst.push has vanished — this test is no longer checking anything");
+  for (const arg of pushes)
+    ok(!/plan/i.test(arg), "something pushes a plan into WS.inst: " + arg);
+
+  // and the three leak paths must still be the ones that only walk instances
+  for (const fn of ["wsExportSTL", "wsRecomputeExtent"]) {
+    const i = html.indexOf("function " + fn);
+    ok(i > 0, fn + " is missing");
+    const body = html.slice(i, i + 900);
+    ok(/for\s*\(\s*const it of WS\.inst\b/.test(body),
+       fn + " no longer iterates WS.inst — the plan may now leak into it");
+  }
+  const pick = html.slice(html.indexOf("function wsPick"), html.indexOf("function wsPick") + 400);
+  ok(/WS\.inst\.forEach/.test(pick), "wsPick no longer builds its pick list from WS.inst");
+});
+
 t("orient: a sideways top view is detected as portrait", () => {
   // real proportions: a car 190 long x 80 wide, but DRAWN pointing up
   const sideways = [{x:20,y:10},{x:100,y:10},{x:100,y:200},{x:20,y:200}];
