@@ -4856,7 +4856,8 @@ function rebuild(){
 
   // separate BOTTOM PLATE part (keeps the shell hollow; assembles into a closed object)
   disposeMesh(bottomMesh); bottomMesh=null;
-  if(S.sepBottom && S.shape!=="revolve" && S.mode!=="projection"){
+  // a lathe closes its own base and has no traced floor to plate — same as revolve
+  if(S.sepBottom && S.shape!=="revolve" && S.shape!=="lathe" && S.mode!=="projection"){
     const bp=makeBottom(prof);
     const bgeo=new THREE.BufferGeometry();
     bgeo.setAttribute("position",new THREE.Float32BufferAttribute(bp.positions,3));
@@ -8818,7 +8819,11 @@ function wsMeshFor(profile){
   const g=new THREE.BufferGeometry();g.setAttribute("position",new THREE.Float32BufferAttribute(body.positions,3));g.setIndex(body.indices);g.computeVertexNormals();
   const shell=new THREE.Mesh(g,new THREE.MeshStandardMaterial({color:0x9fb0c4,metalness:.1,roughness:.62,side:THREE.DoubleSide}));
   oriented.add(shell);meshes.push(shell);
-  if(profile.sepBottom!==false){const bp=makeBottom(profile);const bg=new THREE.BufferGeometry();
+  /* A TURNED OBJECT HAS NO TRACED FLOOR PLATE. `makeBottom` builds a rectangular plate from
+     `widthProfile` and `bottomProfile`; on a fountain that is a slab under a round body, and
+     the lathe already closes its own base. `revolve` was excluded from the separate-bottom
+     option for the same reason — this is the same exclusion, in the place Workshop builds. */
+  if(profile.sepBottom!==false && profile.shape!=="lathe" && profile.shape!=="revolve"){const bp=makeBottom(profile);const bg=new THREE.BufferGeometry();
     bg.setAttribute("position",new THREE.Float32BufferAttribute(bp.positions,3));bg.setIndex(bp.indices);bg.computeVertexNormals();
     const bmesh=new THREE.Mesh(bg,new THREE.MeshStandardMaterial({color:0x46b7d9,metalness:.1,roughness:.6,side:THREE.DoubleSide}));
     oriented.add(bmesh);meshes.push(bmesh);}
