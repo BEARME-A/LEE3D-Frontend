@@ -598,6 +598,7 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
         <div class="seg" id="modeSeg" style="margin:0 0 4px;width:100%">
           <button data-m="loft">Smooth</button>
           <button data-m="projection" class="on">Follow my drawing</button>
+          <button data-m="lathe">Round · turned</button>
         </div>
         <div class="hint" id="modeHint"><b>Smooth</b> &mdash; a flowing, rounded body. Best for cars, boats, anything streamlined. Features here are dents and bumps.<br><b>Follow my drawing</b> &mdash; carves out exactly what your outlines say, corners and all. Use it for angular things, and it's the only mode that can <b>cut a window clean through</b>.</div>
         <div class="field" id="crispField"><label>Edge crispness <span class="val"><span id="vCrisp">0.50</span></span></label><input type="range" id="sCrisp" min="0" max="1" value="0.5" step="0.05"></div>
@@ -4654,6 +4655,7 @@ const S={...PRESETS.hotrod, wall:1.8, st:72, seg:56, opacity:.55, mode:"projecti
 // NOTE: revolve primitives (sphere/cylinder/dome/cone) are retired from the UI — this tool
 // is for IMPORTED shapes. makeRevolve() stays so old saved files still load.
 let traced={top:null,bottom:null,width:null,widthBot:null,section:null,sections:null,frontHull:null,rearHull:null,sidePoly:null,sidePolyR:null,topPoly:null,frontPoly:null,bottomPoly:null,natWid:null,natHgt:null};
+let _lastRoundHint=null;   // the plan the round-object hint was last shown for
 let features=[];   // [{view,poly:[[u,v]…],depth,soft,name}] // mm-space / normalized profiles when traced
 
 function buildTop(){
@@ -4762,6 +4764,14 @@ function currentProfile(){
     features:features.length?features.map(f=>{const o={...f}; if(o.kind==="text")delete o.mask; return o;}):null,
     shape:S.shape, revShape:S.revShape, revSize:S.revSize, widMM:S.widMM, hgtMM:S.hgtMM,
     revProfile:(S.shape==="revolve"?buildRevProfile():null), revLen:(S.shape==="revolve"?revLenFor():null),
+    /* A turned object carries its own radius profile and its own height. Without them a saved
+       fountain reloads as whatever `sidePoly` happens to mean to another builder, and the
+       height would fall back to `length` — which for a fountain is its DIAMETER, so it would
+       come back squat. Written only for a lathe, so nothing else gains a key. */
+    ...(S.shape==="lathe" ? {
+      revProfileV: revProfileFromElevation(traced.sidePoly, S.len),
+      revHeight: Math.max(1, sampleProfile(buildTop(), 0.5) * 2 || S.len)
+    } : {}),
   };
 }
 // Heavy profile for SAVE/EXPORT only: adds the full editable tracing state (points + images).
@@ -6498,6 +6508,25 @@ function commitTrace(){
   traced.topPoly  =normPoly(V.top.A,false);
   traced.frontPoly=normPoly(V.front.A,true);
   traced.bottomPoly=V.bottom?normPoly(V.bottom.A,false):null;
+  /* A ROUND PLAN MEANS A LATHE, AND SAY SO ONCE.
+     A visual hull cannot build a turned object — measured at 36% out of round on a fountain,
+     which is all but a square, anywhere the object is narrower than its widest plan circle.
+     The plan outline is the honest evidence: it is already in hand, and it cannot be defeated
+     by handwriting, a rotated sheet, or a scan of a scan the way reading the word "diameter"
+     off the drawing could be. Words are worth taking as corroboration if a text source ever
+     exists; they are not the mechanism.
+
+     A HINT, not a switch. It is offered once per trace and changes nothing on its own —
+     guessing at somebody's intent and silently rebuilding their model as a different kind of
+     object would be worse than saying nothing. */
+  try{
+    const c = outlineCircularity(traced.topPoly);
+    if(c.round && S.shape !== "lathe" && traced.topPoly !== _lastRoundHint){
+      _lastRoundHint = traced.topPoly;
+      toast("That plan looks round. A fountain or column wants turning on a lathe — a traced "
+          + "hull comes out square where it narrows.");
+    }
+  }catch(e){ /* a hint is never worth breaking a trace over */ }
   setTraceStatus();requestRebuild();updateViewDots();
 }
 function updateViewDots(){
@@ -6554,6 +6583,63 @@ function svgPhysicalWidthMM(svg){
   const vb=(svg.getAttribute("viewBox")||"").trim().split(/[\s,]+/).map(Number);
   if(byH&&vb.length===4&&vb[2]>0&&vb[3]>0)return byH*(vb[2]/vb[3]);
   return null;
+}
+/* IS THIS OUTLINE A CIRCLE?
+   A fountain, a bollard, a planter, a roundabout island — anything turned on a lathe — is
+   round in plan, and a visual hull cannot build it (it comes out 36% out of round, all but a
+   square, anywhere the object is narrower than its widest plan circle).
+
+   Measured off the TRACED OUTLINE, not read off the drawing. The app already holds the
+   polygon; text on a plan may be handwritten, rotated, or a scan of a scan, and one of the
+   two example drawings is a hand-annotated survey sheet no OCR would touch. Words like
+   "diameter" are worth using as a HINT that corroborates this, never as the mechanism.
+
+   Radial deviation from the AREA centroid, not the isoperimetric ratio: a many-sided polygon
+   scores near 1 on isoperimetric whether or not it is round, and an ellipse scores well too.
+   An ellipse is not a lathe shape and this has to reject it. */
+function outlineCircularity(poly){
+  if(!poly || poly.length < 8) return {round:false, dev:1, n:(poly||[]).length};
+  let A = 0, cx = 0, cy = 0;
+  for(let i = 0, j = poly.length - 1; i < poly.length; j = i++){
+    const [x1,y1] = poly[j], [x2,y2] = poly[i];
+    const f = x1 * y2 - x2 * y1;
+    A += f; cx += (x1 + x2) * f; cy += (y1 + y2) * f;
+  }
+  A /= 2;
+  if(Math.abs(A) < 1e-12) return {round:false, dev:1, n:poly.length};
+  cx /= (6 * A); cy /= (6 * A);
+  /* SAMPLE THE PERIMETER, NOT THE VERTICES. Measuring only the corners lets a shape through
+     whose corners happen to sit at one radius while its edges bow far inside — a 2:1 rounded
+     rectangle scored 0.014 that way, rounder than a hand-traced circle, because all eight of
+     its corners are equidistant from the centroid and the long flat sides are never looked at.
+     Walking the outline at even arc length cannot be fooled by where somebody put a point. */
+  const N = 96, seg = [];
+  let per = 0;
+  for(let i = 0; i < poly.length; i++){
+    const a = poly[i], b = poly[(i + 1) % poly.length];
+    const d = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    seg.push(d); per += d;
+  }
+  if(per < 1e-12) return {round:false, dev:1, n:poly.length};
+  const rs = [];
+  let sum = 0, mn = Infinity, mx = -Infinity, k = 0, run = 0;
+  for(let i = 0; i < N; i++){
+    const want = per * i / N;
+    while(k < seg.length - 1 && run + seg[k] < want){ run += seg[k]; k++; }
+    const a = poly[k], b = poly[(k + 1) % poly.length];
+    const t = seg[k] > 1e-12 ? (want - run) / seg[k] : 0;
+    const r = Math.hypot(a[0] + (b[0] - a[0]) * t - cx, a[1] + (b[1] - a[1]) * t - cy);
+    rs.push(r); sum += r;
+    if(r < mn) mn = r;
+    if(r > mx) mx = r;
+  }
+  const mean = sum / rs.length;
+  if(mean < 1e-12) return {round:false, dev:1, n:poly.length};
+  let v = 0; for(const r of rs) v += (r - mean) * (r - mean);
+  const sd = Math.sqrt(v / rs.length) / mean;      // scatter: catches a wobbly trace
+  const spread = (mx - mn) / mean;                 // worst case: catches one bad corner
+  const dev = Math.max(sd * 2, spread * 0.5);
+  return {round: dev < 0.12, dev, sd, spread, cx, cy, r: mean, n: poly.length};
 }
 function polyArea(p){let a=0;for(let i=0,j=p.length-1;i<p.length;j=i++)a+=(p[j].x*p[i].y-p[i].x*p[j].y);return Math.abs(a/2);}
 // biggest shape wins, ignoring a full-canvas background rect. rank>0 steps to the next
@@ -7354,8 +7440,26 @@ function refreshCrispUI(){
 }
 document.querySelectorAll("#modeSeg button").forEach(b=>b.onclick=()=>{
   document.querySelectorAll("#modeSeg button").forEach(x=>x.classList.remove("on"));b.classList.add("on");
-  S.mode=b.dataset.m; refreshCrispUI();
-  if(S.mode==="projection"&&!traced.sidePoly)
+  /* "Round · turned" sits in this row because it answers the same question the other two do —
+     how the body is built from the outlines. It is a SHAPE rather than a mode, so it sets
+     `S.shape` and parks `S.mode` on the projection builder underneath; picking either of the
+     others puts the shape back. Keeping it here rather than in its own control means there is
+     one place to look for "what kind of thing is this", and the three are mutually exclusive,
+     which they genuinely are. */
+  if(b.dataset.m==="lathe"){
+    S.shape="lathe";
+    if(!traced.sidePoly)
+      toast("A turned object is built from its <b>side</b> elevation — trace that first. Each "
+          + "height's radius is half the outline's width there.");
+    else if(traced.topPoly && !outlineCircularity(traced.topPoly).round)
+      toast("That plan does not look round. Turning it will build the shape its side elevation "
+          + "sweeps, which may not be what the drawing shows.");
+  } else {
+    S.shape="loft";
+    S.mode=b.dataset.m;
+  }
+  refreshCrispUI();
+  if(S.shape!=="lathe"&&S.mode==="projection"&&!traced.sidePoly)
     toast("Follow my drawing needs at least a traced <b>side</b> outline — it carves the volume your outlines describe.");
   /* Frame the model again when the shape style changes.
      `frameModel()` only ran at startup, so the camera kept whatever angle it had been orbited
@@ -7731,7 +7835,9 @@ function applyProfile(p){
   traced.rearHull=null;
   traced.sections=(p.sections&&p.sections.length)?p.sections.map(x=>({at:x.at,prof:x.prof,src:x.src||'manual'})):null;
   if(p.mode==="loft"||p.mode==="projection"){S.mode=p.mode;
-    document.querySelectorAll("#modeSeg button").forEach(x=>x.classList.toggle("on",x.dataset.m===S.mode));}
+    // a lathe is shown as its own choice in this row, so reflect shape first
+    document.querySelectorAll("#modeSeg button").forEach(x=>x.classList.toggle("on",
+      S.shape==="lathe" ? x.dataset.m==="lathe" : x.dataset.m===S.mode));}
   /* Models saved before this control existed have no carveMode, and they were built by the
      stamp engine — but they were also saved with whatever geometry that produced, so re-opening
      them on the field engine would quietly change the part. Default an OLD file to stamp and a
