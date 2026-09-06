@@ -540,6 +540,19 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
           <label>How long <span class="val"><span id="vLen">180</span> mm</span></label>
           <input type="range" id="sLen" min="5" max="600" value="180" step="1">
         </div>
+        <div class="field">
+          <label style="display:flex;align-items:center;gap:8px">
+            <input type="checkbox" id="cScale" style="width:auto;margin:0">
+            Build it at a scale
+          </label>
+          <div id="scaleBox" class="hide">
+            <p class="hint" style="margin:2px 0 6px">For anything too big to model at full size — a building, a sign, a fountain. Give the real size and the scale, and the model size follows.</p>
+            <label style="margin-top:2px">The real thing is
+              <input type="number" id="nReal" step="0.1" min="0.01" value="24" style="width:90px"> m long</label>
+            <label style="margin-top:6px">Build at 1:<input type="number" id="nScale" step="1" min="1" value="200" style="width:80px"></label>
+            <p class="hint mono" id="scaleOut" style="margin:6px 0 0">→ 120 mm model</p>
+          </div>
+        </div>
         <div class="field" id="widField">
           <label>How wide <span class="val"><span id="vWid">—</span> mm</span></label>
           <input type="range" id="sWid" min="2" max="400" value="60" step="1">
@@ -1006,6 +1019,15 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
             <span class="val"><span id="wsPlanWv">80</span> m</span></label>
           <input type="range" id="wsPlanW" min="1" max="500" value="80" step="1">
           <label style="margin-top:6px">Drawn at 1:<input type="number" id="wsPlanScale" step="1" min="1" value="200" style="width:70px"></label>
+          <p class="hint" style="margin:6px 0 2px">Line the drawing up with the model. A plan is never square to the axes and its origin is wherever the scan happened to start.</p>
+          <label style="margin-top:2px">Slide across <span class="val"><span id="wsPlanXv">0</span> mm</span></label>
+          <input type="range" id="wsPlanX" min="-400" max="400" value="0" step="1">
+          <label style="margin-top:4px">Slide up the page <span class="val"><span id="wsPlanZv">0</span> mm</span></label>
+          <input type="range" id="wsPlanZ" min="-400" max="400" value="0" step="1">
+          <label style="margin-top:4px">Turn <span class="val"><span id="wsPlanRv">0</span>°</span></label>
+          <input type="range" id="wsPlanR" min="-180" max="180" value="0" step="1">
+          <label style="margin-top:4px">Fade <span class="val"><span id="wsPlanOv">85</span>%</span></label>
+          <input type="range" id="wsPlanO" min="10" max="100" value="85" step="1">
           <div class="row" style="margin-top:6px">
             <button class="btn ghost" id="wsPlanHide" style="flex:1">Hide</button>
             <button class="btn ghost" id="wsPlanClear" style="flex:1">Remove</button>
@@ -1223,6 +1245,7 @@ function wallAt(n,W){
 function minWall(p){const W=wallSpec(p);return Math.min(W.top,W.side,W.bot);}
 function makeBody(p){
   if(p.shape==="revolve") return makeRevolve(p);        // round objects (sphere/cylinder/…)
+  if(p.shape==="lathe") return makeLathe(p);            // fountains, columns — turned upright
   if(p.mode==="projection" && p.sidePoly && p.sidePoly.length>2) return makeVisualHull(p);  // any-shape solid
   const N=Math.max(8,p.stations|0), M=Math.max(6,p.arcSegments|0);
   const L=p.length, pow=p.roofFlatness??1, WSPEC=wallSpec(p);
@@ -1374,6 +1397,50 @@ function makeBottom(p){
 /* ROUND OBJECTS — surface of revolution (sphere/cylinder/cone/dome, or revolve a
    traced side silhouette). Revolves a radius-vs-length profile around the X axis
    into a watertight closed solid. This is the path toward wheels/round parts. */
+/* A LATHE ABOUT THE VERTICAL AXIS — fountains, columns, bollards, planters.
+   A visual hull CANNOT do these. Measured on a fountain-shaped elevation with a circular
+   plan: the base, where the plan circle is the binding constraint, came out 1% out of round;
+   the stem and bowl came out 36% out of round, which is all but a square (a square is 41%).
+   The reason is structural, not a resolution problem — anywhere the object is narrower than
+   its widest plan circle, the hull's cross-section is side-width intersected with front-width,
+   and that is a rectangle. No grid refinement fixes it.
+
+   `makeRevolve` already builds a watertight surface of revolution and is reused whole. It
+   turns about X, which suits a wheel; a fountain turns about vertical. The axes are permuted
+   CYCLICALLY (y,z,x), whose determinant is +1, so the winding `makeRevolve` already fixed
+   stays correct and the solid stays outward-facing. */
+function revProfileFromElevation(sidePoly, L){
+  if(!sidePoly || sidePoly.length < 3) return null;
+  const n = 48, out = [];
+  for(let i = 0; i <= n; i++){
+    const v = i / n;                        // height, normalised
+    let lo = Infinity, hi = -Infinity;      // the outline's horizontal span at this height
+    for(let k = 0; k < sidePoly.length; k++){
+      const a = sidePoly[k], b = sidePoly[(k + 1) % sidePoly.length];
+      if((a[1] > v) !== (b[1] > v)){
+        const x = a[0] + (b[0] - a[0]) * (v - a[1]) / ((b[1] - a[1]) || 1e-12);
+        if(x < lo) lo = x;
+        if(x > hi) hi = x;
+      }
+    }
+    out.push([v, hi > lo ? (hi - lo) / 2 * L : 0]);   // half the span IS the radius
+  }
+  return out;
+}
+function makeLathe(p){
+  const H = Math.max(1, p.revHeight || p.length || 100);
+  const prof = (p.revProfileV && p.revProfileV.length > 1)
+    ? p.revProfileV
+    : revProfileFromElevation(p.sidePoly, p.length || 100);
+  const g = makeRevolve({...p, revProfile: prof || [[0,0],[0.5,50],[1,0]], revLen: H});
+  const P = g.positions, out = new Float32Array(P.length), h2 = H / 2;
+  for(let i = 0; i < P.length; i += 3){
+    out[i]     = P[i + 1];        // old Y  -> X
+    out[i + 1] = P[i + 2];        // old Z  -> Y
+    out[i + 2] = P[i] + h2;       // old X (the axis) -> Z, and sit the base on the floor
+  }
+  return {positions: out, indices: g.indices, volume: g.volume};
+}
 function makeRevolve(p){
   const seg=Math.max(12,Math.round(p.arcSegments||56));
   const prof=(p.revProfile&&p.revProfile.length>1)?p.revProfile:[[0,0],[0.5,50],[1,0]];
@@ -4666,6 +4733,12 @@ function currentProfile(){
   return {
     schema:"lee3d.profile/v1", units:"mm", name:projName.value||"untitled-object", category:(projCat.value||"uncategorized").trim(),
     length:S.len, stations:S.st, arcSegments:S.seg, roofFlatness:S.round,
+    /* The real size is kept alongside the model size, not instead of it. `length` stays what
+       every builder reads, so a profile saved without a scale loads and builds identically —
+       the car's path is untouched. These two are written only when the user asked for a scale,
+       so an ordinary profile carries neither key and looks exactly as it always did. */
+    ...(S.scaleOn ? {realLength:(+(document.getElementById("nReal")||{}).value||0)*1000,
+                     modelScale:Math.max(1,+(document.getElementById("nScale")||{}).value||1)} : {}),
     wallThickness:S.wall, wallPerFace:S.wallPerFace, noDetail:!!S.noDetail, openArches:!!S.openArches, openUnderside:!!S.openArches,   /* openArches is the older name, kept so models saved before this still load; both are written */ hullHollow:true,
     wallTop:S.wallPerFace?S.wallTop:S.wall, wallSide:S.wallPerFace?S.wallSide:S.wall, wallBottom:S.wallPerFace?S.wallBottom:S.wall,
     topProfile:SZ.topP, bottomProfile:SZ.botP, widthProfile:SZ.widP, widthBottomProfile:SZ.widBotP,
@@ -7380,6 +7453,44 @@ function bindSlider(id,key,label,decimals,after){
   });
 }
 bindSlider("sLen","len","vLen");
+/* SCALE. Off by default and, when off, nothing here runs — which is what keeps the car exactly
+   as it was. A car is modelled at whatever size prints nicely and nobody thinks in ratios; a
+   building cannot be expressed that way at all, because an architect works at 1:100 or 1:200
+   and the model size FOLLOWS from the real size.
+
+   `S.len` stays the single source of truth for geometry. This only DRIVES it, the same way the
+   preset buttons do, so every downstream path is untouched. The real figure is kept on the
+   profile as well, because typing a model length throws it away and nothing can recover it. */
+(function(){
+  const on=document.getElementById("cScale"), box=document.getElementById("scaleBox"),
+        real=document.getElementById("nReal"), den=document.getElementById("nScale"),
+        out=document.getElementById("scaleOut"), len=document.getElementById("sLen");
+  if(!on) return;
+  function recompute(quiet){
+    const r=+real.value||0, d=Math.max(1,+den.value||1);
+    const mm=(r*1000)/d;
+    const lo=+len.min, hi=+len.max;
+    const clamped=clamp(mm,lo,hi);
+    /* Saying "held at 600mm" tells you it did not work; it does not tell you what would. The
+       smallest ratio that fits is ceil(real / max), and that is the number somebody actually
+       wants — otherwise they guess denominators until one lands. */
+    let note="";
+    if(Math.abs(clamped-mm)>0.5){
+      const fits = mm>hi ? Math.ceil((r*1000)/hi) : Math.floor((r*1000)/lo);
+      note = "  ·  outside the "+lo+"–"+hi+"mm range, held at "+fmtLen(clamped)
+           + (fits>0 ? "  ·  1:"+fits+" would fit" : "");
+    }
+    out.textContent="→ "+fmtLen(mm)+" model"+note;
+    S.len=clamped; len.value=String(Math.round(clamped));
+    const v=document.getElementById("vLen"); if(v)v.textContent=fmtLen(clamped);
+    if(!quiet){ featRender(); }
+  }
+  window.__scaleRecompute=recompute;
+  on.onchange=()=>{ S.scaleOn=on.checked; box.classList.toggle("hide",!on.checked);
+    if(on.checked) recompute(); else featRender(); };
+  real.oninput=()=>recompute();
+  den.oninput=()=>recompute();
+})();
 // Moving these records how far you pushed it AWAY from what the drawing measured. Re-trace
 // and the drawing re-measures, but your adjustment rides along instead of being wiped.
 bindSlider("sCrisp","hullCrisp","vCrisp",2);
@@ -7582,6 +7693,19 @@ document.getElementById("jsonFile").onchange=e=>{const f=e.target.files[0];if(!f
 function applyProfile(p){
   if(p.length)S.len=p.length;if(p.stations)S.st=p.stations;if(p.arcSegments)S.seg=p.arcSegments;
   if(p.roofFlatness)S.round=p.roofFlatness;
+  // scale, if the profile carries one. Absent means the model IS the real size, which is how
+  // every car profile behaves and what the checkbox defaults to.
+  if(p.realLength && p.modelScale){
+    S.scaleOn=true;
+    const r=document.getElementById("nReal"), d=document.getElementById("nScale"),
+          c=document.getElementById("cScale"), b=document.getElementById("scaleBox");
+    if(r)r.value=String(p.realLength/1000); if(d)d.value=String(p.modelScale);
+    if(c)c.checked=true; if(b)b.classList.remove("hide");
+  } else if(document.getElementById("cScale")){
+    S.scaleOn=false;
+    document.getElementById("cScale").checked=false;
+    document.getElementById("scaleBox").classList.add("hide");
+  }
   if(p.wallThickness)S.wall=p.wallThickness;
   S.wallTop=p.wallTop??S.wall; S.wallSide=p.wallSide??S.wall; S.wallBottom=p.wallBottom??S.wall;
   if(p.wallPerFace!=null)S.wallPerFace=!!p.wallPerFace;
@@ -8515,11 +8639,21 @@ function wsRecenter(){WS.target.set(0,WS.ext*0.08,0);WS.cam.rad=WS.ext*1.4;WS.ca
    image. */
 function wsPlanApply(){
   if(!WS.planMesh) return;
-  const realM = +(document.getElementById("wsPlanW")||{}).value || 80;      // metres
-  const denom = Math.max(1, +(document.getElementById("wsPlanScale")||{}).value || 200);
+  const num=(id,d)=>{const e=document.getElementById(id); return e ? (+e.value||0) : d;};
+  const realM = num("wsPlanW",80) || 80;                                    // metres
+  const denom = Math.max(1, num("wsPlanScale",200) || 200);
   const wModel = (realM * 1000) / denom;                                    // mm in the model
   const ar = WS.planAspect || 1;
   WS.planMesh.scale.set(wModel, wModel / ar, 1);
+  /* ALIGNMENT. A scanned plan is never square to the axes and its origin is wherever the scan
+     started, so a plan that can only sit centred and unrotated cannot be placed against. The
+     rotation is about the WORLD up axis, applied after the -90 that lays the plane flat —
+     hence rotation.order, without which turning it also tips it out of the floor. */
+  WS.planMesh.rotation.order = "YXZ";
+  WS.planMesh.rotation.set(-Math.PI/2, 0, 0);
+  WS.planMesh.rotation.y = num("wsPlanR",0) * Math.PI / 180;
+  WS.planMesh.position.set(num("wsPlanX",0), -0.15, num("wsPlanZ",0));
+  const o = num("wsPlanO",85); WS.planMesh.material.opacity = clamp(o/100, 0.05, 1);
   wsRequestRender();
 }
 function wsPlanSet(url){
@@ -9151,8 +9285,12 @@ document.getElementById("wsSTL").onclick=wsExportSTL;
     r.onerror=()=>toast("Could not read that image.");
     r.readAsDataURL(file);
   };
-  const sync=()=>{ if(wv&&w)wv.textContent=w.value; wsPlanApply(); };
-  if(w) w.oninput=sync;
+  // every control writes its own readout and then re-applies; one path, no duplicated maths
+  const pairs=[["wsPlanW","wsPlanWv"],["wsPlanX","wsPlanXv"],["wsPlanZ","wsPlanZv"],
+               ["wsPlanR","wsPlanRv"],["wsPlanO","wsPlanOv"]];
+  const sync=()=>{ for(const [i,o] of pairs){ const a=document.getElementById(i),
+      b=document.getElementById(o); if(a&&b)b.textContent=a.value; } wsPlanApply(); };
+  for(const [i] of pairs){ const el=document.getElementById(i); if(el) el.oninput=sync; }
   if(sc) sc.oninput=sync;
   if(hide) hide.onclick=()=>{ if(!WS.planMesh){toast("No plan loaded.");return;}
     WS.planMesh.visible=!WS.planMesh.visible;
