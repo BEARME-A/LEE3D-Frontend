@@ -64,7 +64,7 @@ const PRELUDE = [grabConst("clamp"), grabConst("lerp"), grabConst("smoothstep"),
   soft(() => script.match(/^const DXF_UNIT_MM=[\s\S]*?\n *21:[^\n]*$/m)[0]),
   soft(() => script.match(/^const DXF_UNIT_NAME=[\s\S]*?16:"hm"[^\n]*$/m)[0]),
   soft(() => grabConst("dxfLoopArea"))].join("\n");
-const NAMES = ["outlineEnvelope", "anchorPxPerMm", "makeRevolve", "pointInPoly",
+const NAMES = ["outlineEnvelope", "anchorPxPerMm", "makeRevolve", "makeLathe", "revProfileFromElevation", "pointInPoly",
   "makeVisualHull", "checkManifold", "polyArea", "resamplePoly", "svgPhysicalWidthMM",
   "libCanonical", "sampleProfile", "resampleSection", "morphSections", "makeBody", "autoOutline",
   "publishRoute", "distToPoly", "viewUV", "applyFeatures", "pickSilhouette", "sampleMask", "ptInPolyPts", "polyAreaPts",
