@@ -8823,7 +8823,19 @@ function wsMeshFor(profile){
      `widthProfile` and `bottomProfile`; on a fountain that is a slab under a round body, and
      the lathe already closes its own base. `revolve` was excluded from the separate-bottom
      option for the same reason — this is the same exclusion, in the place Workshop builds. */
-  if(profile.sepBottom!==false && profile.shape!=="lathe" && profile.shape!=="revolve"){const bp=makeBottom(profile);const bg=new THREE.BufferGeometry();
+  /* WORKSHOP NOW OBEYS THE STUDIO'S RULE, WHICH IT NEVER DID.
+     The studio refuses a separate bottom in projection mode — `S.sepBottom && shape!=="revolve"
+     && shape!=="lathe" && S.mode!=="projection"` — and it is right to: `makeBottom` lays the
+     plate at `x=(xf-0.5)*L`, so -L/2..L/2, while the projection body measures x[0, L]. The
+     plate is half a length out from the body it belongs to. The smooth builder is centred, so
+     there it lines up, which is why this went unseen.
+     Workshop only checked `sepBottom!==false`, so a projection profile carrying sepBottom:true
+     — which is what the traced car profiles carry — got the offset plate. Same rule both
+     places now. */
+  const wantsPlate = profile.sepBottom!==false
+    && profile.shape!=="lathe" && profile.shape!=="revolve"
+    && profile.mode!=="projection";
+  if(wantsPlate){const bp=makeBottom(profile);const bg=new THREE.BufferGeometry();
     bg.setAttribute("position",new THREE.Float32BufferAttribute(bp.positions,3));bg.setIndex(bp.indices);bg.computeVertexNormals();
     const bmesh=new THREE.Mesh(bg,new THREE.MeshStandardMaterial({color:0x46b7d9,metalness:.1,roughness:.6,side:THREE.DoubleSide}));
     oriented.add(bmesh);meshes.push(bmesh);}
