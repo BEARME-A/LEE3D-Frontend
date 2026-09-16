@@ -65,7 +65,7 @@ const PRELUDE = [grabConst("clamp"), grabConst("lerp"), grabConst("smoothstep"),
   soft(() => script.match(/^const DXF_UNIT_NAME=[\s\S]*?16:"hm"[^\n]*$/m)[0]),
   soft(() => grabConst("dxfLoopArea"))].join("\n");
 const NAMES = ["outlineEnvelope", "anchorPxPerMm", "makeRevolve", "makeLathe", "revProfileFromElevation", "pointInPoly",
-  "makeVisualHull", "checkManifold", "polyArea", "resamplePoly", "svgPhysicalWidthMM",
+  "makeVisualHull", "checkManifold", "outlineCircularity", "polyArea", "resamplePoly", "svgPhysicalWidthMM",
   "libCanonical", "sampleProfile", "resampleSection", "morphSections", "makeBody", "autoOutline",
   "publishRoute", "distToPoly", "viewUV", "applyFeatures", "pickSilhouette", "sampleMask", "ptInPolyPts", "polyAreaPts",
   "rasterRegions", "otsuThreshold", "lumOf", "regionOutline", "dilateMask", "labelBlobs", "outlineBBox", "sdPoly",
@@ -410,6 +410,41 @@ t("site plan: the underlay never enters WS.inst, so it cannot be picked, sized o
   }
   const pick = html.slice(html.indexOf("function wsPick"), html.indexOf("function wsPick") + 400);
   ok(/WS\.inst\.forEach/.test(pick), "wsPick no longer builds its pick list from WS.inst");
+});
+
+/* CIRCULARITY. A turned object — fountain, bollard, column, roundabout island — cannot be built
+   by a visual hull: measured at 36% out of round, all but a square, anywhere it narrows below
+   its widest plan circle. So a round plan has to be RECOGNISED, and it is recognised from the
+   geometry rather than from words on the drawing — one of the two example sheets that prompted
+   this is annotated in biro, and no OCR would read it. The thresholds below were picked from
+   these shapes, not guessed. */
+t("circularity: circles read round, everything else does not", () => {
+  const C = API.outlineCircularity;
+  const circle = (n, rx, ry, wob) => {
+    const o = [];
+    for (let i = 0; i < n; i++) {
+      const a = 2 * Math.PI * i / n;
+      const w = wob ? 1 + wob * Math.sin(a * 5.3 + 1) : 1;
+      o.push([rx * w * Math.cos(a), ry * w * Math.sin(a)]);
+    }
+    return o;
+  };
+  ok(C(circle(64, 1, 1, 0)).round, "a clean circle must read round");
+  ok(C(circle(16, 1, 1, 0)).round, "so must a coarsely traced one");
+  ok(C(circle(48, 1, 1, 0.08)).round, "and a hand-traced one wobbling by 8%");
+  ok(!C(circle(48, 1.3, 1, 0)).round, "a 1.3:1 ellipse is not a lathe shape");
+  ok(!C([[0, 0], [1, 0], [1, 1], [0, 1]]).round, "a square is not round");
+  ok(!C(null).round && !C([[0, 0], [1, 1]]).round,
+     "junk and degenerate input must not claim round");
+
+  /* THE VERTEX TRAP, and the reason this test exists at all. Measuring only the corners let a
+     2:1 rounded rectangle score 0.014 — ROUNDER THAN A HAND-TRACED CIRCLE — because all eight
+     of its corners sit at one radius and its long flat sides were never looked at. The
+     perimeter is walked at even arc length instead, which cannot be fooled by where somebody
+     happened to put a point, and the same shape now reads 0.493. */
+  const roundedRect = [[0, .2], [0, .8], [.1, 1], [1.9, 1], [2, .8], [2, .2], [1.9, 0], [.1, 0]];
+  ok(!C(roundedRect).round,
+     "a 2:1 rounded rectangle is not round — if this passes, the measure is back on vertices");
 });
 
 t("orient: a sideways top view is detected as portrait", () => {
