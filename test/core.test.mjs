@@ -65,7 +65,7 @@ const PRELUDE = [grabConst("clamp"), grabConst("lerp"), grabConst("smoothstep"),
   soft(() => script.match(/^const DXF_UNIT_NAME=[\s\S]*?16:"hm"[^\n]*$/m)[0]),
   soft(() => grabConst("dxfLoopArea"))].join("\n");
 const NAMES = ["outlineEnvelope", "anchorPxPerMm", "makeRevolve", "makeLathe", "revProfileFromElevation", "pointInPoly",
-  "makeVisualHull", "checkManifold", "outlineCircularity", "polyArea", "resamplePoly", "svgPhysicalWidthMM",
+  "makeVisualHull", "checkManifold", "traceExtentFrac", "profileScaleFromTrace", "impPdfListItems", "impPdfSummary", "drawnSpanToReal", "profileScaleFromDetail", "outlineCircularity", "polyArea", "resamplePoly", "svgPhysicalWidthMM",
   "libCanonical", "sampleProfile", "resampleSection", "morphSections", "makeBody", "autoOutline",
   "publishRoute", "distToPoly", "viewUV", "applyFeatures", "pickSilhouette", "sampleMask", "ptInPolyPts", "polyAreaPts",
   "rasterRegions", "otsuThreshold", "lumOf", "regionOutline", "dilateMask", "labelBlobs", "outlineBBox", "sdPoly",
@@ -418,6 +418,172 @@ t("site plan: the underlay never enters WS.inst, so it cannot be picked, sized o
    geometry rather than from words on the drawing — one of the two example sheets that prompted
    this is annotated in biro, and no OCR would read it. The thresholds below were picked from
    these shapes, not guessed. */
+/* READING A DRAWING. The backend reports a detail's PLOT scale, the frame it occupies in paper
+   millimetres, and — on a rotated sheet — that the rendered image's axes are SWAPPED relative
+   to that frame. Every sheet in the real set is rotated 270, so the swap is the normal case.
+   These conversions are where a mistake is SILENT: the building comes out a plausible size and
+   simply the wrong one, and nothing downstream can tell. */
+/* A PDF USED TO BE TURNED AWAY WITH "screenshot a page" — which is the retyping-by-hand that
+   reading a file exists to remove, and a screenshot discards the scale, the dimensions and the
+   sheet number along with the vectors. These pin the wiring, because the failure mode when
+   writing it was calling helpers that do not exist: `apiBase()`, `backendOn()` and
+   `impPdfRenderList()` were all invented in the first draft and all parse perfectly. */
+t("drawing: a trace off a drawing becomes a real size, with nobody typing one", () => {
+  const A = API;
+  // the real L406 column: a 4398 x 2186px crop of a 185.0 x 372.3mm frame, sheet rotated 270
+  const drawing = {plotScale: 48,
+                   crop: {frame_mm: {w: 185.0, h: 372.3}, axes_swapped: true, rotation: 270}};
+  const W = 4398, H = 2186;
+  // the column is 4'-0" = 25.4mm of paper across and 12'-4" = 78.32mm down
+  const pts = [{x: 0, y: 0}, {x: W * 25.4 / 372.3, y: 0},
+               {x: W * 25.4 / 372.3, y: H * 78.32 / 185.0}, {x: 0, y: H * 78.32 / 185.0}];
+  const r = A.profileScaleFromTrace(pts, W, H, drawing, 200);
+  ok(Math.abs(r.realLength - 1219.2) < 1.0, `4'-0" wide, got ${r.realLength}`);
+  ok(Math.abs(r.realHeight - 3759.2) < 3.0, `12'-4" tall, got ${r.realHeight}`);
+  ok(Math.abs(r.length - 1219.2 / 200) < 1e-6, "and the model size follows the chosen ratio");
+
+  /* THE EXTENT HAS TO BE TAKEN BEFORE `normPoly`. That normalises a trace to its OWN bounding
+     box, which throws away how much of the image it spans — and that span IS the measurement.
+     A trace half the size covering the same shape must read half the size. */
+  const half = pts.map(q => ({x: q.x / 2, y: q.y / 2}));
+  const rh = A.profileScaleFromTrace(half, W, H, drawing, 200);
+  ok(Math.abs(rh.realLength - r.realLength / 2) < 1e-6,
+     "a trace covering half as much image is half the building");
+
+  eq(A.profileScaleFromTrace([], W, H, drawing, 200), null, "two points make no extent");
+  eq(A.profileScaleFromTrace(pts, 0, H, drawing, 200), null, "no image size, no answer");
+  eq(A.profileScaleFromTrace(pts, W, H, null, 200), null, "no drawing, no scale to apply");
+  eq(A.profileScaleFromTrace(pts, W, H, {plotScale: 0, crop: drawing.crop}, 200), null);
+  eq(A.traceExtentFrac([{x: NaN, y: 0}, {x: 1, y: 1}], W, H), null, "junk points are not an extent");
+});
+
+t("drawing: the picker lists what is on the sheet, in the order it dispatches", () => {
+  const sheet = {
+    sheet: {number: "L406"},
+    scale: {printed: null, inferred: 48, used: 48},
+    details: [
+      {title: "MAIN COLUMN FRONT ELEVATION", scale: 48},
+      {title: "WAYFINDING SIGN", scale: 32},
+      {title: "SIGN COLUMN REAR ELEVATION", scale: 48}
+    ],
+    dimensions: [
+      {detail: {title: "MAIN COLUMN FRONT ELEVATION"}},
+      {detail: {title: "MAIN COLUMN FRONT ELEVATION"}},
+      {detail: {title: "WAYFINDING SIGN"}},
+      {detail: null}
+    ],
+    points: []
+  };
+  const items = API.impPdfListItems(sheet);
+  eq(items.length, 3, "one entry per titled detail");
+
+  /* THE INDEX IS THE POINT. A list that displays one order and dispatches another hands
+     somebody a different drawing from the one they tapped — the same fault already fixed once
+     between the two endpoints, where the listing came from one source and the crop from
+     another. Nothing may sort or filter between the display and the dispatch. */
+  items.forEach((it, i) => {
+    eq(it.index, i, "index must be the position in sheet.details");
+    eq(it.title, sheet.details[i].title, "and the title at that position");
+    eq(it.scale, sheet.details[i].scale, "and its own scale, not the sheet's");
+  });
+
+  eq(items[1].scale, 32, "a detail at a different scale keeps it — L406 really does mix them");
+  eq(items[0].dimensions, 2);
+  eq(items[1].dimensions, 1);
+  eq(items[2].dimensions, 0);
+  ok(/no dimensions matched/.test(items[2].note), "say so rather than showing a bare zero");
+
+  eq(API.impPdfListItems(null).length, 0, "no sheet is an empty list, not a crash");
+  eq(API.impPdfListItems({}).length, 0);
+});
+
+t("drawing: the sheet summary says what was read, not what the schema calls it", () => {
+  const s = API.impPdfSummary({
+    sheet: {number: "L406"}, scale: {printed: null, inferred: 48, used: 48},
+    details: [{title: "A", scale: 48}], dimensions: [{}, {}], points: []
+  });
+  ok(/sheet L406/.test(s) && /1 details/.test(s) && /2 dimensions read/.test(s), s);
+  ok(/read off the line work/.test(s),
+     "an inferred scale must say it was inferred — a printed one is a different claim");
+  ok(/printed/.test(API.impPdfSummary({scale:{printed:240, used:240}})) === false,
+     "and a printed scale carries no such note");
+  eq(API.impPdfSummary(null), "");
+});
+
+t("drawing: the PDF path calls only helpers that exist", () => {
+  const src = html;
+  const called = ["beBase", "impAddPage", "switchTab", "layoutSheet", "renderCrops",
+                  "updateImpStatus", "impRenderPages", "toast", "drawnSpanToReal",
+                  // implemented since: this list caught its own arrival, which is the job
+                  "impPdfRenderList", "impPdfListItems", "impPdfSummary", "impPdfUseDetail"];
+  for (const fn of called) {
+    ok(new RegExp("function\\s+" + fn + "\\s*\\(").test(src),
+       `the import path calls ${fn}() — it must be defined, not assumed`);
+  }
+  /* `impPdfRenderList` was on this list and has since been written, so the test failed —
+     correctly. A helper moving from invented to real is exactly the change this guards. */
+  for (const ghost of ["apiBase", "backendOn", "escapeHTML"]) {
+    ok(!src.includes(ghost + "("), `${ghost}() does not exist and must not be called`);
+  }
+});
+
+t("drawing: a PDF is read, not refused", () => {
+  const src = html;
+  /* A POSITION, NOT A PHRASE. Two earlier versions of this checked that the source contained
+     no "screenshot a page": the first was fooled by the COMMENT explaining what the code used
+     to say, and narrowing the regex to `toast(...)` did not help, because a regex over a whole
+     file cannot tell a string literal from prose around it. What actually matters is ORDER —
+     the PDF branch has to come BEFORE the not-an-image rejection, or a drawing is turned away
+     before anything reads it. */
+  const pdfAt = src.indexOf("impPdfPick(file");
+  const rejectAt = src.indexOf("!looksImage");
+  ok(pdfAt > 0 && rejectAt > 0 && pdfAt < rejectAt,
+     "a PDF must be handed to the reader before the not-an-image rejection can turn it away");
+  ok(/impPdfPick\(file/.test(src), "a dropped PDF must go to the reader");
+  ok(/\/import\/pdf\/sheet/.test(src) && /\/import\/pdf\/detail/.test(src),
+     "both endpoints must be reached: one reads a page, one crops the chosen detail");
+  ok(/axes_swapped/.test(src),
+     "the crop record must be kept whole — a trace cannot be sized without the swap");
+});
+
+t("drawing: a traced span becomes the real size it stands for", () => {
+  const A = API;
+  // the real L406 case: a 185.0 x 372.3mm frame (with margin) at 1:48, sheet rotated 270
+  const crop = { frame_mm: { w: 185.0, h: 372.3 }, axes_swapped: true, rotation: 270 };
+  // the main column is 4'-0" = 1219.2mm, which at 1:48 is 25.4mm of paper. The image is the
+  // frame turned upright, so 25.4mm spans 25.4/372.3 of its WIDTH.
+  const acrossFrac = 25.4 / 372.3;
+  ok(Math.abs(A.drawnSpanToReal(acrossFrac, crop, 48) - 1219.2) < 0.5,
+     "a 4'-0\" column traced across the image must read 1219.2mm");
+  // 12'-4" = 3759.2mm is 78.32mm of paper, down the image, which spans the frame's other side
+  ok(Math.abs(A.drawnSpanToReal(78.32 / 185.0, crop, 48, true) - 3759.2) < 2.0,
+     "and 12'-4\" traced down the image must read 3759.2mm");
+
+  /* THE SWAP IS THE WHOLE POINT. Ignoring it uses the frame's own width for an image x-span,
+     which is out by the aspect ratio — 372.3/185.0 here, very nearly two. The answer is 605.8
+     instead of 1219.2: a believable building at half size, with nothing to signal it. */
+  const noSwap = { frame_mm: { w: 185.0, h: 372.3 }, axes_swapped: false };
+  const wrong = A.drawnSpanToReal(acrossFrac, noSwap, 48);
+  ok(Math.abs(wrong - 605.8) < 1.0 && Math.abs(wrong - 1219.2) > 500,
+     "ignoring the swap must not quietly agree with honouring it");
+
+  eq(A.drawnSpanToReal(0.5, null, 48), null, "no crop is not a size");
+  eq(A.drawnSpanToReal(0.5, crop, 0), null, "no scale is not a size");
+  eq(A.drawnSpanToReal(NaN, crop, 48), null, "junk is not a size");
+});
+
+t("drawing: plot scale is not the ratio the model is built at", () => {
+  const A = API;
+  // a sheet plotted at 1/4"=1'-0" says nothing about how big a model somebody wants
+  const at100 = A.profileScaleFromDetail(1219.2, 100);
+  const at200 = A.profileScaleFromDetail(1219.2, 200);
+  ok(Math.abs(at100.length - at200.length * 2) < 1e-6, "halving the ratio halves the model");
+  eq(at100.realLength, 1219.2, "the real size is carried, not recomputed from the model");
+  eq(A.profileScaleFromDetail(0, 48), null);
+  eq(A.profileScaleFromDetail(-5, 48), null);
+  eq(A.profileScaleFromDetail("nonsense", 48), null);
+});
+
 t("circularity: circles read round, everything else does not", () => {
   const C = API.outlineCircularity;
   const circle = (n, rx, ry, wob) => {
