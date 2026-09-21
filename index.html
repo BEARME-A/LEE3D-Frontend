@@ -813,6 +813,16 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
             <svg viewBox="-46 -48 92 96" id="impBoxSvg" aria-hidden="true"></svg>
             <div class="ib-cap"><b id="ibCount">0 of 6</b><span id="ibMiss"></span></div>
           </div>
+          <div id="pdfPick" class="hide" style="position:absolute;left:8px;right:8px;top:8px;z-index:6;
+               background:var(--panel,#1a1d22);border:1px solid #2c323a;border-radius:10px;padding:10px;max-height:60%;overflow:auto">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+              <b id="pdfPickTitle">Details on this sheet</b>
+              <span class="hint mono" id="pdfPickInfo" style="flex:1;opacity:.75"></span>
+              <button id="pdfPickClose" class="mini">Close</button>
+            </div>
+            <p class="hint" style="margin:0 0 8px">Pick the one you want to model. Its scale comes from the drawing, so you do not type a size.</p>
+            <div id="pdfPickList"></div>
+          </div>
           <div class="drop-note" id="iDrop"><div class="box"><b>Drop blueprints, sheets or SVGs</b><span>Drop <b>several files at once</b> — each becomes a page. A page can be a full multi-view sheet (auto-detect cuts the views out) or just a single side. Give each view a role, then <b>Send</b> collects them from every page into one model.</span></div></div>
         </div>
       </div>
@@ -8114,6 +8124,229 @@ function requestRebuild(){clearTimeout(rebuildT);rebuildT=setTimeout(rebuild,40)
    ========================================================================= */
 const UNIT_MM={mm:1,cm:10,in:25.4,px:1};
 let displayUnit="mm";
+/* READING A DRAWING: turning what the backend read into what this app builds.
+   The backend reports a detail's PLOT scale — 48 for 1/4"=1'-0" — plus the frame it occupies
+   in paper millimetres and, on a rotated sheet, the fact that the rendered image's axes are
+   SWAPPED relative to that frame. Every sheet in Dylan's set is rotated 270, so the swap is
+   the normal case here, not the exception.
+
+   These are the conversions where a mistake is silent: a building comes out a plausible size
+   and simply the wrong one. Nothing downstream can tell. */
+
+/* How many REAL millimetres a span across the drawing represents.
+   `frac` is the fraction of the image the span covers, along x unless `vertical` is set. A
+   traced outline is already normalised to the image, so this is what turns a trace into a
+   size. */
+function drawnSpanToReal(frac, crop, plotScale, vertical){
+  if(!crop || !plotScale || !isFinite(frac)) return null;
+  const fm = crop.frame_mm || {};
+  let alongX = fm.w, alongY = fm.h;
+  /* THE SWAP. The image comes back the right way up, so on a rotated sheet its WIDTH spans the
+     frame's HEIGHT. Using the frame's own w for an image x-span is out by the aspect ratio —
+     368.3/181.0 on these sheets, very nearly two, which reads as a perfectly believable
+     building. Every sheet in Dylan's set is rotated 270, so this is the normal case here. */
+  if(crop.axes_swapped){ alongX = fm.h; alongY = fm.w; }
+  const span = vertical ? alongY : alongX;
+  if(!isFinite(span) || span <= 0) return null;
+  return frac * span * plotScale;
+}
+
+/* A TRACE BECOMES A REAL SIZE.
+   The last link: traced points are in IMAGE pixels (`v.A.push(canvas2img(...))`), the crop
+   covers a known area of paper, and the detail was drawn at a known ratio. Compose those and
+   nobody types a dimension.
+
+   `normPoly` cannot do this — it normalises a trace to its OWN bounding box, which throws away
+   how much of the image it spans, which is the whole measurement. So the extent has to be
+   taken before that, in image pixels. */
+function traceExtentFrac(pts, imgW, imgH){
+  if(!pts || pts.length < 2 || !(imgW > 0) || !(imgH > 0)) return null;
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for(const q of pts){
+    const x = (q && q.x !== undefined) ? q.x : (q ? q[0] : NaN);
+    const y = (q && q.y !== undefined) ? q.y : (q ? q[1] : NaN);
+    if(!isFinite(x) || !isFinite(y)) return null;
+    if(x < x0) x0 = x; if(x > x1) x1 = x;
+    if(y < y0) y0 = y; if(y > y1) y1 = y;
+  }
+  if(!(x1 > x0) && !(y1 > y0)) return null;
+  return {x: (x1 - x0) / imgW, y: (y1 - y0) / imgH};
+}
+
+/* Real size and profile scale fields for a trace taken off a drawing.
+   `drawing` is what `impPdfUseDetail` stored: {plotScale, crop}. `modelScale` is the ratio the
+   model is BUILT at, which stays the user's choice — a sheet plotted at 1/4"=1'-0" says
+   nothing about how big a model anyone wants. */
+function profileScaleFromTrace(pts, imgW, imgH, drawing, modelScale){
+  const f = traceExtentFrac(pts, imgW, imgH);
+  if(!f || !drawing || !drawing.plotScale) return null;
+  const realX = drawnSpanToReal(f.x, drawing.crop, drawing.plotScale, false);
+  const realY = drawnSpanToReal(f.y, drawing.crop, drawing.plotScale, true);
+  if(realX == null || realY == null) return null;
+  const out = profileScaleFromDetail(realX, modelScale);
+  if(!out) return null;
+  out.realHeight = realY;            // reported, not applied: height comes from the profile
+  return out;
+}
+
+/* The scale fields a profile should carry for a detail read off a drawing.
+   `realLength` is what the thing measures in life; `modelScale` is the ratio it is BUILT at,
+   which is the user's choice and NOT the sheet's plot scale — a sheet plotted at 1/4"=1'-0"
+   says nothing about how big a model someone wants. */
+function profileScaleFromDetail(realLengthMM, modelScale){
+  const r = +realLengthMM, d = Math.max(1, +modelScale || 1);
+  if(!isFinite(r) || r <= 0) return null;
+  return {realLength: r, modelScale: d, length: r / d};
+}
+
+/* What the picker should show, as DATA rather than markup.
+   Split this way for two reasons. First it can be tested, and the thing that goes wrong here
+   is the INDEX — a list that displays one order and dispatches another hands somebody a
+   different drawing from the one they tapped, which is the exact fault already fixed once
+   between the two endpoints. `index` is the position in `sheet.details` and nothing sorts or
+   filters in between. Second, a detail title comes out of a PDF: this app puts such strings in
+   with `textContent`, never by building HTML around them, and returning data keeps that so. */
+function impPdfListItems(sheet){
+  const ds = (sheet && sheet.details) || [];
+  const dims = (sheet && sheet.dimensions) || [];
+  return ds.map((d, i) => {
+    const n = dims.filter(m => m.detail && m.detail.title === d.title).length;
+    return {index: i, title: d.title || "untitled", scale: d.scale,
+            dimensions: n,
+            note: `1:${d.scale} · ` + (n ? `${n} dimension${n > 1 ? "s" : ""} read`
+                                         : "no dimensions matched")};
+  });
+}
+
+function impPdfRenderList(){
+  const st = IMP.pdf, box = document.getElementById("pdfPick");
+  if(!st || !box) return;
+  const host = document.getElementById("pdfPickList");
+  host.textContent = "";
+  const items = impPdfListItems(st.sheet);
+  if(!items.length){
+    const p = document.createElement("p");
+    p.className = "hint"; p.textContent = "No titled details on this page.";
+    host.appendChild(p);
+  }
+  for(const it of items){
+    const b = document.createElement("button");
+    b.className = "mini";
+    b.style.cssText = "display:block;width:100%;text-align:left;margin:0 0 6px";
+    const strong = document.createElement("b");
+    strong.textContent = it.title;                 // straight from a PDF — never innerHTML
+    const note = document.createElement("span");
+    note.className = "mono"; note.style.opacity = ".7";
+    note.textContent = " · " + it.note;
+    b.appendChild(strong); b.appendChild(note);
+    b.addEventListener("click", () => impPdfUseDetail(it.index));
+    host.appendChild(b);
+  }
+  const info = document.getElementById("pdfPickInfo");
+  if(info) info.textContent = impPdfSummary(st.sheet);
+  const t = document.getElementById("pdfPickTitle");
+  if(t) t.textContent = st.nm || "Details on this sheet";
+  const close = document.getElementById("pdfPickClose");
+  if(close) close.onclick = () => box.classList.add("hide");
+  box.classList.remove("hide");
+}
+
+/* PICKING A DETAIL OUT OF A DRAWING SET.
+   Two calls: one to read a page, one to crop the detail chosen from it. The detail list and
+   the crop index the SAME list, so a person cannot be shown one drawing and handed another. */
+async function impPdfSheet(file, page){
+  const fd = new FormData();
+  fd.append("file", file); fd.append("page", String(page));
+  const r = await fetch(beBase() + "/import/pdf/sheet", {method:"POST", body:fd});
+  if(!r.ok) throw new Error(`the backend could not read page ${page + 1} (${r.status})`);
+  return r.json();
+}
+async function impPdfCrop(file, page, index, dpi){
+  const fd = new FormData();
+  fd.append("file", file); fd.append("page", String(page));
+  fd.append("detail", String(index)); fd.append("dpi", String(dpi || 200));
+  const r = await fetch(beBase() + "/import/pdf/detail", {method:"POST", body:fd});
+  if(!r.ok){
+    const j = await r.json().catch(()=>({}));
+    throw new Error(j.detail || `that detail could not be cropped (${r.status})`);
+  }
+  return r.json();
+}
+
+/* What a person is told about a page, in their words rather than the schema's. */
+function impPdfSummary(sheet){
+  if(!sheet) return "";
+  const n = sheet.sheet && sheet.sheet.number;
+  const sc = sheet.scale && sheet.scale.used;
+  const bits = [];
+  if(n) bits.push("sheet " + n);
+  if((sheet.details||[]).length) bits.push(sheet.details.length + " details");
+  if(sc) bits.push("1:" + sc + (sheet.scale.printed ? "" : " (read off the line work)"));
+  if((sheet.dimensions||[]).length) bits.push(sheet.dimensions.length + " dimensions read");
+  if((sheet.points||[]).length) bits.push(sheet.points.length + " survey points");
+  return bits.join(" · ");
+}
+
+async function impPdfPick(file, nm){
+  if(!beBase()){
+    toast("Reading a PDF needs the backend — set its address in <b>Settings</b> first. "
+        + "Everything else here works without one.");
+    return;
+  }
+  toast(`Reading <b>${nm}</b>…`);
+  let sheet = null, page = 0;
+  try{
+    // walk forward to the first page that HAS details: page 1 of a set is usually a cover or
+    // a site plan, and offering those as something to trace would be a dead end
+    for(; page < 12; page++){
+      sheet = await impPdfSheet(file, page);
+      if((sheet.details || []).length) break;
+    }
+  }catch(err){ toast(`Couldn't read <b>${nm}</b>: ${err.message}`); return; }
+  if(!sheet || !(sheet.details || []).length){
+    toast(`<b>${nm}</b> read fine, but no page in it carries titled details — `
+        + `a site plan or a schedule has none. Trace it as an image instead.`);
+    return;
+  }
+  IMP.pdf = {file, nm, page, sheet};
+  switchTab("import");
+  impPdfRenderList();
+  return sheet;
+}
+
+/* Crop one detail and hand it to the tracer as a reference page, with the scale it was drawn
+   at already known. The tracer works in fractions of the image, so `drawnSpanToReal` is what
+   turns a trace back into a real size — and it needs `axes_swapped`, which is why the whole
+   crop record is kept rather than just the picture. */
+async function impPdfUseDetail(index, dpi){
+  const st = IMP.pdf;
+  if(!st){ toast("Read a PDF first."); return; }
+  const det = (st.sheet.details || [])[index];
+  if(!det){ toast("That detail is not on this page."); return; }
+  let crop;
+  try{ crop = await impPdfCrop(st.file, st.page, index, dpi || 200); }
+  catch(err){ toast(`Couldn't crop <b>${det.title}</b>: ${err.message}`); return; }
+  const url = "data:image/png;base64," + crop.png_base64;
+  const img = new Image();
+  img.onload = () => {
+    try{
+      impAddPage(img, url, (det.title || "detail").slice(0, 22));
+      IMP.cur.drawing = {plotScale: det.scale, crop, sheet: st.sheet.sheet,
+                         title: det.title, page: st.page};
+      document.getElementById("sheetImg").src = url;
+      const d = document.getElementById("iDrop"); if(d) d.style.display = "none";
+      const pick = document.getElementById("pdfPick"); if(pick) pick.classList.add("hide");
+      switchTab("import");
+      setTimeout(()=>{ try{ layoutSheet(); renderCrops(); updateImpStatus(); impRenderPages(); }
+        catch(err){ toast("Detail loaded, but laying it out failed: " + err.message); } }, 60);
+      toast(`<b>${det.title}</b> at 1:${det.scale} — trace its outline. `
+          + `Sizes come from the drawing, so you do not type them.`, 6000);
+    }catch(err){ toast("Couldn't add that detail: " + err.message); }
+  };
+  img.onerror = () => toast("The detail was cropped but its image couldn't be shown.");
+  img.src = url;
+}
+
 function fmtLen(mm){const u=displayUnit,v=mm/UNIT_MM[u];return `${v.toFixed(u==="mm"||u==="px"?0:1)} ${u}`;}
 
 let calTarget=null;  // 'trace' | 'import'
@@ -8438,7 +8671,15 @@ function loadSheet(file){
     }).catch(err=>toast(`Couldn't read <b>${nm}</b>: ${err.message}`));
     return;
   }
-  if(!looksImage){toast("That file isn't an image, SVG or DXF. (PDF? screenshot a page, or use the backend's /import/pdf.)");return;}
+  /* A PDF IS A DRAWING, NOT A FILE TO TURN AWAY. This used to refuse it and suggest a manual capture instead, which
+     is exactly the retyping-by-hand that reading a file is meant to remove — and a screenshot
+     throws away the scale, the dimensions and the sheet number along with the vectors.
+     The backend reads all of that. It cannot pick out the silhouette — a construction detail
+     draws the thing IN ITS CONTEXT, footing and grade and subgrade, and the ink covers six
+     times the object's area — so the trace stays. What changes is everything AROUND it: one
+     framed detail at its own scale instead of a 725 x 952mm sheet. */
+  if(/\.pdf$/i.test(nm) || file.type === "application/pdf"){ impPdfPick(file, nm); return; }
+  if(!looksImage){toast("That file isn't an image, SVG, DXF or PDF.");return;}
   const url=URL.createObjectURL(file),img=new Image();
   img.onload=()=>{
     /* Everything past here runs in a callback, so anything that throws used to vanish into
