@@ -1,0 +1,15 @@
+# The studio itself is one committed file (index.html) with no build step, which is the point.
+# Everything below is produced by the two things that DO build: the Pages workflow's staging
+# directory and the optional Next.js app under nextjs/.
+#
+# `_site/` matters most. deploy.yml copies index.html there and then substitutes the Supabase
+# and backend placeholders into the copy from repo secrets. A committed `_site/index.html`
+# would be a second studio in the repo carrying real connection strings, and the suite's
+# housekeeping check already warns about a second copy of the studio for a related reason.
+
+_site/
+node_modules/
+nextjs/.next/
+nextjs/out/
+nextjs/node_modules/
+.DS_Store
