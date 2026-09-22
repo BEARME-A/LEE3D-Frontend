@@ -548,6 +548,24 @@ t("drawing: a PDF is read, not refused", () => {
      "the crop record must be kept whole — a trace cannot be sized without the swap");
 });
 
+t("deploy: the four connection placeholders are still what deploy.yml substitutes", () => {
+  /* `deploy.yml` copies index.html into `_site/` and replaces four literal strings from repo
+     secrets and variables. If one is renamed on this side, the substitution finds nothing and
+     leaves the placeholder in — and the workflow's own log line says "wired: BACKEND_URL"
+     regardless, because it reports which ENV VARS were set, not which replacements landed.
+     The app then comes up with `backendUrl` literally equal to "__BACKEND_URL__", which fails
+     the same way as unset: "anything you leave unset simply stays switched off". A deploy with
+     no backend and no cloud saves, reported green, found by whoever next presses Build exact.
+
+     Exactly once each, because two copies would leave one of them unsubstituted in some builds
+     and neither the workflow nor the app would say so. */
+  const want = ["__SUPABASE_URL__", "__SUPABASE_ANON_KEY__", "__BACKEND_URL__", "__LIB_REPO__"];
+  for (const ph of want) {
+    const n = html.split(ph).length - 1;
+    eq(n, 1, `${ph} must appear exactly once in index.html — deploy.yml substitutes it`);
+  }
+});
+
 t("drawing: reading a PDF stops at the end of the document, not at page 12", () => {
   /* The walk ran to page 12 whatever the file held, with ONE try around the whole loop. Asking
      for a page past the end is a 400, so on any shorter set where no page carries titled
