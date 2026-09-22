@@ -8110,6 +8110,23 @@ document.getElementById("buildServer").onclick=async ()=>{
 
 /* toast */
 let toastT;
+/* AN UNTRUSTED STRING ON ITS WAY INTO MARKUP.
+   `toast()` below is an innerHTML sink by design — most of its callers pass markup on purpose,
+   and that is fine for strings this app wrote. It is not fine for a detail TITLE, which comes
+   out of an arbitrary PDF, or a file NAME, which comes from whoever sent the file. Dylan's set
+   arrives from a third-party studio; a title of `<img src=x onerror=...>` would run.
+   This app's stated property is that such strings go in with `textContent` and never have HTML
+   built around them. The picker list keeps that by returning DATA and appending text nodes; a
+   toast has nowhere to put a text node, so the value is escaped at the interpolation instead.
+   ON THE NAME: the suite keeps a list of helpers that were once CALLED without existing, and
+   the obvious name for this one is on it. That check greps the whole file, so even writing the
+   ghost's name in a comment fires it — which it did, on the first run of this very block. The
+   check is right and the comment was wrong; this helper takes a different name and the ghost
+   list stays true. */
+function htmlSafe(s){
+  return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+    .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+}
 function toast(html){const t=document.getElementById("toast");t.innerHTML=html;t.classList.add("show");
   clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove("show"),3600);}
 
@@ -8293,18 +8310,30 @@ async function impPdfPick(file, nm){
         + "Everything else here works without one.");
     return;
   }
-  toast(`Reading <b>${nm}</b>…`);
+  toast(`Reading <b>${htmlSafe(nm)}</b>…`);
   let sheet = null, page = 0;
-  try{
-    // walk forward to the first page that HAS details: page 1 of a set is usually a cover or
-    // a site plan, and offering those as something to trace would be a dead end
-    for(; page < 12; page++){
-      sheet = await impPdfSheet(file, page);
-      if((sheet.details || []).length) break;
+  /* WALK FORWARD to the first page that HAS details: page 1 of a set is usually a cover or a
+     site plan, and offering those as something to trace would be a dead end.
+     THE WALK HAS TO KNOW WHERE THE DOCUMENT ENDS. This ran to page 12 whatever the file held,
+     and asking for a page past the end is a 400 — so on any shorter set where NO page carries
+     titled details, the loop fell out of the bottom into the catch and said "Couldn't read
+     Drawings.pdf: the backend could not read page 9", which reads as a broken file. The
+     honest message below — the one written for exactly this case — was unreachable unless the
+     PDF happened to have twelve pages or more.
+     So a failure PAST page 0 ends the walk and keeps the last page that did read; only page 0
+     failing means the file itself could not be read. */
+  for(; page < 12; page++){
+    let got = null;
+    try{ got = await impPdfSheet(file, page); }
+    catch(err){
+      if(page === 0){ toast(`Couldn't read <b>${htmlSafe(nm)}</b>: ${htmlSafe(err.message)}`); return; }
+      break;                                   // ran off the end of the document
     }
-  }catch(err){ toast(`Couldn't read <b>${nm}</b>: ${err.message}`); return; }
+    sheet = got;
+    if((sheet.details || []).length) break;
+  }
   if(!sheet || !(sheet.details || []).length){
-    toast(`<b>${nm}</b> read fine, but no page in it carries titled details — `
+    toast(`<b>${htmlSafe(nm)}</b> read fine, but no page in it carries titled details — `
         + `a site plan or a schedule has none. Trace it as an image instead.`);
     return;
   }
@@ -8325,21 +8354,28 @@ async function impPdfUseDetail(index, dpi){
   if(!det){ toast("That detail is not on this page."); return; }
   let crop;
   try{ crop = await impPdfCrop(st.file, st.page, index, dpi || 200); }
-  catch(err){ toast(`Couldn't crop <b>${det.title}</b>: ${err.message}`); return; }
+  catch(err){ toast(`Couldn't crop <b>${htmlSafe(det.title)}</b>: ${htmlSafe(err.message)}`); return; }
   const url = "data:image/png;base64," + crop.png_base64;
   const img = new Image();
   img.onload = () => {
     try{
       impAddPage(img, url, (det.title || "detail").slice(0, 22));
-      IMP.cur.drawing = {plotScale: det.scale, crop, sheet: st.sheet.sheet,
-                         title: det.title, page: st.page};
+      /* THE SCALE COMES BACK WITH THE PICTURE, and that is the copy to keep. `det` is this
+         client's own listing; `crop` is what the backend actually cropped. They agree, and the
+         endpoints are now indexed so they cannot disagree — but sizing a trace off the listing
+         while looking at the crop is a disagreement waiting for the next indexing bug, and a
+         wrong plot scale is silent: the building simply comes out the wrong size. Read the
+         scale from the thing the image came with. */
+      IMP.cur.drawing = {plotScale: crop.scale || det.scale, crop,
+                         sheet: st.sheet.sheet,
+                         title: crop.title || det.title, page: st.page};
       document.getElementById("sheetImg").src = url;
       const d = document.getElementById("iDrop"); if(d) d.style.display = "none";
       const pick = document.getElementById("pdfPick"); if(pick) pick.classList.add("hide");
       switchTab("import");
       setTimeout(()=>{ try{ layoutSheet(); renderCrops(); updateImpStatus(); impRenderPages(); }
         catch(err){ toast("Detail loaded, but laying it out failed: " + err.message); } }, 60);
-      toast(`<b>${det.title}</b> at 1:${det.scale} — trace its outline. `
+      toast(`<b>${htmlSafe(det.title)}</b> at 1:${crop.scale || det.scale} — trace its outline. `
           + `Sizes come from the drawing, so you do not type them.`, 6000);
     }catch(err){ toast("Couldn't add that detail: " + err.message); }
   };
