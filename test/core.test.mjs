@@ -66,7 +66,7 @@ const PRELUDE = [grabConst("clamp"), grabConst("lerp"), grabConst("smoothstep"),
   soft(() => grabConst("dxfLoopArea"))].join("\n");
 const NAMES = ["outlineEnvelope", "anchorPxPerMm", "makeRevolve", "makeLathe", "revProfileFromElevation", "pointInPoly",
   "makeVisualHull", "checkManifold", "traceExtentFrac", "profileScaleFromTrace", "impPdfListItems", "impPdfSummary", "drawnSpanToReal", "profileScaleFromDetail", "outlineCircularity", "polyArea", "resamplePoly", "svgPhysicalWidthMM",
-  "htmlSafe",
+  "htmlSafe", "boxPtsToPage", "viewRealSize",
   "libCanonical", "sampleProfile", "resampleSection", "morphSections", "makeBody", "autoOutline",
   "publishRoute", "distToPoly", "viewUV", "applyFeatures", "pickSilhouette", "sampleMask", "ptInPolyPts", "polyAreaPts",
   "rasterRegions", "otsuThreshold", "lumOf", "regionOutline", "dilateMask", "labelBlobs", "outlineBBox", "sdPoly",
@@ -546,6 +546,111 @@ t("drawing: a PDF is read, not refused", () => {
      "both endpoints must be reached: one reads a page, one crops the chosen detail");
   ok(/axes_swapped/.test(src),
      "the crop record must be kept whole — a trace cannot be sized without the swap");
+});
+
+t("drawing: a trace is measured against the PAGE, not against the box it was cropped into", () => {
+  /* THE BASIS BUG, which was left open as a decision and is now closed the larger way.
+     `drawing.crop.frame_mm` describes the WHOLE page image. A view's traced points live in the
+     BOX canvas that `cropCanvas` cut out of that page and scaled by `cf`. Hand
+     `profileScaleFromTrace` the box and its size and every step of the arithmetic is right and
+     the answer is wrong by the box's share of the page — a building covering a third of the
+     page comes back three times too small, which is exactly the kind of plausible number
+     nothing downstream can question.
+
+     The fixture makes the error impossible to miss: the SAME trace, measured once against the
+     page and once against a box a third of its width. */
+  const A = API;
+  const pageW = 3000, pageH = 1500;
+  // a 1000 x 800mm crop of paper at 1:100 -> 100m across the page
+  const drawing = {plotScale: 100,
+                   crop: {frame_mm: {w: 1000, h: 800}, axes_swapped: false, rotation: 0}};
+
+  // the box: a third of the page wide, cropped 1:1 (cf = 1), offset into it
+  const src = {x0: 600, y0: 300, cf: 1, pageW, pageH};
+  // a trace spanning the full width of that box
+  const boxPts = [{x: 0, y: 0}, {x: 1000, y: 0}, {x: 1000, y: 400}, {x: 0, y: 400}];
+
+  const pagePts = A.boxPtsToPage(boxPts, src);
+  ok(pagePts, "the conversion must succeed on well-formed points");
+  eq(pagePts[0].x, 600, "x0 puts the box back where it sat on the page");
+  eq(pagePts[1].x, 1600);
+  eq(pagePts[2].y, 700, "and y likewise");
+
+  const right = A.profileScaleFromTrace(pagePts, pageW, pageH, drawing, 1);
+  const wrong = A.profileScaleFromTrace(boxPts, 1000, 400, drawing, 1);
+  ok(right && wrong, "both forms produce a number — which is the whole problem");
+
+  // page basis: 1000 of 3000 px across 1000mm of paper at 1:100 = 33.33m
+  near(right.realLength, 1000 / 3000 * 1000 * 100, 1,
+        "measured against the page, the trace is a third of 100m");
+  // box basis: the same trace reads as the WHOLE width, three times too big
+  near(wrong.realLength, 1000 * 100, 1, "measured against the box it reads full width");
+  ok(wrong.realLength > right.realLength * 2.9,
+     "the two bases disagree by the box's share of the page — this is the bug, pinned");
+
+  // and cf has to be undone, or a scaled-down crop reads small by exactly that factor
+  const half = A.boxPtsToPage(boxPts, {x0: 600, y0: 300, cf: 0.5, pageW, pageH});
+  eq(half[1].x - half[0].x, 2000, "cf scaled the box DOWN on the way in; dividing undoes it");
+});
+
+t("drawing: viewRealSize is the only way to ask, and it refuses what it cannot place", () => {
+  /* `profileScaleFromTrace` takes points and an image size and cannot tell which image they
+     are in. Every caller that decides that for itself is a chance to decide it differently, so
+     there is one function that does and the rest go through it. These are the cases where it
+     must return null rather than a plausible number. */
+  const A = API;
+  const drawing = {plotScale: 100,
+                   crop: {frame_mm: {w: 1000, h: 800}, axes_swapped: false, rotation: 0}};
+  const src = {x0: 0, y0: 0, cf: 1, pageW: 3000, pageH: 1500};
+  const pts = [{x: 0, y: 0}, {x: 900, y: 0}, {x: 900, y: 300}];
+
+  ok(A.viewRealSize({A: pts, drawing, drawingSrc: src}, 1), "the ordinary case works");
+  eq(A.viewRealSize({A: pts, drawing: null, drawingSrc: src}, 1), null,
+     "a view not taken from a drawing has no real size, and must not invent one");
+  eq(A.viewRealSize({A: pts, drawing, drawingSrc: null}, 1), null,
+     "a drawing record with no basis is worse than none — it is the silent case");
+  eq(A.viewRealSize({A: pts, drawing, drawingSrc: {...src, pageW: 0}}, 1), null,
+     "a page with no width would divide by zero and report Infinity metres");
+  eq(A.viewRealSize({A: pts, drawing, drawingSrc: {...src, cf: 0}}, 1), null,
+     "cf of zero likewise");
+  eq(A.viewRealSize(null, 1), null);
+
+  /* and it must actually DO the conversion, not just accept the basis and ignore it */
+  const off = {x0: 1200, y0: 400, cf: 1, pageW: 3000, pageH: 1500};
+  const viaView = A.viewRealSize({A: pts, drawing, drawingSrc: off}, 1);
+  const viaPage = A.profileScaleFromTrace(A.boxPtsToPage(pts, off), 3000, 1500, drawing, 1);
+  eq(viaView.realLength, viaPage.realLength,
+     "viewRealSize must equal the page-basis answer — if it passed the box points straight "
+     + "through, an offset box would not change the result and this would still agree");
+});
+
+t("drawing: the drawing record never travels without the basis it is in", () => {
+  /* THE LINE THE HANDOFF WARNED ABOUT. `view.drawing = pg.drawing` alone is a one-line change
+     that compiles, runs, and reports a building three times too small. The arithmetic is
+     tested above with its own fixtures, so nothing there can see the assignment site going
+     wrong — only the source can. POSITIONAL, like the other checks of this shape: what matters
+     is that the two assignments are together, which no value can express. */
+  const src = html;
+  /* EVERY occurrence, not the first. The comment above the assignment quotes the wrong version
+     of the line in order to explain why it is wrong, and `indexOf` found the COMMENT — the
+     third time in this file's history that prose describing code has fooled a check of that
+     code, and the second time from the hand that wrote the warning about it. Asking whether
+     ANY occurrence has the basis beside it is both honest and immune to the comment. */
+  const hits = [];
+  for (let i = src.indexOf("view.drawing = pg.drawing"); i >= 0;
+       i = src.indexOf("view.drawing = pg.drawing", i + 1)) hits.push(i);
+  ok(hits.length > 0, "the crop-to-view assignment must still carry the drawing record");
+  const good = hits.some(i => {
+    const after = src.slice(i, i + 400);
+    return /view\.drawingSrc\s*=/.test(after)
+        && /cf\s*[,:]/.test(after) && /pageW\s*:/.test(after) && /pageH\s*:/.test(after);
+  });
+  ok(good,
+     "view.drawingSrc — the box offset, the crop factor and the PAGE size — has to be set "
+     + "right beside view.drawing. The record on its own IS the bug.");
+  // and nobody may measure a view's own canvas against the page's paper size
+  ok(!/profileScaleFromTrace\(\s*view\.A/.test(src),
+     "a view's points are in its BOX canvas — they go through viewRealSize, never direct");
 });
 
 t("deploy: the four connection placeholders are still what deploy.yml substitutes", () => {
