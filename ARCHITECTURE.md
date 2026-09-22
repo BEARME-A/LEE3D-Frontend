@@ -146,15 +146,26 @@ this repo is the proof you can hand him and run in front of him.
 ```bash
 # zero build — just open it
 open LEE3D-Frontend/index.html
-# or deploy: push, then Settings → Pages → Deploy from branch → main /(root)
+# or deploy: push. .github/workflows/deploy.yml publishes it, gated on the core suite.
+#
+# Settings → Pages → Source MUST be "GitHub Actions", NOT "Deploy from a branch".
+# This line used to say "Deploy from branch → main /(root)" and that setting BREAKS the
+# deploy: GitHub's own pages-build-deployment takes ownership of the site and deploy.yml
+# queues forever with nothing to explain why. STATUS.md records it; the instruction here
+# still pointed the other way.
 ```
 
 **Backend (CAD + storage):**
 ```bash
 cd LEE3D-Backend-A
-conda env create -f environment.yml && conda activate lee3d   # gets OpenCascade
+pip install -r requirements.txt && pip install cadquery        # 2.8.0; conda is no longer needed
 uvicorn app.main:app --reload --port 8000                      # http://localhost:8000/docs
-# or: docker build -t lee3d . && docker run -p 8000:8000 -v $PWD/data:/data lee3d
+# or, and note the FILENAME — this repo has never contained a plain ./Dockerfile, so
+# `docker build -t lee3d .` (what this line used to say) fails with nothing to explain it.
+# The same wrong path in render.yaml broke a Blueprint deploy once already.
+#   docker build -f Dockerfile.light -t lee3d .   # small; everything except /generate
+#   docker build -f Dockerfile.full  -t lee3d .   # multi-GB; adds the CAD kernel
+# then: docker run -p 8000:8000 -v $PWD/data:/data lee3d
 ```
 
 **Generate a body from a profile:**
