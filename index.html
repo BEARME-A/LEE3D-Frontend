@@ -8206,6 +8206,35 @@ function profileScaleFromTrace(pts, imgW, imgH, drawing, modelScale){
   return out;
 }
 
+/* Traced points, out of the BOX canvas they were drawn in and into the PAGE image they came
+   from. `cropCanvas` scaled the box down by `cf` on the way in, so `x / cf` undoes that and
+   `x0` puts it back where the box sat on the page. */
+function boxPtsToPage(pts, src){
+  if(!pts || !pts.length || !src || !(src.cf > 0)) return null;
+  const out = [];
+  for(const q of pts){
+    const x = (q && q.x !== undefined) ? q.x : (q ? q[0] : NaN);
+    const y = (q && q.y !== undefined) ? q.y : (q ? q[1] : NaN);
+    if(!isFinite(x) || !isFinite(y)) return null;
+    out.push({x: src.x0 + x / src.cf, y: src.y0 + y / src.cf});
+  }
+  return out;
+}
+
+/* WHAT A TRACED VIEW MEASURES IN LIFE, or null. **This is the only way to ask.**
+   `profileScaleFromTrace` takes points and an image size and cannot tell which image they are
+   in — hand it the view's own canvas and its box size and the arithmetic is perfect and the
+   answer is wrong by the box's share of the page. Everything that decides the basis is here,
+   in one function, so there is one place to be right rather than one place per caller. */
+function viewRealSize(view, modelScale){
+  if(!view || !view.drawing || !view.drawingSrc) return null;
+  const src = view.drawingSrc;
+  if(!(src.pageW > 0) || !(src.pageH > 0)) return null;
+  const pts = boxPtsToPage(view.A, src);
+  if(!pts) return null;
+  return profileScaleFromTrace(pts, src.pageW, src.pageH, view.drawing, modelScale);
+}
+
 /* The scale fields a profile should carry for a detail read off a drawing.
    `realLength` is what the thing measures in life; `modelScale` is the ratio it is BUILT at,
    which is the user's choice and NOT the sheet's plot scale — a sheet plotted at 1/4"=1'-0"
@@ -8872,6 +8901,21 @@ document.getElementById("iBuild").onclick=()=>{
         if(topPts.length<2)continue;
         const view=V[role];
         setRefImage(view,canvas); view.scale=sPxPerMm*cf;
+        /* WHAT THE DRAWING SAYS THIS VIEW MEASURES — carried together with the BASIS it is in.
+           `pg.drawing` is the record `impPdfUseDetail` stored, and `drawing.crop.frame_mm`
+           describes the WHOLE PAGE image. A view's traced points are in the BOX canvas, which
+           is a crop of that page taken by `cropCanvas`. So `view.drawing = pg.drawing` on its
+           own is one line and silently wrong: measuring a trace as a fraction of the BOX and
+           multiplying by the PAGE's paper size makes a building covering a third of the page
+           come out three times too small — plausible, and nothing downstream can tell.
+           The box rect and the crop factor therefore travel WITH the record, and
+           `viewRealSize()` converts to page pixels before it measures anything. One basis,
+           page-image pixels, from the trace to `frame_mm`. The alternative — scaling
+           `frame_mm` down by the box's share of the page — is a smaller change that leaves
+           two bases alive in the file, which is how this class of bug comes back. */
+        view.drawing = pg.drawing || null;
+        view.drawingSrc = pg.drawing
+          ? {x0:bx.x0, y0:bx.y0, cf, pageW:pg.natW, pageH:pg.natH} : null;
         view.A=(botPts&&botPts.length)?[...topPts,...botPts.slice().reverse()]:topPts; view.B=[];
         sent.push(role); usedPages.add(pg.name);
         if(autoOrientView(role))turned.push(role);      // blueprint drew it sideways
@@ -8882,10 +8926,22 @@ document.getElementById("iBuild").onclick=()=>{
   IMP.page=savedPage;
   if(!sent.length){toast("Assign at least one Side, Top, Front or Rear view on a box (use the dropdown), then send.");return;}
   const tv=sent.includes("side")?"side":sent.includes("top")?"top":sent.includes("front")?"front":sent.includes("rear")?"rear":null;
+  /* REPORTED, NOT APPLIED. If the view came off a drawing whose plot scale was read, the trace
+     already says how big the thing is in life — nobody should have to type a dimension the
+     sheet states. Silently resizing somebody's model off an auto-trace would be the wrong way
+     round though, so the number is shown and the scale control stays theirs to set. Same
+     treatment as `scale_mismatch` and `unusable_views`: say it, do not resolve it. */
+  let readSize="";
+  try{
+    const rs = tv ? viewRealSize(V[tv], +(document.getElementById("nScale")||{}).value||1) : null;
+    if(rs) readSize = ` · <b>${tv}</b> measures about <b>${(rs.realLength/1000).toFixed(2)} m</b>`
+      + ` &times; ${(rs.realHeight/1000).toFixed(2)} m` 
+      + ` at the drawing's 1:${V[tv].drawing.plotScale} — set it under <b>Build it at a scale</b>`;
+  }catch(_){}
   if(tv){activeView=tv;document.querySelectorAll("#viewSeg button").forEach(x=>x.classList.toggle("on",x.dataset.v===activeView));
     document.getElementById("imgOpField").style.display="inline-flex";updateEdgeLabels();}commitTrace();refreshSecUI();
   switchTab(tv?"trace":"three");if(tv)setTimeout(fitTrace,40);
-  toast(`Sent to Reference &amp; Trace: <span class="mono">${[...new Set(sent)].join(", ")}</span> from ${usedPages.size} page(s).${turned.length?` · turned <b>${[...new Set(turned)].join(", ")}</b> upright (drawn sideways)`:""}${noScale?` · no scale on a page — the traced <b>side</b> length anchors the rest`:""} Front/rear became section cuts. Refine, then open 3D.`);
+  toast(`Sent to Reference &amp; Trace: <span class="mono">${[...new Set(sent)].join(", ")}</span> from ${usedPages.size} page(s).${turned.length?` · turned <b>${[...new Set(turned)].join(", ")}</b> upright (drawn sideways)`:""}${noScale?` · no scale on a page — the traced <b>side</b> length anchors the rest`:""}${readSize} Front/rear became section cuts. Refine, then open 3D.`);
 };
 
 /* =========================================================================
