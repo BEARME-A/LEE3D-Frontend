@@ -66,6 +66,7 @@ const PRELUDE = [grabConst("clamp"), grabConst("lerp"), grabConst("smoothstep"),
   soft(() => grabConst("dxfLoopArea"))].join("\n");
 const NAMES = ["outlineEnvelope", "anchorPxPerMm", "makeRevolve", "makeLathe", "revProfileFromElevation", "pointInPoly",
   "makeVisualHull", "checkManifold", "traceExtentFrac", "profileScaleFromTrace", "impPdfListItems", "impPdfSummary", "drawnSpanToReal", "profileScaleFromDetail", "outlineCircularity", "polyArea", "resamplePoly", "svgPhysicalWidthMM",
+  "htmlSafe",
   "libCanonical", "sampleProfile", "resampleSection", "morphSections", "makeBody", "autoOutline",
   "publishRoute", "distToPoly", "viewUV", "applyFeatures", "pickSilhouette", "sampleMask", "ptInPolyPts", "polyAreaPts",
   "rasterRegions", "otsuThreshold", "lumOf", "regionOutline", "dilateMask", "labelBlobs", "outlineBBox", "sdPoly",
@@ -515,7 +516,8 @@ t("drawing: the PDF path calls only helpers that exist", () => {
   const called = ["beBase", "impAddPage", "switchTab", "layoutSheet", "renderCrops",
                   "updateImpStatus", "impRenderPages", "toast", "drawnSpanToReal",
                   // implemented since: this list caught its own arrival, which is the job
-                  "impPdfRenderList", "impPdfListItems", "impPdfSummary", "impPdfUseDetail"];
+                  "impPdfRenderList", "impPdfListItems", "impPdfSummary", "impPdfUseDetail",
+                  "htmlSafe"];
   for (const fn of called) {
     ok(new RegExp("function\\s+" + fn + "\\s*\\(").test(src),
        `the import path calls ${fn}() — it must be defined, not assumed`);
@@ -544,6 +546,70 @@ t("drawing: a PDF is read, not refused", () => {
      "both endpoints must be reached: one reads a page, one crops the chosen detail");
   ok(/axes_swapped/.test(src),
      "the crop record must be kept whole — a trace cannot be sized without the swap");
+});
+
+t("drawing: reading a PDF stops at the end of the document, not at page 12", () => {
+  /* The walk ran to page 12 whatever the file held, with ONE try around the whole loop. Asking
+     for a page past the end is a 400, so on any shorter set where no page carries titled
+     details the loop fell out of the bottom into the catch and reported "Couldn't read
+     Drawings.pdf: the backend could not read page 9" — which reads as a broken file. The
+     honest message written for that case sat below, unreachable unless the PDF had twelve
+     pages or more. POSITIONAL, like the test above it: what matters is that the try is INSIDE
+     the loop, which no phrase can express. */
+  const src = html;
+  const fn = src.slice(src.indexOf("async function impPdfPick"),
+                       src.indexOf("async function impPdfUseDetail"));
+  ok(fn.length > 100, "impPdfPick must be findable ahead of impPdfUseDetail");
+  const loopAt = fn.indexOf("for(; page < 12");
+  const readAt = fn.indexOf("await impPdfSheet");
+  const tryAt = fn.lastIndexOf("try{", readAt);
+  ok(loopAt > 0 && tryAt > loopAt,
+     "each page is read inside its own try, so a failure past the end ends the walk "
+     + "instead of abandoning the whole read");
+  ok(/page === 0/.test(fn),
+     "only page 0 failing means the FILE could not be read; anything later is the end of it");
+});
+
+t("drawing: a title out of a PDF never reaches innerHTML raw", () => {
+  /* `toast()` is an innerHTML sink by design and most callers pass markup on purpose. A detail
+     TITLE is not one of those: it comes out of an arbitrary PDF, and Dylan's set arrives from
+     a third-party studio. This app's stated property is that untrusted strings go in with
+     textContent and never have HTML built around them — the picker list keeps it by returning
+     data, and a toast has nowhere to put a text node, so it escapes at the interpolation. */
+  const A = API;
+  eq(A.htmlSafe('<img src=x onerror=alert(1)>'), '&lt;img src=x onerror=alert(1)&gt;',
+     "a tag out of a PDF must not survive as a tag");
+  eq(A.htmlSafe('a&b'), 'a&amp;b', "& first, or the other escapes get double-escaped");
+  /* Quotes too — a dimension is nothing BUT quotes, and so is an attribute. My first version
+     of this line wrote the input as '4\\'-0\\""', which puts a literal backslash in the string
+     and then expected it not to come back. The fixture was wrong, not the escaper. */
+  eq(A.htmlSafe(`4'-0" WIDE`), '4&#39;-0&quot; WIDE',
+     "a feet-and-inches title is quotes all the way down");
+  eq(A.htmlSafe(null), "", "a missing title is empty, not the string 'null'");
+  eq(A.htmlSafe(undefined), "");
+  eq(A.htmlSafe(48), "48", "a number is fine, it just comes back as text");
+
+  const src = html;
+  const fn = src.slice(src.indexOf("async function impPdfUseDetail"),
+                       src.indexOf("function fmtLen"));
+  ok(fn.length > 100, "impPdfUseDetail must be findable");
+  ok(!/\$\{det\.title\}/.test(fn),
+     "the title is interpolated into markup here — it has to go through htmlSafe()");
+  ok(/htmlSafe\(det\.title\)/.test(fn), "and it must be that helper, not a hand-rolled one");
+});
+
+t("drawing: the plot scale comes back with the picture, not from the listing", () => {
+  /* Two copies of the same number: `det` is this client's own listing of the sheet, `crop` is
+     what the backend actually cropped. They agree — the endpoints index one list now — but
+     sizing a trace off the listing while looking at the crop is a disagreement waiting for the
+     next indexing bug, and a wrong plot scale is silent: the building just comes out the wrong
+     size, which is what every check in this area exists to stop. */
+  const src = html;
+  const fn = src.slice(src.indexOf("async function impPdfUseDetail"),
+                       src.indexOf("function fmtLen"));
+  ok(/plotScale: crop\.scale/.test(fn),
+     "the drawing record must take its scale from the crop the backend returned");
+  ok(!/plotScale: det\.scale/.test(fn), "not from the client's own listing of the sheet");
 });
 
 t("drawing: a traced span becomes the real size it stands for", () => {
