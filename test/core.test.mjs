@@ -653,6 +653,41 @@ t("drawing: the drawing record never travels without the basis it is in", () => 
      "a view's points are in its BOX canvas — they go through viewRealSize, never direct");
 });
 
+t("readout: the hollow volume does not claim to be what prints", () => {
+  /* THE ONE NUMBER SOMEBODY SPENDS MONEY ON. The header's cm3 is what a person estimates
+     filament from, and for a hollow body it OVER-STATES — the preview meshes the inner wall in
+     facets where the exact build offsets it smoothly, and area times wall is material.
+     Measured on a real car against the kernel's 89.73 cm3: +45.7% on Fast, +30.8% on Normal,
+     +23.7% on Fine. Monotonic in the cell size, which is what makes it faceting rather than a
+     geometry error.
+
+     The tooltip used to say "Exact for this wall thickness" and "This is the real material of
+     the frame". Both were wrong in the only place it costs anything.
+
+     Source-level, because the readout needs a DOM and the suite has none — but positive, not
+     an absence check: this asserts what the branch must SAY, so a rewrite that keeps the old
+     claim cannot pass by deleting a phrase. */
+  const src = html;
+  const i = src.indexOf("rVol.textContent=");
+  ok(i > 0, "the volume readout must still be findable");
+  const block = src.slice(i, i + 1400);
+
+  ok(/!hollow/.test(block.slice(0, 120)),
+     "a hollow figure is approximate whether or not the mesh closed, so it always carries the ≈");
+  ok(/OVER-ESTIMATE/i.test(block), "the hollow tooltip has to say which way it is wrong");
+  ok(/STEP/.test(block), "and point at the export, which is the figure that is accurate");
+  ok(!/Exact for this wall thickness/.test(block),
+     "the old claim: the signed volume is exact for the SURFACE, and the surface is not the part");
+  ok(!/This is the real material of the frame/.test(block),
+     "and the other old claim, which is the one somebody would have quoted filament from");
+
+  /* A correction factor would be a fudge — the bias depends on how much inner surface a body
+     has, and the three percentages above are one model. This file's standing answer to a
+     discretisation gap is resolution plus reporting. Pin that no factor crept in. */
+  ok(!/volume\s*\*\s*0\.|volume\s*\/\s*1\.[0-9]/.test(block),
+     "the number must stay what the mesh measured — no correction factor on a displayed figure");
+});
+
 t("deploy: the four connection placeholders are still what deploy.yml substitutes", () => {
   /* `deploy.yml` copies index.html into `_site/` and replaces four literal strings from repo
      secrets and variables. If one is renamed on this side, the substitution finds nothing and
