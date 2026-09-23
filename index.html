@@ -4919,10 +4919,26 @@ function rebuild(){
   // A signed volume is only EXACT over a closed surface — flag it, don't fake it. And say
   // WHAT it measures: a hollow frame (no closed bottom) reports its WALL MATERIAL — the outer
   // skin minus an inner copy set one wall-thickness in — not the space it encloses.
-  rVol.textContent=(man.watertight?"":"≈")+(volume/1000).toFixed(1)+" cm³";
+  //
+  // A HOLLOW FIGURE IS ALWAYS APPROXIMATE, WATERTIGHT OR NOT, so it always carries the "≈".
+  // This used to show a bare number and a tooltip reading "Exact for this wall thickness" and
+  // "This is the real material of the frame". Both halves were exactly wrong in the one place
+  // it matters: somebody estimates filament off this. The signed volume IS exact for the
+  // surface on screen — but that surface's INNER wall is meshed at grid resolution against
+  // what the exact build offsets smoothly, and the bumps add area, and area times wall is
+  // material. Measured on Collin's own car against the kernel's 89.73 cm3:
+  //     fast   res  50  cell 4.00mm   130.76 cm3   +45.7%
+  //     normal res  72  cell 2.78mm   117.37 cm3   +30.8%
+  //     fine   res 108  cell 1.85mm   110.98 cm3   +23.7%
+  // Monotonic in the cell size, which is what says it is faceting and not a geometry error.
+  // NO CORRECTION FACTOR IS APPLIED. Those percentages are one model, the bias depends on how
+  // much inner surface a body has, and this file's standing answer to a discretisation gap is
+  // resolution plus reporting rather than a fudge. So the number stays what the mesh says and
+  // stops claiming to be what prints.
+  rVol.textContent=((man.watertight&&!hollow)?"":"≈")+(volume/1000).toFixed(1)+" cm³";
   if(hollow){
     const w=fmtLen(S.wall);
-    rVol.title=`Hollow shell — the frame's WALL MATERIAL only: the outer surface minus an inner copy set ${w} inward. ${man.watertight?"Exact for this wall thickness.":"Approximate — the surface isn't fully closed."} This is the real material of the frame, not the volume it encloses.`;
+    rVol.title=`Hollow shell — the frame's WALL MATERIAL only: the outer surface minus an inner copy set ${w} inward, not the space it encloses. ${man.watertight?"":"The surface isn't fully closed, so it is rougher still. "}An OVER-ESTIMATE: the preview meshes the inner wall in facets where the exact build offsets it smoothly, and the extra area reads as extra material. It tightens as you raise build quality, and the STEP export is the accurate one — don't quote filament off this figure.`;
   } else {
     rVol.title=man.watertight?"Solid — the volume enclosed by the surface (exact).":"Approximate — the surface has defects, so the volume can't be measured exactly.";
   }
