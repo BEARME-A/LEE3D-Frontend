@@ -653,6 +653,78 @@ t("drawing: the drawing record never travels without the basis it is in", () => 
      "a view's points are in its BOX canvas — they go through viewRealSize, never direct");
 });
 
+t("an opening may thin the rim, but it may not do it silently", () => {
+  /* MEASURED 2026-09-21 on a short, thick-walled body — the regime the exact backend used to
+     plant a floating slab in, and which no fixture here reached. On a 100 x 60 x 40 block at a
+     14mm wall with the underside open, rays ALONG Y (the face normal on a box, so the 1.41x
+     inflation this file warns about cannot apply) say the side walls TAPER toward the opening:
+
+         z= 2   2.64mm      z=12   10.04mm      z=20   13.86mm
+         z= 5   3.51mm      z=16   13.22mm      z=24   13.99mm
+         z= 8   6.54mm
+
+     and it gets worse on a coarser grid, not better: the gate reads a 2.59mm worst patch at
+     normal and 0.01mm at fast, which is a rim of no wall at all.
+
+     Closed, the same body builds 14.16 / 13.86 / 13.99 — uniform, exactly as asked. So the
+     underside-opening machinery eats the wall near the rim, and the exact backend's sweep does
+     not: the two ends disagree by 14.2% on material there, flat across resolution.
+
+     WHETHER THAT TAPER IS RIGHT IS COLLIN'S CALL — an opening arguably should fair into the
+     body — so this test does not assert a thickness. It asserts the invariant that holds
+     WHICHEVER WAY HE DECIDES: the rim is one wall thick, OR the thin-wall gate says so. What
+     must never happen is the third case, a rim at a fifth of the requested wall with nothing
+     on screen about it. Today the gate fires: worstPatch 2.59mm over 151 readings at (50,0,5).
+
+     Note it is `wall 14 on a 40mm body` on purpose. `the rim you see at an opening is a clean
+     band, one wall thick` uses the traced car at 4.2mm and passes — its fixture cannot reach
+     this regime, which is the seventh time in this project a fixture has been the reason a
+     real difference went unseen. */
+  const box = [[0,0],[1,0],[1,1],[0,1]];
+  const prof = { length:100, height:40, width:60,
+    topProfile:[[0,40],[0.5,40],[1,40]], bottomProfile:[[0,0],[0.5,0],[1,0]],
+    widthProfile:[[0,30],[0.5,30],[1,30]],          // a HALF-width: this block is 60 wide
+    sidePoly:box, topPoly:box, frontPoly:box, features:null,
+    /* NORMAL, not fast, and that is the measurement talking. At fast (res 34, cell 2.9mm) the
+       CLOSED control picks up a worstPatch of 4.44mm over exactly THREE readings — the bare
+       cluster minimum — which is a couple of rays grazing a corner on a coarse grid, not a
+       thin wall. A control that fires on nothing in particular cannot support the assertion
+       below. At normal it is null and the open build still reports 2.59mm over 110 readings,
+       so the difference between them is the geometry rather than the grid.
+       I wrote this test at fast after measuring at normal, and it went red on the control —
+       the same assert-in-one-configuration-measure-in-another mistake as the CI guard earlier
+       today. Cost is nothing: 0.6s to build and 1.1s to measure, each way. */
+    hullQuality:"normal", hullHollow:true, wallThickness:14 };
+
+  const closed = API.makeVisualHull({ ...prof, closedBottom:true,  openUnderside:false });
+  const open   = API.makeVisualHull({ ...prof, closedBottom:false, openUnderside:true  });
+
+  const sClosed = API.shellWallStats(closed.positions, closed.indices, { wall:14, samples:400 });
+  const sOpen   = API.shellWallStats(open.positions,   open.indices,   { wall:14, samples:400 });
+  ok(sClosed && sOpen, "both builds have to be measurable, or this test is checking nothing");
+
+  /* the closed body is the control: uniform wall, and the gate must stay QUIET on it, or the
+     assertion below is satisfied by a warning that fires on everything */
+  near(sClosed.median, 14, 1.2, "closed: the wall is the thickness that was asked for");
+  eq(sClosed.worstPatch, null,
+     "closed: nothing is thin here, so a gate that fires would be crying wolf");
+
+  const thin = sOpen.p10 < 14 * 0.8;
+  if (thin) {
+    ok(sOpen.worstPatch,
+       `open: the wall drops to ${sOpen.p10.toFixed(2)}mm against a 14mm ask and the thin-wall `
+       + `gate reports nothing. Either the opening stops eating the wall or the gate has to say `
+       + `so — a rim at a fifth of the requested wall with a silent screen is the one outcome `
+       + `that is not allowed.`);
+    ok(sOpen.worstPatch.at[2] < 40 * 0.5,
+       "open: and it must point LOW, at the rim, not somewhere unrelated up the body");
+  } else {
+    ok(sOpen.median > 14 * 0.8,
+       "open: if the taper has been fixed, the wall should hold near its full thickness — "
+       + "update the measurements in this test's note, they were taken before the change");
+  }
+});
+
 t("readout: the hollow volume does not claim to be what prints", () => {
   /* THE ONE NUMBER SOMEBODY SPENDS MONEY ON. The header's cm3 is what a person estimates
      filament from, and for a hollow body it OVER-STATES — the preview meshes the inner wall in
