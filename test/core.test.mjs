@@ -653,6 +653,53 @@ t("drawing: the drawing record never travels without the basis it is in", () => 
      "a view's points are in its BOX canvas — they go through viewRealSize, never direct");
 });
 
+t("export: every header the backend sends about a difference is read here", () => {
+  /* THE SAME FAILURE ONE LAYER OUT. `X-LEE3D-Hollow-Failed` has a whole section in STATUS.md
+     about getting it OUT of `build_solid`, where it was written to a local dict and dropped on
+     return — "a value written to a local you are about to drop is not set internally, it is
+     not set at all." It was threaded through export_bytes to main.py to a header, and then
+     stopped one step short of a person, because this end read two of the seven headers.
+
+     The five it dropped are precisely the ones that say the STEP is not what is on screen: a
+     shell that came back solid, pockets that open into the cavity, extra views that make the
+     part fatter. A file quietly different from the preview is the one thing this project
+     treats as unacceptable, and the backend was already saying so.
+
+     SOURCE-LEVEL and POSITIVE: it asserts each header is READ, so a rewrite cannot pass by
+     deleting a branch. The list is taken from main.py's own header block — if a header is
+     added there and not here, this goes red, which is the point.
+
+     COMMENTS ARE STRIPPED FIRST, and that is not tidiness. The first version of this test
+     checked `block.includes("X-LEE3D-Hollow-Failed")` and PASSED when the read was replaced
+     with `false`, because the comment above the code lists every header by name. This file
+     already records that a test for a string's ABSENCE is fooled by a comment describing that
+     string; a test for its PRESENCE is fooled the same way, and by the same comment. So: strip
+     the prose, then require the full call expression rather than the bare name. */
+  const decomment = (t) => t.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
+  const src = html;
+  const i = src.indexOf("/solid?fmt=step");
+  ok(i > 0, "the exact-export call must still be findable");
+  /* The window has to reach past the toast at the end of the handler, not just the header
+     reads. Measured from `/solid?fmt=step`: the last header is at +955, `download(` at +2931
+     and the message at +3496 — so a 3500-char window found the headers and cut the message in
+     half, and the download-ordering check below failed on a slice boundary rather than on
+     anything real. 5000 leaves the block room to grow. */
+  const block = decomment(src.slice(i, i + 5000));
+  for (const hdr of ["X-LEE3D-Through-Cuts", "X-LEE3D-Symmetric-Only", "X-LEE3D-Hollow-Failed",
+                     "X-LEE3D-Pockets-Through-Wall", "X-LEE3D-Unusable-Views",
+                     "X-LEE3D-Skipped"]) {
+    ok(block.includes(`headers.get("${hdr}")`),
+       `${hdr} is sent by the backend and nothing here READS it — the STEP can differ from the `
+       + `preview in that way and the person is never told`);
+  }
+  /* and the file still downloads. A header saying the part differs is a reason to TELL
+     somebody, never a reason to withhold what they asked for. */
+  const dl = block.indexOf("download(");
+  const msg = block.indexOf("Exact build done");
+  ok(dl > 0 && msg > dl,
+     "the download must happen before the message, not be gated behind a clean result");
+});
+
 t("an opening may thin the rim, but it may not do it silently", () => {
   /* MEASURED 2026-09-21 on a short, thick-walled body — the regime the exact backend used to
      plant a floating slab in, and which no fixture here reached. On a 100 x 60 x 40 block at a
