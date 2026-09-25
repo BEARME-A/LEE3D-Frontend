@@ -8272,6 +8272,29 @@ function boxPtsToPage(pts, src){
   return out;
 }
 
+/* WHAT THE DRAWING ITSELF SAYS THIS DETAIL MEASURES, or null.
+   These are the true measurements: a written dimension matched to the line work it dimensions
+   by ARITHMETIC — a line drawn L mm at 1:S measures L x S, and the text says what that should
+   be — so a match is a check and not a guess. On the real sheets they land at 0.00% error.
+   Returned as a RANGE and a list rather than as one number, and deliberately: nothing here
+   knows which of eleven dimensions corresponds to the span somebody traced, and picking the
+   largest would be the kind of plausible answer this project keeps having to retract. The
+   person can see 4'-0" and 12'-4" beside what their trace measured and judge in one glance. */
+function drawingStated(drawing){
+  const d = drawing && drawing.dims;
+  if(!d || !d.length) return null;
+  const mm = [], texts = [];
+  for(const it of d){
+    const v = +(it && it.mm);
+    if(isFinite(v) && v > 0){ mm.push(v); if(it.text) texts.push(String(it.text)); }
+  }
+  if(!mm.length) return null;
+  mm.sort((a,b) => a-b);
+  return { n: mm.length, min: mm[0], max: mm[mm.length-1], all: mm,
+           texts: texts.slice(0, 8),
+           forThisDetail: !!drawing.dimsAreThisDetail };
+}
+
 /* WHAT A TRACED VIEW MEASURES IN LIFE, or null. **This is the only way to ask.**
    `profileScaleFromTrace` takes points and an image size and cannot tell which image they are
    in — hand it the view's own canvas and its box size and the arithmetic is perfect and the
@@ -8446,9 +8469,26 @@ async function impPdfUseDetail(index, dpi){
          while looking at the crop is a disagreement waiting for the next indexing bug, and a
          wrong plot scale is silent: the building simply comes out the wrong size. Read the
          scale from the thing the image came with. */
+      /* THE SHEET'S OWN MEASUREMENTS TRAVEL WITH THE DRAWING. Until now this record carried
+         the plot scale and the crop and nothing else, so every dimension the importer read —
+         over a thousand across Dylan's set, matched to real line work at 0.00% error — was
+         parsed, counted, shown as a number in the picker, and then dropped. The survey
+         schedule went the same way: ten northings and eastings to four decimals, exact, used
+         to print "10 survey points" and discarded.
+         That is Collin's own rule broken at the last step. `manual input for PICTURES, never
+         for information` is worth nothing if the information is read and then thrown away —
+         the person still ends up typing a dimension the drawing already states.
+         `dims` is filtered to THIS detail (each item carries its own `detail` title, which is
+         the segmentation the backend went to some trouble to get right); `points` belongs to
+         the sheet, not the detail, and is placement data for Workshop. */
+      const allDims = (st.sheet.dimensions || []);
+      const mine = allDims.filter(m => m && m.detail && m.detail === (crop.title || det.title));
       IMP.cur.drawing = {plotScale: crop.scale || det.scale, crop,
                          sheet: st.sheet.sheet,
-                         title: crop.title || det.title, page: st.page};
+                         title: crop.title || det.title, page: st.page,
+                         dims: mine.length ? mine : allDims.slice(),
+                         dimsAreThisDetail: mine.length > 0,
+                         points: (st.sheet.points || []).slice()};
       document.getElementById("sheetImg").src = url;
       const d = document.getElementById("iDrop"); if(d) d.style.display = "none";
       const pick = document.getElementById("pdfPick"); if(pick) pick.classList.add("hide");
@@ -8988,6 +9028,15 @@ document.getElementById("iBuild").onclick=()=>{
     if(rs) readSize = ` · <b>${tv}</b> measures about <b>${(rs.realLength/1000).toFixed(2)} m</b>`
       + ` &times; ${(rs.realHeight/1000).toFixed(2)} m` 
       + ` at the drawing's 1:${V[tv].drawing.plotScale} — set it under <b>Build it at a scale</b>`;
+    /* AND WHAT THE SHEET ITSELF SAYS, beside it. The figure above is derived from a hand
+       trace; these are read off the drawing and matched to its line work. Shown together and
+       NOT reconciled — nothing here knows which stated dimension the traced span corresponds
+       to, and this file's habit is to report a reading rather than resolve it. */
+    const st8 = rs ? drawingStated(V[tv].drawing) : null;
+    if(st8) readSize += ` · the sheet states <b>${st8.n}</b> dimension${st8.n>1?"s":""}`
+      + `${st8.forThisDetail ? " on this detail" : " on this page"}, `
+      + `${(st8.min/1000).toFixed(2)}–${(st8.max/1000).toFixed(2)} m`
+      + (st8.texts.length ? ` (${htmlSafe(st8.texts.slice(0,3).join(", "))}…)` : "");
   }catch(_){}
   if(tv){activeView=tv;document.querySelectorAll("#viewSeg button").forEach(x=>x.classList.toggle("on",x.dataset.v===activeView));
     document.getElementById("imgOpField").style.display="inline-flex";updateEdgeLabels();}commitTrace();refreshSecUI();
