@@ -8109,16 +8109,51 @@ document.getElementById("buildServer").onclick=async ()=>{
       headers:{"Content-Type":"application/json"},body:JSON.stringify(prof)});
     if(r.status===503){toast("The backend is up but running the light image, which has no CAD kernel. Rebuild it with <span class='mono'>Dockerfile.full</span> for exact output.");return;}
     if(!r.ok){toast("Exact build: "+(await beExplain(r)));return;}
+    /* READ ALL OF THEM. This used to take two of the seven the backend sends, and the five it
+       dropped are the ones that say the STEP is not what is on screen:
+
+         X-LEE3D-Hollow-Failed          a shell was asked for and could not be built -> SOLID
+         X-LEE3D-Pockets-Through-Wall   pockets that open into the cavity here and not in the
+                                        preview, i.e. holes where the screen shows pockets
+         X-LEE3D-Unusable-Views         extra-view silhouettes this build cannot use -> FATTER
+         X-LEE3D-Skipped                features with no depth, genuinely nothing to build
+         X-LEE3D-Pockets / -Raises      how much detail actually made it in
+
+       `Hollow-Failed` is the sharp one. STATUS.md has a whole section on getting that flag OUT
+       of `build_solid`, where it was written to a local dict and dropped on return — "a value
+       written to a local you are about to drop is not set internally, it is not set at all."
+       It was threaded through export_bytes to main.py to a header, and then stopped one step
+       short of a person, because nothing here looked at it. The same failure one layer out.
+
+       Everything below only ADDS to the message. The download happens either way: a header
+       that says the part differs is a reason to tell somebody, never a reason to withhold the
+       file they asked for. */
     const cut=r.headers.get("X-LEE3D-Through-Cuts")||"0";
     const sym=r.headers.get("X-LEE3D-Symmetric-Only")==="1";
+    const hollowFailed=r.headers.get("X-LEE3D-Hollow-Failed")==="1";
+    const thru=+(r.headers.get("X-LEE3D-Pockets-Through-Wall")||0);
+    const unusable=+(r.headers.get("X-LEE3D-Unusable-Views")||0);
+    const skipped=+(r.headers.get("X-LEE3D-Skipped")||0);
+    const warn=[];
+    if(hollowFailed) warn.push("the shell could not be built, so this file is <b>solid</b> — "
+      + "it will use far more material than the preview says");
+    if(thru) warn.push(`${thru} pocket${thru>1?"s are":" is"} deeper than the wall `
+      + `underneath, so ${thru>1?"they":"it"} <b>cut through into the cavity</b> here. `
+      + "The preview keeps the wall under a pocket; this file does not");
+    if(unusable) warn.push(`${unusable} extra view${unusable>1?"s":""} could not be used, `
+      + "so the part is <b>fatter</b> than the preview");
+    if(skipped) warn.push(`${skipped} feature${skipped>1?"s have":" has"} no depth `
+      + "(a mask or a label), so nothing was cut for "+(skipped>1?"them":"it"));
     download(await r.blob(), name+".step");
     // The exact build intersects ONE side outline. If a right-hand drawing was traced, the
     // STEP is a symmetric body and the preview beside it is not — say so rather than hand
     // over a quietly different shape.
-    toast(sym
-      ? `Exact build done <span class="mono">${name}.step</span>${+cut?` · ${cut} real opening(s) cut`:""} — but it is <b>symmetric</b>. `
-        + `The exact path uses one side outline, so your second side drawing wasn't applied. The STL from here does use both.`
-      : `Exact build done ✓ <span class="mono">${name}.step</span>${+cut?` · ${cut} real opening(s) cut`:""} — opens in any CAD package.`);
+    if(sym) warn.push("it is <b>symmetric</b> — the exact path uses one side outline, so a "
+      + "second side drawing wasn't applied. The STL from here does use both");
+    const head=`<span class="mono">${name}.step</span>${+cut?` · ${cut} real opening(s) cut`:""}`;
+    toast(warn.length
+      ? `Exact build done ${head} — but ${warn.join("; and ")}.`
+      : `Exact build done ✓ ${head} — opens in any CAD package.`);
   }catch(e){
     toast("Exact build failed: "+e.message+" — if the studio is on https, the backend must be too, or the browser blocks it.");
   }
