@@ -17,5 +17,31 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+      # EACH FILE HAS TO BE THE FILE IT CLAIMS TO BE, and this runs before anything reads them.
+      #
+      # On 2026-09-25 `index.html` was uploaded over `test/core.test.mjs`, and the gate died
+      # with `SyntaxError: Unexpected token '<'` at line 1 of a file that is 5,000 lines of
+      # JavaScript. That message says nothing about what happened or what to do, and the repo
+      # can sit broken while somebody reads a Node stack trace.
+      #
+      # The reverse swap is worse and would NOT have been caught at all: JavaScript in
+      # index.html still deploys, and Pages would serve the test suite as the studio.
+      #
+      # A ship that half-lands is this project's most expensive failure mode — STATUS.md
+      # records it happening twice before this — so the cheap structural check goes first.
+      - name: index.html and core.test.mjs are not each other
+        run: |
+          set -e
+          fail() { echo "::error::$1"; exit 1; }
+          head -n 1 index.html | grep -qi '<!DOCTYPE html' \
+            || fail "index.html does not begin with <!DOCTYPE html>. It looks like another file was uploaded over it — most likely test/core.test.mjs. Re-upload the studio."
+          grep -q 'makeVisualHull' index.html \
+            || fail "index.html has no makeVisualHull(), so it is not the studio. Check what was uploaded."
+          head -n 1 test/core.test.mjs | grep -q '^<' \
+            && fail "test/core.test.mjs begins with '<' — it contains HTML, so index.html was uploaded over it. Re-upload the suite (it is ~5,300 lines and starts with a // comment)."
+          grep -q 'node:fs' test/core.test.mjs \
+            || fail "test/core.test.mjs does not import node:fs, so it is not the suite. Check what was uploaded."
+          echo "index.html and test/core.test.mjs both look like themselves"
+
       - name: Core suite (geometry, trace maths, library)
         run: node test/core.test.mjs
