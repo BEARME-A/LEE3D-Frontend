@@ -1,5329 +1,10427 @@
-// ---------------------------------------------------------------------------
-// LEE3D core regression suite.
-//
-// IMPORTANT: this pulls the functions straight out of ../index.html and runs
-// THOSE. It never copies the algorithms, so it cannot drift from the shipped
-// app the way the old geometry.test.mjs did (that one still tested wheel
-// arches months after wheels were deleted, and passed while the app blobbed).
-//
-//   node test/core.test.mjs
-// ---------------------------------------------------------------------------
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-const html = fs.readFileSync(path.join(HERE, "..", "index.html"), "utf8");
-const script = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].pop()[1];
-
-// --- pull one named function's source out of the app, brace-matched, string/comment aware
-function grab(name) {
-  const start = script.indexOf("function " + name + "(");
-  if (start < 0) throw new Error("function not found in index.html: " + name);
-  let i = script.indexOf("{", start), depth = 0, str = null, esc = false, line = false, block = false;
-  for (; i < script.length; i++) {
-    const c = script[i], n = script[i + 1];
-    if (line) { if (c === "\n") line = false; continue; }
-    if (block) { if (c === "*" && n === "/") { block = false; i++; } continue; }
-    if (str) { if (esc) { esc = false; continue; } if (c === "\\") { esc = true; continue; } if (c === str) str = null; continue; }
-    if (c === "/" && n === "/") { line = true; i++; continue; }
-    if (c === "/" && n === "*") { block = true; i++; continue; }
-    if (c === '"' || c === "'" || c === "`") { str = c; continue; }
-    if (c === "{") depth++;
-    else if (c === "}") { depth--; if (depth === 0) return script.slice(start, i + 1); }
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>LEE3D</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Saira+Semi+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<!-- Supabase config: hard-wired at deploy time from GitHub repo secrets (see SUPABASE.md).
+     The deploy workflow replaces the two placeholders below. Left as-is when opened locally. -->
+<script>
+/* Wired in automatically when the site is deployed (GitHub Actions fills these from the
+   repo's Secrets/Variables — see SETUP.md). Anything left as a __PLACEHOLDER__ simply
+   stays switched off, and only then does the app show a box to type it in. Nobody using
+   the deployed studio should ever have to paste a URL or a key. */
+window.LEE3D_CONFIG={
+  supabaseUrl:"__SUPABASE_URL__",
+  supabaseKey:"__SUPABASE_ANON_KEY__",
+  backendUrl :"__BACKEND_URL__",
+  libRepo    :"__LIB_REPO__"
+};
+window.LEE3D_SUPABASE={url:window.LEE3D_CONFIG.supabaseUrl,key:window.LEE3D_CONFIG.supabaseKey}; /* back-compat */
+window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf("__")!==0)?v:null;};
+</script>
+<style>
+  :root{
+    --bg:#0B121B; --panel:#121D2B; --panel-2:#0F1823; --rail:#0D1622;
+    --line:rgba(80,190,228,.18); --line-2:rgba(80,190,228,.07);
+    --ink:#DCE9F6; --ink-dim:#8CA6C0; --ink-faint:#586E86;
+    --accent:#39CFEA;            /* holographic HUD cyan */
+    --accent-soft:rgba(57,207,234,.14);
+    --blue:#46B7D9;              /* blueprint measurement cyan */
+    --good:#3FDCB4; --warn:#F5B342; --bad:#FF6A5A;
+    --glow:rgba(57,207,234,.45);
+    --r:8px;
   }
-  throw new Error("unbalanced braces reading: " + name);
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    background:var(--bg); color:var(--ink);
+    font-family:Inter,system-ui,-apple-system,sans-serif; font-size:14px;
+    /* holographic grid + a soft projection glow up top, for depth without clutter */
+    background-image:
+      radial-gradient(120% 80% at 50% -8%, rgba(57,207,234,.10), transparent 60%),
+      linear-gradient(var(--line-2) 1px,transparent 1px),
+      linear-gradient(90deg,var(--line-2) 1px,transparent 1px);
+    background-size:100% 100%, 26px 26px, 26px 26px; background-position:0 0,-1px -1px,-1px -1px;
+    overflow:hidden;
+  }
+  .mono{font-family:"JetBrains Mono",ui-monospace,monospace}
+  .disp{font-family:"Saira Semi Condensed",system-ui,sans-serif;letter-spacing:.01em}
+
+  /* ---------- top status bar ---------- */
+  header{
+    height:54px; display:flex; align-items:center; gap:18px;
+    padding:0 16px; border-bottom:1px solid var(--line);
+    background:linear-gradient(180deg,#0F1B29,#0B121C);
+    position:relative; z-index:20;
+  }
+  .brand{display:flex;align-items:center;gap:10px}
+  .logo{
+    width:26px;height:26px;border:1.5px solid var(--accent);border-radius:5px;
+    display:grid;place-items:center;position:relative;flex:0 0 auto;
+    box-shadow:0 0 10px var(--glow), inset 0 0 7px rgba(57,207,234,.28);
+  }
+  .logo::before{content:"";position:absolute;inset:5px;border:1.5px solid var(--accent);border-radius:50%;opacity:.6}
+  .logo::after{content:"";position:absolute;width:3px;height:3px;background:var(--accent);border-radius:50%;box-shadow:0 0 5px var(--accent)}
+  .brand h1{font-size:17px;font-weight:700;margin:0;line-height:1}
+  .brand .sub{font-size:10.5px;color:var(--ink-dim);letter-spacing:.18em;text-transform:uppercase;margin-top:3px}
+  .proj-name{
+    background:transparent;border:1px solid var(--line);color:var(--ink);
+    padding:6px 10px;border-radius:6px;font-size:13px;width:190px;
+  }
+  .proj-name:focus{outline:none;border-color:var(--accent)}
+  /* widths live here, not inline, so the phone layout can actually change them */
+  #projCat{width:150px}
+  #viewSeg{margin:0;width:340px;flex:0 0 auto}
+  #featTool{margin:0;width:250px;flex:0 0 auto}
+  .spacer{flex:1}
+  .readout{display:flex;gap:16px;align-items:center}
+  .stat{display:flex;flex-direction:column;line-height:1.15}
+  .stat b{font-size:13px;font-weight:600}
+  .stat span{font-size:9.5px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.13em}
+  /* drafting approval stamp */
+  .stamp{
+    border:1.5px solid var(--good);color:var(--good);border-radius:7px;
+    padding:5px 11px;display:flex;flex-direction:column;align-items:center;
+    line-height:1.05;min-width:104px;
+    box-shadow:inset 0 0 8px rgba(63,220,180,.18), 0 0 12px rgba(63,220,180,.22);
+  }
+  .stamp.warn{border-color:var(--warn);color:var(--warn);box-shadow:inset 0 0 8px rgba(245,179,66,.16), 0 0 12px rgba(245,179,66,.2)}
+  .stamp .t{font-weight:700;font-size:12.5px;letter-spacing:.12em}
+  .stamp .d{font-size:8.5px;letter-spacing:.16em;opacity:.85;text-transform:uppercase}
+  /* Thin-wall warning. Uses --warn, the same amber the stamp already uses for "look at this",
+     rather than an error red: a thin wall is a judgement to make, not a broken file. */
+  /* Full width, in the page flow, and never allowed to grow the layout around it: the text
+     scrolls inside its own box rather than pushing anything. flex:0 0 auto keeps it out of the
+     body's flex sizing so the stage below still gets the rest of the screen. */
+  .thinwarn{display:flex;align-items:center;gap:9px;margin:0;padding:7px 11px;flex:0 0 auto;
+    border-bottom:1.5px solid var(--warn);color:var(--warn);font-size:12.5px;
+    line-height:1.3;background:rgba(245,179,66,.08);max-height:4.6em;overflow:auto}
+  .thinwarn[hidden]{display:none}
+  .tw-i{flex:0 0 17px;height:17px;border-radius:50%;border:1.5px solid var(--warn);
+    font-weight:700;font-size:11px;display:flex;align-items:center;justify-content:center}
+  .tw-t{flex:1 1 auto}
+  .tw-b{flex:0 0 auto;background:transparent;color:var(--warn);border:1.5px solid var(--warn);
+    border-radius:6px;padding:3px 9px;font:inherit;font-size:11.5px;cursor:pointer;white-space:nowrap}
+  .tw-b:hover{background:rgba(245,179,66,.14)}
+
+  /* ---------- main layout ---------- */
+  main{display:grid;grid-template-columns:316px 1fr;height:calc(100% - 54px)}
+  main.no-rail{grid-template-columns:1fr}          /* Workshop: give the canvas the whole width */
+  main.no-rail > .rail{display:none}
+  .rail{
+    background:var(--rail);border-right:1px solid var(--line);
+    overflow-y:auto;overflow-x:hidden;padding-bottom:60px;
+  }
+  .rail::-webkit-scrollbar{width:9px} .rail::-webkit-scrollbar-thumb{background:#1b2533;border-radius:5px}
+
+  /* accordion sections */
+  details.sec{border-bottom:1px solid var(--line-2)}
+  details.sec>summary{
+    list-style:none;cursor:pointer;padding:12px 14px;display:flex;align-items:center;gap:9px;
+    user-select:none;
+  }
+  details.sec>summary::-webkit-details-marker{display:none}
+  .sec .idx{font-family:"JetBrains Mono",monospace;font-size:10px;color:var(--accent);
+    border:1px solid var(--accent-soft);background:var(--accent-soft);border-radius:4px;padding:1px 5px}
+  .sec .ttl{font-family:"Saira Semi Condensed",sans-serif;font-weight:600;font-size:14.5px;
+    text-transform:uppercase;letter-spacing:.05em;flex:1}
+  .sec .chev{color:var(--ink-faint);transition:transform .18s;font-size:11px}
+  details[open].sec>summary .chev{transform:rotate(90deg)}
+  .sec-body{padding:4px 14px 16px}
+
+  .field{margin:11px 0}
+  .field>label{display:flex;justify-content:space-between;align-items:baseline;font-size:11.5px;color:var(--ink-dim);margin-bottom:6px}
+  .field>label .val{font-family:"JetBrains Mono",monospace;color:var(--ink);font-size:11.5px}
+  input[type=range]{
+    -webkit-appearance:none;appearance:none;width:100%;height:3px;border-radius:3px;
+    background:#1d2735;outline:none;
+  }
+  input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none;width:14px;height:14px;border-radius:50%;
+    background:var(--accent);cursor:pointer;border:2px solid #05131c;box-shadow:0 0 6px var(--glow);
+    box-shadow:0 0 0 1px var(--accent)
+  }
+  input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:var(--accent);cursor:pointer;border:2px solid #05131c;box-shadow:0 0 6px var(--glow)}
+
+  .btn{
+    font-family:inherit;font-size:12.5px;font-weight:500;cursor:pointer;
+    background:#141F2D;color:var(--ink);border:1px solid var(--line);
+    border-radius:6px;padding:8px 11px;display:inline-flex;align-items:center;gap:7px;
+    transition:border-color .15s,background .15s;width:100%;justify-content:center;
+  }
+  .btn:hover{border-color:rgba(57,207,234,.4);background:#17212f}
+  .btn.active{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+  .btn.primary{background:var(--accent);color:#04141c;border-color:var(--accent);font-weight:600;box-shadow:0 0 0 1px var(--accent-soft),0 2px 14px rgba(57,207,234,.22)}
+  .btn.primary:hover{background:#5CDCF0;box-shadow:0 0 0 1px var(--accent),0 2px 18px rgba(57,207,234,.34)}
+  .btn.ghost{background:transparent}
+  .btn-row{display:flex;gap:8px;margin:10px 0}
+  .btn-row .btn{width:auto;flex:1}
+  .seg{display:flex;border:1px solid var(--line);border-radius:6px;overflow:hidden;margin:8px 0}
+  .seg button{flex:1;background:transparent;border:none;color:var(--ink-dim);padding:8px 4px;
+    font-family:inherit;font-size:12px;cursor:pointer;border-right:1px solid var(--line-2)}
+  .seg button:last-child{border-right:none}
+  .seg button.on{background:var(--accent-soft);color:var(--accent);font-weight:600}
+  .hint{font-size:11px;color:var(--ink-faint);line-height:1.5;margin:8px 0}
+  .hint b{color:var(--ink-dim);font-weight:600}
+  .tag{display:inline-block;font-family:"JetBrains Mono",monospace;font-size:10px;color:var(--blue);
+    border:1px solid rgba(70,183,217,.2);background:rgba(70,183,217,.07);border-radius:4px;padding:1px 6px}
+
+  /* ---------- stage ---------- */
+  .stage{position:relative;display:flex;flex-direction:column;min-width:0}
+  .tabs{display:flex;gap:2px;padding:8px 12px 0;border-bottom:1px solid var(--line);background:var(--panel-2)}
+  .tab{
+    font-family:"Saira Semi Condensed",sans-serif;font-weight:600;font-size:13.5px;
+    text-transform:uppercase;letter-spacing:.06em;
+    padding:9px 16px;cursor:pointer;color:var(--ink-dim);
+    border:1px solid transparent;border-bottom:none;border-radius:7px 7px 0 0;position:relative;top:1px;
+  }
+  .tab.on{color:var(--ink);background:var(--bg);border-color:var(--line)}
+  .tabs.subtabs{padding:5px 12px 0;background:var(--bg);border-bottom:1px solid var(--line)}
+  #pageStrip{display:flex;gap:6px;padding:7px 12px;overflow-x:auto;border-bottom:1px solid var(--line);background:var(--panel-2);flex:0 0 auto}
+  #pageStrip .pg{position:relative;flex:0 0 auto;width:92px;border:1px solid var(--line-2);border-radius:7px;padding:4px;cursor:pointer;background:var(--panel);transition:border-color .12s}
+  #pageStrip .pg:hover{border-color:var(--ink-faint)}
+  #pageStrip .pg.on{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent-soft)}
+  #pageStrip .pg img{width:100%;height:44px;object-fit:contain;background:#f4f6f9;border-radius:4px;display:block}
+  #pageStrip .pg .nm{display:block;font-size:9px;color:var(--ink-dim);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #pageStrip .pg .rl{display:block;font-size:9px;color:var(--accent);font-weight:600;letter-spacing:.03em}
+  #pageStrip .pg button{position:absolute;top:2px;right:2px;background:rgba(0,0,0,.6);color:#fff;border:0;border-radius:4px;width:15px;height:15px;font-size:9px;line-height:1;cursor:pointer;padding:0}
+  .tabs.subtabs .tab{font-size:11px;padding:5px 11px;letter-spacing:.04em}
+  .tab.on::after{content:"";position:absolute;left:10px;right:10px;top:0;height:2px;background:var(--accent)}
+  .view{flex:1;position:relative;min-height:0}
+  .view.hide{display:none}
+  #gl{width:100%;height:100%;display:block}
+  .vp-overlay{position:absolute;left:12px;bottom:12px;font-family:"JetBrains Mono",monospace;
+    font-size:10.5px;color:var(--ink-faint);pointer-events:none;line-height:1.7}
+  .vp-overlay .k{color:var(--blue)}
+  .vp-tools{position:absolute;right:12px;top:12px;display:flex;flex-direction:column;gap:6px}
+  .vp-tools .btn{width:auto;padding:6px 9px;font-size:11px}
+
+  /* 2D trace canvas */
+  .trace-wrap{position:absolute;inset:0;display:flex;flex-direction:column}
+  .trace-bar{display:flex;gap:8px;align-items:center;padding:9px 12px;border-bottom:1px solid var(--line);
+    background:var(--panel-2);flex-wrap:wrap}
+  .trace-bar .btn{width:auto;padding:6px 10px;font-size:11.5px}
+  .trace-bar.wrap{flex-wrap:wrap}   /* roomy screens can wrap; a phone scrolls instead */
+  #canvasHost{flex:1;position:relative;overflow:hidden;background:
+     repeating-linear-gradient(0deg,#0a0e13,#0a0e13 1px,transparent 1px,transparent 24px),
+     repeating-linear-gradient(90deg,#0a0e13,#0a0e13 1px,transparent 1px,transparent 24px),#0c1119;}
+  #trace{position:absolute;inset:0;width:100%;height:100%;cursor:crosshair;touch-action:none;user-select:none;-webkit-user-select:none}
+  #canvasHost{user-select:none;-webkit-user-select:none}
+  /* feature gizmos: the same drag/resize idea as the crop boxes on the import sheet */
+  #featLayer{position:absolute;inset:0;pointer-events:none}
+  #featLayer .fbox{position:absolute;border:1.5px dashed currentColor;border-radius:3px;pointer-events:auto;cursor:move}
+  #featLayer .fbox.sel{border-style:solid;border-width:2px;box-shadow:0 0 0 1px rgba(0,0,0,.5),0 0 12px rgba(255,122,47,.35)}
+  /* a member of a group selection: clearly in, but the one you're editing points still leads */
+  #featLayer .fbox.gsel{border-style:solid;border-width:2px;box-shadow:0 0 0 1px rgba(0,0,0,.5),0 0 6px rgba(255,122,47,.18)}
+  #featLayer .fbox .fh{position:absolute;width:9px;height:9px;background:var(--bg);border:1.5px solid currentColor;border-radius:2px}
+  #featLayer .fbox .nw{left:-5px;top:-5px;cursor:nwse-resize}
+  #featLayer .fbox .ne{right:-5px;top:-5px;cursor:nesw-resize}
+  #featLayer .fbox .sw{left:-5px;bottom:-5px;cursor:nesw-resize}
+  #featLayer .fbox .se{right:-5px;bottom:-5px;cursor:nwse-resize}
+  #featLayer .fbox .flabel{position:absolute;left:0;top:-17px;font-size:9px;letter-spacing:.05em;text-transform:uppercase;
+    color:var(--ink-dim);white-space:nowrap;background:rgba(11,15,20,.82);padding:1px 4px;border-radius:3px}
+  /* the shape's own points: drag one to bend it, click a line to add one */
+  #featLayer .fpt{position:absolute;width:11px;height:11px;margin:-5.5px 0 0 -5.5px;border-radius:50%;
+    background:var(--accent);border:1.5px solid #0b0f14;pointer-events:auto;cursor:grab;z-index:2}
+  #featLayer .fpt:active{cursor:grabbing;transform:scale(1.25)}
+  #featLayer .fmid{position:absolute;width:9px;height:9px;margin:-4.5px 0 0 -4.5px;border-radius:50%;
+    background:rgba(11,15,20,.7);border:1.5px dashed currentColor;opacity:.55;pointer-events:auto;cursor:copy;z-index:1}
+  #featLayer .fmid:hover{opacity:1;background:var(--accent);border-style:solid}
+  /* the inspector floats over the drawing so you can still see what you're changing */
+  #featPanel{position:absolute;left:14px;top:14px;width:214px;z-index:20;background:rgba(11,15,20,.96);
+    border:1px solid var(--accent);border-radius:10px;backdrop-filter:blur(8px);box-shadow:0 8px 28px rgba(0,0,0,.5)}
+  #featPanel .fp-bar{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:6px 9px;cursor:move;
+    border-bottom:1px solid var(--line-2);font-size:11px;font-weight:600;letter-spacing:.04em;color:var(--ink)}
+  #featPanel .fp-x{cursor:pointer;opacity:.6;font-size:14px;line-height:1}
+  #featPanel .fp-x:hover{opacity:1}
+  #featPanel .fp-body{padding:9px}
+  #railBtn{display:none;width:auto;flex:0 0 auto;font-size:16px;padding:6px 10px;margin:0}
+  #railScrim{display:none}
+
+  /* =====================================================================
+     PHONE / SMALL TABLET
+     Nothing is removed — every tool is still here. The 316px sidebar just
+     can't sit next to a 390px screen, so it becomes a drawer you pull out,
+     the toolbars scroll sideways instead of wrapping into a wall of
+     buttons, and the feature panel becomes a sheet at the bottom where a
+     thumb can reach it. Touch targets go up to ~38px throughout.
+     ===================================================================== */
+  @media (max-width: 860px){
+    /* the block, smaller on a phone. Folded into the existing breakpoint rather than
+       given its own: the suite refuses a wider query placed after a narrower one,
+       because the later one silently wins and you get two layouts fighting. */
+    #impBox{width:92px;right:8px;top:8px}
+    #impBox .ib-cap{font-size:9px}
+
+    header{height:auto;min-height:48px;padding:6px 8px;gap:7px;flex-wrap:nowrap}
+    header > .btn{width:auto;flex:0 0 auto}
+    header h1.disp{font-size:15px}
+    header .sub{display:none}
+    .logo{width:22px;height:22px}
+    .proj-name{width:104px;min-width:0;flex:0 1 auto;font-size:12px;padding:5px 7px}
+    #projCat{width:88px}
+    .readout{gap:8px}
+    .readout .stat span{display:none}          /* keep the numbers, drop the captions */
+    .readout .stat b{font-size:11px}
+    .stamp .d{display:none}
+    #railBtn{display:inline-block}
+
+    /* one row, all of it. The old layout gave the stage 46vh and left a dead band under
+       it; the drawing and the model should have the entire screen. */
+    main{grid-template-columns:1fr;grid-template-rows:1fr;height:auto;flex:1;min-height:0}
+    body{display:flex;flex-direction:column;height:100dvh;overflow:hidden}
+    header{flex:0 0 auto}
+    .stage{min-height:0}
+    /* the rail slides over the top instead of stealing a column */
+    main > .rail{position:fixed;left:0;top:0;bottom:0;width:min(88vw,330px);z-index:60;
+      transform:translateX(-102%);transition:transform .22s ease;box-shadow:0 0 40px rgba(0,0,0,.6);
+      padding-top:8px;overflow-y:auto}
+    main > .rail.open{transform:none}
+    main.no-rail > .rail{display:none}
+    #railScrim{display:block;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:59;
+      opacity:0;pointer-events:none;transition:opacity .22s}
+    #railScrim.on{opacity:1;pointer-events:auto}
+
+    .tabs{padding:4px 8px 0;gap:4px}
+    .tab{padding:7px 12px;font-size:11px}
+    .tabs.subtabs{padding:4px 8px 0}
+    .tabs.subtabs .tab{padding:6px 10px}
+
+    /* no grid on a phone: under a wide sheet it's half a screen of lines saying nothing */
+    #sheetHost{background:#0c1119}
+    #canvasHost{background:#0c1119}
+    #sheetWrap{margin:6px auto}
+
+    /* toolbars scroll sideways rather than stacking into a wall of rows */
+    .trace-bar,.trace-bar.wrap{flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;
+      -webkit-overflow-scrolling:touch;scrollbar-width:none;padding:7px 8px;gap:6px}
+    .trace-bar::-webkit-scrollbar{display:none}
+    .trace-bar > *{flex:0 0 auto}
+    .trace-bar .btn{width:auto}
+    .btn{min-height:34px;padding:7px 10px}
+    .seg button{min-height:32px;padding:6px 10px}
+    #viewSeg{width:auto}
+    #featTool{width:auto}
+    input[type=range]{height:26px}
+
+    /* the inspector becomes a sheet at the bottom, where a thumb lives */
+    #featPanel{left:0;right:0;bottom:0;top:auto;width:auto;border-radius:12px 12px 0 0;
+      border-left:0;border-right:0;border-bottom:0;max-height:52%;overflow-y:auto}
+    #featPanel .fp-bar{cursor:default;padding:9px 12px}
+    #featPanel .fp-body{padding:10px 12px 14px}
+
+    /* same idea for the workshop's panel */
+    .ws-panel{left:0;right:0;bottom:0;top:auto;width:auto;max-height:46%;
+      border-radius:12px 12px 0 0;border-left:0;border-right:0;border-bottom:0}
+    .sc-panel{left:8px;top:8px;width:180px}
+    .vp-tools{top:6px;right:6px;gap:4px}
+    .vp-tools .btn{min-height:30px;padding:5px 8px;font-size:10px}
+
+    .drop-note .box{padding:16px 14px;margin:0 10px;border-radius:10px}
+    .drop-note .box b{font-size:13px;margin-bottom:4px}
+    .drop-note .box span{font-size:11px;line-height:1.5;display:block}
+    #pageStrip .pg{width:76px}
+    .lib-grid{grid-template-columns:1fr 1fr}
+    .modal .card{width:min(94vw,380px)}
+  }
+  /* very small phones: give the drawing every pixel it can get */
+  @media (max-width: 420px){
+    .readout .stat:nth-child(2),.readout .stat:nth-child(3){display:none}
+    .proj-name{width:84px}
+    #projCat{width:72px}
+  }
+  .drop-note{position:absolute;inset:0;display:grid;place-items:center;pointer-events:none;text-align:center}
+  .drop-note .box{border:1.5px dashed var(--line);border-radius:12px;padding:34px 44px;color:var(--ink-faint)}
+  .drop-note .box b{display:block;color:var(--ink-dim);font-size:15px;margin-bottom:6px;font-family:"Saira Semi Condensed",sans-serif;letter-spacing:.04em}
+
+  .toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);
+    background:#0e1722;border:1px solid var(--accent);color:var(--ink);
+    padding:11px 16px;border-radius:8px;font-size:13px;z-index:50;opacity:0;transition:opacity .25s,transform .25s;
+    box-shadow:0 8px 30px rgba(0,0,0,.5);max-width:520px}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(-4px)}
+  .toast .mono{color:var(--accent)}
+
+  /* File pickers. iOS Safari will not open the picker for an input that is display:none,
+     which is what the `hidden` attribute does — the button simply did nothing on an iPhone.
+     The input stays rendered (just parked off-screen) and the visible control is a real
+     <label>, so tapping it activates the input natively with no scripted click at all. */
+  .filepick{position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;
+    border:0;padding:0;margin:0;pointer-events:none}
+  /* WHY FIXED, NOT ABSOLUTE, AND WHY NOT CLIPPED.
+     On phones the toolbars become horizontal scroll strips (overflow-x:auto,
+     overflow-y:hidden — see the 860px block below). A file input parked with
+     position:absolute and margin:-1px is a CHILD of that strip, so the overflow clips it
+     away entirely. Desktop browsers don't care: a label still activates an input it can't
+     see. iOS Safari does care — it will not open the picker for an input that isn't
+     rendered anywhere hittable, so the button does nothing and says nothing, on phones
+     only. position:fixed takes the input out of the scrolling ancestor so nothing can clip
+     it, and dropping clip/overflow leaves it genuinely rendered — one transparent pixel in
+     the corner, which pointer-events:none stops from ever swallowing a tap of its own. */
+  label.btn{cursor:pointer}
+
+  /* holographic full-model preview */
+  #holoOverlay{position:fixed;inset:0;z-index:120;display:none;
+    background:radial-gradient(140% 100% at 50% 40%, rgba(20,40,58,.72), rgba(5,9,14,.94) 70%);
+    backdrop-filter:blur(3px);}
+  #holoOverlay.on{display:block}
+  #holoCanvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+  .holo-scan{position:absolute;inset:0;pointer-events:none;
+    background:repeating-linear-gradient(0deg, rgba(57,207,234,.05) 0 1px, transparent 1px 4px);
+    mix-blend-mode:screen;opacity:.55;animation:holoScan 7s linear infinite}
+  @keyframes holoScan{from{background-position:0 0}to{background-position:0 -220px}}
+  .holo-frame{position:absolute;inset:20px;pointer-events:none;border:1px solid rgba(57,207,234,.28);border-radius:12px;
+    box-shadow:inset 0 0 60px rgba(57,207,234,.10)}
+  .holo-frame::before,.holo-frame::after{content:"";position:absolute;width:26px;height:26px;border:2px solid var(--accent);opacity:.8}
+  .holo-frame::before{top:-1px;left:-1px;border-right:none;border-bottom:none;border-top-left-radius:12px}
+  .holo-frame::after{bottom:-1px;right:-1px;border-left:none;border-top:none;border-bottom-right-radius:12px}
+  .holo-hud{position:absolute;top:30px;left:34px;right:34px;display:flex;justify-content:space-between;align-items:center;pointer-events:none}
+  .holo-hud .mono{color:var(--accent);letter-spacing:.14em;font-size:12px;text-shadow:0 0 10px var(--glow)}
+  .holo-hud .btn{pointer-events:auto;width:auto;background:rgba(10,20,28,.7)}
+
+  /* modal */
+  .modal-bg{position:fixed;inset:0;background:rgba(4,7,11,.72);display:none;place-items:center;z-index:60}
+  .modal-bg.show{display:grid}
+  .modal{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:22px;width:380px;max-width:92vw}
+  .modal h3{margin:0 0 4px;font-family:"Saira Semi Condensed",sans-serif;font-size:18px}
+  .modal p{margin:0 0 14px;color:var(--ink-dim);font-size:12.5px;line-height:1.5}
+  .modal input{width:100%;background:#0c121b;border:1px solid var(--line);color:var(--ink);
+    padding:10px;border-radius:7px;font-family:"JetBrains Mono",monospace;font-size:14px}
+  .modal input:focus{outline:none;border-color:var(--accent)}
+  .modal .row{display:flex;gap:8px;margin-top:16px}
+
+  /* ---------- blueprint import ---------- */
+  #sheetHost{flex:1;position:relative;overflow:auto;display:block;
+    background:repeating-linear-gradient(0deg,#0a0e13,#0a0e13 1px,transparent 1px,transparent 24px),
+      repeating-linear-gradient(90deg,#0a0e13,#0a0e13 1px,transparent 1px,transparent 24px),#0c1119;}
+  #sheetWrap{position:relative;margin:12px auto;width:fit-content}
+  #sheetImg{display:block;user-select:none;-webkit-user-drag:none}
+  #cropLayer,#calLayer{position:absolute;inset:0}
+  /* ---- the block the model gets carved from, filling in as sides arrive ---- */
+  #impBox{position:absolute;right:12px;top:12px;z-index:14;width:132px;pointer-events:none;
+    text-align:center;user-select:none;opacity:.94}
+  #impBox svg{width:100%;height:auto;display:block;overflow:visible;
+    /* 40 beats a minute is 1.5s a beat. A heart is two thumps and a rest, not a sine wave —
+       a quick lub, a smaller dub behind it, then most of the bar doing nothing. */
+    animation:ibBeat 1.5s ease-in-out infinite;transform-origin:50% 52%}
+  #impBox.full svg{animation-name:ibBeatFull}
+  @keyframes ibBeat{
+    0%{transform:scale(1)}      7%{transform:scale(1.035)}
+    14%{transform:scale(1.004)} 21%{transform:scale(1.022)}
+    30%{transform:scale(1)}     100%{transform:scale(1)} }
+  @keyframes ibBeatFull{
+    0%{transform:scale(1)}      7%{transform:scale(1.065)}
+    14%{transform:scale(1.008)} 21%{transform:scale(1.042)}
+    30%{transform:scale(1)}     100%{transform:scale(1)} }
+  @media (prefers-reduced-motion:reduce){ #impBox svg{animation:none} }
+  #impBox .ib-face{transition:fill .45s ease,stroke .45s ease,opacity .45s ease}
+  #impBox .ib-cap{margin-top:2px;font-size:10px;line-height:1.35;color:var(--dim)}
+  #impBox .ib-cap b{display:block;font-size:11px;color:var(--accent);letter-spacing:.02em}
+  #impBox.full .ib-cap b{color:var(--good)}
+  #calLayer{pointer-events:none}
+  .cropbox{position:absolute;border:2px solid var(--accent);background:rgba(255,122,47,.06);box-sizing:border-box;cursor:move}
+  .cb-bar{position:absolute;top:-21px;left:-2px;height:19px;display:flex;align-items:center;gap:3px;
+    padding:0 4px;border-radius:4px 4px 0 0;font-size:11px;color:#140c03;white-space:nowrap}
+  .cb-role{font-size:10px;border:none;background:rgba(255,255,255,.9);border-radius:3px;color:#111;padding:1px 2px;cursor:pointer}
+  .cb-del{cursor:pointer;font-weight:700;padding:0 7px;min-width:20px;text-align:center;
+    line-height:19px;touch-action:none}
+  .cropbox .h{position:absolute;width:11px;height:11px;background:#fff;border:2px solid #111;border-radius:2px;box-sizing:border-box}
+  .cropbox .h.nw{left:-6px;top:-6px;cursor:nwse-resize}
+  .cropbox .h.ne{right:-6px;top:-6px;cursor:nesw-resize}
+  .cropbox .h.sw{left:-6px;bottom:-6px;cursor:nesw-resize}
+  .cropbox .h.se{right:-6px;bottom:-6px;cursor:nwse-resize}
+  #viewSeg button.traced::after{content:"●";color:var(--good);margin-left:4px;font-size:9px;vertical-align:middle}
+  #viewWorkshop{position:relative}
+  #wsgl{width:100%;height:100%;display:block}
+  .ws-panel{position:absolute;top:10px;left:10px;width:250px;max-height:calc(100% - 20px);overflow:auto;z-index:5;    background:rgba(11,15,20,.93);border:1px solid var(--line-2);border-radius:10px;padding:11px;backdrop-filter:blur(7px)}
+  .sc-panel{position:absolute;top:10px;left:10px;width:210px;z-index:6;background:rgba(11,15,20,.94);border:1px solid var(--accent);border-radius:10px;padding:11px;backdrop-filter:blur(7px)}
+  .ws-h{font-weight:700;font-size:13px;margin-bottom:9px}
+  .ws-sec{border-top:1px solid var(--line-2);padding-top:9px;margin-top:9px}
+  .ws-sec:first-of-type{border-top:none;padding-top:0;margin-top:0}
+  .ws-lbl{font-size:10.5px;color:var(--ink-dim);text-transform:uppercase;letter-spacing:.1em;margin-bottom:5px}
+  .ws-lbl2{font-size:10px;color:var(--ink-dim);margin:6px 0 3px}
+  .ws-list{margin-top:5px;display:flex;flex-direction:column;gap:3px}
+  .lib-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px}
+  .lib-card{background:#0c1119;border:1px solid var(--line-2);border-radius:7px;padding:4px;cursor:pointer;transition:border-color .12s,transform .12s}
+  .lib-card:hover{border-color:var(--accent);transform:translateY(-1px)}
+  .lib-card .ph{position:relative;height:56px;border-radius:5px;background:#0a0e14;overflow:hidden;display:grid;place-items:center}
+  .lib-card .ph img{width:100%;height:100%;object-fit:contain;opacity:0;transition:opacity .2s}
+  .lib-card .ph .wait{position:absolute;font-size:10px;color:var(--ink-faint)}
+  .lib-card .nm{display:block;font-size:10.5px;color:var(--ink);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .lib-card .src{display:block;font-size:8.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint)}
+  .lib-card .src.cloud{color:#46B7D9}.lib-card .src.repo{color:#5BD6A0}.lib-card .src.local{color:var(--ink-faint)}
+  .lib-card{position:relative}
+  .lib-card .del{position:absolute;top:3px;right:3px;background:rgba(0,0,0,.62);color:#fff;border:0;border-radius:4px;width:15px;height:15px;font-size:9px;line-height:1;padding:0;cursor:pointer;opacity:0;transition:opacity .12s}
+  .lib-card:hover .del{opacity:1}
+  .ws-list:empty::after{content:"— none yet —";color:var(--ink-dim);font-size:11px;opacity:.6}
+  .ws-row{display:flex;align-items:center;gap:6px;background:#0c1119;border:1px solid var(--line-2);border-radius:6px;padding:4px 7px;font-size:12px}
+  .ws-row.sel{border-color:var(--accent)}
+  .ws-row .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
+  .ws-row .tg{font-size:9px;color:var(--ink-dim);border:1px solid var(--line-2);border-radius:4px;padding:0 4px}
+  .ws-row button{background:none;border:none;color:var(--ink-dim);cursor:pointer;padding:2px 4px;border-radius:4px;font-size:12px}
+  /* colour controls (workshop) */
+  .sw-row{display:flex;flex-wrap:wrap;gap:5px;margin:4px 0 2px}
+  .sw{width:22px;height:22px;border-radius:5px;border:1px solid var(--line);cursor:pointer;padding:0;transition:transform .1s}
+  .sw:hover{transform:translateY(-1px)}
+  .sw.on{box-shadow:0 0 0 2px var(--accent);border-color:var(--accent)}
+  .color-in{display:flex;align-items:center;gap:6px;margin-top:4px}
+  .color-in input[type=color]{width:34px;height:28px;padding:0;border:1px solid var(--line);border-radius:5px;background:#0c121b;cursor:pointer}
+  .color-in input[type=text]{flex:1;min-width:0;background:#0c121b;border:1px solid var(--line);color:var(--ink);border-radius:5px;padding:6px 7px;font-family:"JetBrains Mono",monospace;font-size:11px;text-transform:uppercase}
+  .color-in input[type=text]:focus{outline:none;border-color:var(--accent)}
+  .ws-row button:hover{color:var(--ink);background:rgba(255,255,255,.06)}
+  .ws-grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px}
+  .ws-grid3 label{display:flex;flex-direction:column;font-size:10px;color:var(--ink-dim);gap:2px}
+  .ws-grid3 input{width:100%;background:#0c1119;border:1px solid var(--line-2);border-radius:5px;color:var(--ink);padding:3px 4px;font-size:11px;font-family:ui-monospace,monospace}
+</style>
+</head>
+<body>
+
+<header>
+  <button id="railBtn" class="btn ghost" title="Settings" aria-label="Settings">≡</button>
+  <div class="brand">
+    <div class="logo"></div>
+    <div>
+      <h1 class="disp">LEE3D</h1>
+      <div class="sub">Studio</div>
+    </div>
+  </div>
+  <input id="projName" class="proj-name mono" value="untitled-object" spellcheck="false" />
+  <input id="projCat" class="proj-name mono" list="catList" value="Car frame" placeholder="category…" spellcheck="false" title="Category — pick an existing one or type a new one" />
+  <datalist id="catList"></datalist>
+  <div class="spacer"></div>
+  <div class="readout">
+    <div class="stat"><b id="rLen" class="mono">—</b><span>Length</span></div>
+    <div class="stat"><b id="rTris" class="mono">—</b><span>Triangles</span></div>
+    <div class="stat"><b id="rVol" class="mono">—</b><span>Volume</span></div>
+    <div class="stat"><b id="rArea" class="mono">—</b><span>Surface</span></div>
+    <div id="stamp" class="stamp"><span class="t">SOLID SHAPE</span><span class="d">sealed ✓ watertight ✓</span></div>
+  </div>
+</header>
+<!-- Thin-wall warning. Hidden unless there is something to say, because a warning that is
+     always showing stops being read.
+     OUTSIDE the header, and that is not cosmetic. It was inside it, and <header> is a flex ROW
+     with align-items:center and height:auto on mobile — so the moment this appeared its text
+     wrapped to several lines in a phone's width, the header grew to that height, and the whole
+     top bar floated in the middle of a huge empty band. It looked like the app had fallen
+     apart, and it fired on Auto-trace detail because that is what adds features, rebuilds, and
+     finds a thin patch to warn about. A banner belongs in the page flow, not in a toolbar. -->
+<div id="thinWarn" class="thinwarn" hidden>
+  <span class="tw-i" aria-hidden="true">!</span>
+  <span class="tw-t"></span>
+  <button type="button" id="thinShow" class="tw-b">Show me</button>
+</div>
+
+<main>
+  <!-- ================= CONTROL RAIL ================= -->
+  <aside class="rail" id="rail">
+
+    <details class="sec" open>
+      <summary><span class="idx">1</span><span class="ttl">Start here</span><span class="chev">▶</span></summary>
+      <div class="sec-body">
+        <div class="hint" style="line-height:1.7">
+          <b style="color:var(--accent)">How this works &mdash; 3 steps</b><br>
+          <b>1.</b> <b>Import Sheet</b> &mdash; drop your drawings (SVG, photo, blueprint). Drop several; each becomes a page.<br>
+          <b>2.</b> <b>Reference &amp; Trace</b> &mdash; draw one loop around the shape in each view: <b>Side</b> (from the side), <b>Top</b> (from above), <b>Front</b> (head-on).<br>
+          <b>3.</b> <b>3D Preview</b> &mdash; your object appears. Drag to spin it.<br>
+          <span style="opacity:.75">Your drawing always wins. The sliders below are just a rough lump to start from before you trace.</span>
+        </div>
+        <div class="hint" style="margin-top:4px">Rough starting proportions:</div>
+        <div class="seg" id="presetSeg">
+          <button data-p="hotrod" class="on">Low</button>
+          <button data-p="coupe">Mid</button>
+          <button data-p="sedan">Long</button>
+          <button data-p="suv">Tall</button>
+        </div>
+        <div class="field">
+          <label>How long <span class="val"><span id="vLen">180</span> mm</span></label>
+          <input type="range" id="sLen" min="5" max="600" value="180" step="1">
+        </div>
+        <div class="field">
+          <label style="display:flex;align-items:center;gap:8px">
+            <input type="checkbox" id="cScale" style="width:auto;margin:0">
+            Build it at a scale
+          </label>
+          <div id="scaleBox" class="hide">
+            <p class="hint" style="margin:2px 0 6px">For anything too big to model at full size — a building, a sign, a fountain. Give the real size and the scale, and the model size follows.</p>
+            <label style="margin-top:2px">The real thing is
+              <input type="number" id="nReal" step="0.1" min="0.01" value="24" style="width:90px"> m long</label>
+            <label style="margin-top:6px">Build at 1:<input type="number" id="nScale" step="1" min="1" value="200" style="width:80px"></label>
+            <p class="hint mono" id="scaleOut" style="margin:6px 0 0">→ 120 mm model</p>
+          </div>
+        </div>
+        <div class="field" id="widField">
+          <label>How wide <span class="val"><span id="vWid">—</span> mm</span></label>
+          <input type="range" id="sWid" min="2" max="400" value="60" step="1">
+        </div>
+        <div class="field" id="hgtField">
+          <label>How tall <span class="val"><span id="vHgt">—</span> mm</span></label>
+          <input type="range" id="sHgt" min="2" max="400" value="60" step="1">
+        </div>
+        <div class="hint" id="sizeHint">The finished measurements. After you trace, these show what your drawing measured — move them to resize and <b>your tracing is left alone</b>.</div>
+      </div>
+    </details>
+
+    <details class="sec">
+      <summary><span class="idx">2</span><span class="ttl">Side profile <span style="opacity:.55;font-weight:400">· how tall</span></span><span class="chev">▶</span></summary>
+      <div class="sec-body">
+        <div class="hint" id="silMode">From: <span class="tag">the sliders</span> — trace a <b>side view</b> to use your drawing instead.</div>
+        <div class="field"><label>Front &mdash; height <span class="val"><span id="vNose">28</span></span></label><input type="range" id="sNose" min="6" max="80" value="28"></div>
+        <div class="field"><label>Front-middle &mdash; height <span class="val"><span id="vCowl">40</span></span></label><input type="range" id="sCowl" min="8" max="90" value="40"></div>
+        <div class="field"><label>Top &mdash; height <span class="val"><span id="vRoof">60</span></span></label><input type="range" id="sRoof" min="20" max="120" value="60"></div>
+        <div class="field"><label>Where the top peaks <span class="val"><span id="vRoofPos">0.55</span></span></label><input type="range" id="sRoofPos" min="0.30" max="0.78" value="0.55" step="0.01"></div>
+        <div class="field"><label>Back &mdash; height <span class="val"><span id="vTail">30</span></span></label><input type="range" id="sTail" min="6" max="90" value="30"></div>
+        <div class="field"><label>Bottom &mdash; height <span class="val"><span id="vSill">8</span></span></label><input type="range" id="sSill" min="2" max="40" value="8"></div>
+        <button class="btn ghost" id="clearTrace" style="display:none">↺ Use the height sliders instead</button>
+      </div>
+    </details>
+
+    <details class="sec">
+      <summary><span class="idx">3</span><span class="ttl">Width <span style="opacity:.55;font-weight:400">· how wide</span></span><span class="chev">▶</span></summary>
+      <div class="sec-body">
+        <div class="hint" id="widMode">From: <span class="tag">the sliders</span> — trace a <b>top view</b> to use your drawing instead.</div>
+        <div class="field"><label>Front &mdash; width <span class="val"><span id="vNW">14</span></span></label><input type="range" id="sNW" min="4" max="80" value="14"></div>
+        <div class="field"><label>Widest <span class="val"><span id="vMW">38</span></span></label><input type="range" id="sMW" min="10" max="110" value="38"></div>
+        <div class="field"><label>Where it is widest <span class="val"><span id="vWP">0.45</span></span></label><input type="range" id="sWP" min="0.20" max="0.80" value="0.45" step="0.01"></div>
+        <div class="field"><label>Back &mdash; width <span class="val"><span id="vTW">22</span></span></label><input type="range" id="sTW" min="4" max="90" value="22"></div>
+        <div class="field"><label>Boxy or round <span class="val"><span id="vRound">1.4</span></span></label><input type="range" id="sRound" min="0.6" max="3.0" value="1.4" step="0.05"></div>
+        <button class="btn ghost" id="clearWidth" style="display:none">↺ Use the width sliders instead</button>
+      </div>
+    </details>
+
+    <details class="sec" open>
+      <summary><span class="idx">4</span><span class="ttl">Shape style <span style="opacity:.55;font-weight:400">· smooth or exact</span></span><span class="chev">▶</span></summary>
+      <div class="sec-body">
+        <div class="seg" id="modeSeg" style="margin:0 0 4px;width:100%">
+          <button data-m="loft">Smooth</button>
+          <button data-m="projection" class="on">Follow my drawing</button>
+          <button data-m="lathe">Round · turned</button>
+        </div>
+        <div class="hint" id="modeHint"><b>Smooth</b> &mdash; a flowing, rounded body. Best for cars, boats, anything streamlined. Features here are dents and bumps.<br><b>Follow my drawing</b> &mdash; carves out exactly what your outlines say, corners and all. Use it for angular things, and it's the only mode that can <b>cut a window clean through</b>.</div>
+        <div class="field" id="crispField"><label>Edge crispness <span class="val"><span id="vCrisp">0.50</span></span></label><input type="range" id="sCrisp" min="0" max="1" value="0.5" step="0.05"></div>
+        <div class="hint">Only used by <b>Follow my drawing</b>. <b>0</b> = the smooth rounded body (same as Smooth mode); <b>1</b> = exactly your traced outline, corners and all. In between it shifts from smooth toward your lines.</div>
+        <!-- How DETAILS are cut. Deliberately its own control rather than a third button in
+             the row above: that row picks how the BODY is built, and the two choices combine.
+             Only meaningful in Follow my drawing, because the carved-field engine lives in the
+             projection builder — Smooth mode has no field to carve and always presses. -->
+        <div class="field" id="carveField" style="margin-top:10px">
+          <label>How details are cut</label>
+          <div class="seg" id="carveSeg" style="width:100%">
+            <button data-c="field" class="on">Cut into the shape</button>
+            <button data-c="stamp">Press on the surface</button>
+          </div>
+        </div>
+        <div class="field" id="qualField" style="margin-top:10px">
+          <label>Build quality</label>
+          <div class="seg" id="qualSeg" style="width:100%">
+            <button data-q="fast">Fast</button>
+            <button data-q="normal" class="on">Normal</button>
+            <button data-q="fine">Fine</button>
+          </div>
+        </div>
+        <div class="hint" id="qualHint">How fine a grid the shape is built on. <b>Fine</b> can hold smaller details but takes several times longer and makes a much heavier file &mdash; on a 200mm model, Normal builds in about a second per 5,000 triangles, Fine in roughly three. Reach for it when a detail is too small to come out, not by default.</div>
+        <div class="hint" id="carveHint"><b>Cut into the shape</b> &mdash; details are cut out of the solid before it is hollowed, so a pocket keeps its full wall underneath and comes out the depth you asked for. Slower on models with a lot of detail.<br><b>Press on the surface</b> &mdash; the older, faster way: the shape is built first and details are pressed into the skin afterwards. Quick, but a pocket thins the wall beneath it.</div>
+      </div>
+    </details>
+    <details class="sec">
+      <summary><span class="idx">5</span><span class="ttl">Features <span style="opacity:.55;font-weight:400">· <span id="featCount">none yet</span></span></span><span class="chev">▶</span></summary>
+      <div class="sec-body">
+        <div class="hint">Detail and <b>joins</b> live on the drawing, not in here. Open <b>Reference &amp; Trace</b>: pick a tool in the toolbar, draw the shape, then a small panel opens <b>over the view</b> with that feature's own settings — so you can see what you're changing while you change it. Drag its box to move it, a corner to resize, an orange point to bend it.<br><br>
+        <b>Join</b> connects parts: click where a <b>peg</b> or a <b>socket</b> goes and give it a size. The same size on two parts is made to fit once printed — the socket is cut wider by the printer's clearance so it doesn't seize solid.</div>
+      </div>
+    </details>
+
+    <details class="sec">
+      <summary><span class="idx">◇</span><span class="ttl">Advanced <span style="opacity:.55;font-weight:400">· detail &amp; thickness</span></span><span class="chev">▶</span></summary>
+      <div class="sec-body">
+        <div class="hint">Only touch these if you want to. Higher detail = smoother but slower.</div>
+        <div class="field"><label>Frame thickness <span class="val"><span id="vWall">1.8</span> mm</span></label><input type="range" id="sWall" min="0.4" max="12" value="1.8" step="0.1"></div>
+        <div class="hint" style="margin:-2px 0 4px">How thick the frame is. Nothing pressed in is allowed to go deeper than this — a 1&nbsp;mm scoop needs more than 1&nbsp;mm of frame. Tick <b>cut clean through</b> on a feature when you actually want a hole.</div>
+        <label style="display:flex;align-items:center;gap:7px;font-size:11px;margin:2px 0 6px;cursor:pointer"><input type="checkbox" id="noDetail"> Plain frame — ignore traced detail</label>
+        <label style="display:flex;align-items:center;gap:7px;font-size:11px;margin:2px 0 6px;cursor:pointer"><input type="checkbox" id="openArches"> Leave the underside open — lighter, busier edge</label>
+        <div class="hint" style="margin:-2px 0 6px">Tick this and the model is just the outline you traced: no scoops, panel lines or ribbing pressed into it. Windows and other <b>cut clean through</b> holes still cut.</div>
+        <label style="display:flex;align-items:center;gap:7px;font-size:11px;margin:2px 0 6px;cursor:pointer"><input type="checkbox" id="wallPerFace"> Different thickness per face</label>
+        <div id="wallFaces" style="display:none">
+          <div class="field"><label>Top / roof <span class="val"><span id="vWallTop">1.8</span> mm</span></label><input type="range" id="sWallTop" min="0.4" max="12" value="1.8" step="0.1"></div>
+          <div class="field"><label>Sides <span class="val"><span id="vWallSide">1.8</span> mm</span></label><input type="range" id="sWallSide" min="0.4" max="12" value="1.8" step="0.1"></div>
+          <div class="field"><label>Bottom / floor <span class="val"><span id="vWallBot">1.8</span> mm</span></label><input type="range" id="sWallBot" min="0.4" max="12" value="1.8" step="0.1"></div>
+          <div class="hint" style="margin-top:2px">Blends where faces meet, so there's no seam. The <b>thinnest</b> face is what limits how deep a feature can press.</div>
+        </div>
+        <div class="field"><label>Detail &mdash; along the length <span class="val"><span id="vSt">72</span></span></label><input type="range" id="sSt" min="16" max="160" value="72" step="1"></div>
+        <div class="field"><label>Detail &mdash; around the shape <span class="val"><span id="vSeg">56</span></span></label><input type="range" id="sSeg" min="12" max="120" value="56" step="1"></div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:12px;margin-top:6px;cursor:pointer"><input type="checkbox" id="sepBottom" checked> Bottom as a separate plate <span style="opacity:.55">· keeps the shell hollow</span></label>
+      </div>
+    </details>
+
+    <details class="sec">
+      <summary><span class="idx">6</span><span class="ttl">Cross-section <span style="opacity:.55;font-weight:400">· the shape end-on</span></span><span class="chev">▶</span></summary>
+      <div class="sec-body">
+        <div class="hint">A cross-section is pinned at each cut; the model morphs between them. Front &amp; rear views become cuts automatically. <b>Drag the dots to reshape</b> the selected cut — this edits the 3D model live.</div>
+        <div class="hint" id="secMode">From: <span class="tag">the sliders</span> — trace a <b>front view</b> for the real end-on shape.</div>
+        <button class="btn ghost" id="clearSection" style="display:none;margin-bottom:6px">↺ Use the roundness slider instead</button>
+        <select id="secSelect" class="proj-name" style="width:100%;margin-bottom:6px"></select>
+        <canvas id="secCanvas" style="width:100%;height:150px;background:#0c1119;border:1px solid var(--line-2);border-radius:8px;touch-action:none;display:block"></canvas>
+        <div class="field" style="margin-top:8px"><label>Cut position <span class="val"><span id="vSecPos">50</span>%</span></label><input type="range" id="secPos" min="0" max="100" value="50" step="1"></div>
+        <div class="btn-row">
+          <button class="btn" id="secAdd">＋ Add cut here</button>
+          <button class="btn ghost" id="secDel">⌫ Delete cut</button>
+        </div>
+        <div class="hint" id="secInfo">No section cuts yet — trace a front view, import a sheet, or add one.</div>
+      </div>
+    </details>
+
+    <details class="sec" open>
+      <summary><span class="idx">7</span><span class="ttl">Save &amp; export</span><span class="chev">▶</span></summary>
+      <div class="sec-body">
+        <button class="btn primary" id="bSaveAll" style="width:100%;font-size:13px;padding:9px">Save this model</button>
+        <div class="hint" id="saveWhere" style="margin-top:5px">Keeps it on this device and in the shared cloud, and it appears in the <b>Workshop</b>. Saving again with the same name updates it instead of making a copy.</div>
+        <div style="border-top:1px solid var(--line-2);margin:11px 0 8px;padding-top:2px"></div>
+        <button class="btn primary" id="dlStl">↓ Shell STL (hollow)</button>
+        <button class="btn" id="dlBottom" style="margin-top:6px">↓ Bottom plate STL</button>
+        <div style="border-top:1px solid var(--line-2);margin:11px 0 8px;padding-top:2px"></div>
+        <div class="hint" style="margin-bottom:5px"><b>Point cloud</b> — the model as raw 3D points, for scanners, inspection tools, and other 3D programs. Choose a format and how dense.</div>
+        <div class="btn-row">
+          <select id="pcFormat" class="filepick" style="display:block;width:auto;flex:1;background:#0c1119;border:1px solid var(--line-2);border-radius:5px;color:var(--ink);padding:6px 4px;font-size:12px">
+            <option value="ply-bin">PLY (binary)</option>
+            <option value="ply">PLY (text)</option>
+            <option value="xyz">XYZ (text)</option>
+            <option value="pcd">PCD (text)</option>
+          </select>
+          <select id="pcDensity" class="filepick" style="display:block;width:auto;flex:1;background:#0c1119;border:1px solid var(--line-2);border-radius:5px;color:var(--ink);padding:6px 4px;font-size:12px">
+            <option value="0">Corners only</option>
+            <option value="20000" selected>Dense · 20k</option>
+            <option value="80000">Very dense · 80k</option>
+            <option value="200000">Max · 200k</option>
+          </select>
+        </div>
+        <button class="btn" id="dlCloud" style="margin-top:6px;width:100%">↓ Export point cloud</button>
+        <label class="btn" id="upCloud" for="cloudFile" style="margin-top:6px;width:100%;display:block;text-align:center;box-sizing:border-box">↑ Import point cloud</label>
+        <input type="file" id="cloudFile" class="filepick" accept=".ply,.xyz,.pcd,.pts,.txt,*/*">
+        <div style="border-top:1px solid var(--line-2);margin:11px 0 8px;padding-top:2px"></div>
+        <div class="btn-row">
+          <button class="btn" id="dlJson">↓ Profile JSON</button>
+          <label class="btn" id="upJson" for="jsonFile">↑ Import JSON</label>
+        </div>
+        <input type="file" id="jsonFile" class="filepick" accept=".json,application/json,text/plain,*/*">
+        <div style="border-top:1px solid var(--line-2);margin:12px 0 4px;padding-top:12px"></div>
+        <div class="field" id="beField">
+          <label>Backend URL <span class="val mono" id="beState">offline</span></label>
+          <input id="backendUrl" class="proj-name mono" style="width:100%" value="" placeholder="https://your-backend.onrender.com" spellcheck="false">
+        </div>
+        <button class="btn" id="saveLib">Save profile to library</button>
+        <div class="btn-row">
+          <button class="btn primary" id="buildServer">Build exact (STEP)</button>
+        </div>
+        <div class="hint">Everything on this page works without a backend, <b>including real cut-through openings</b> (use <b>Follow my drawing</b>). <b>Build exact</b> is an optional extra: it rebuilds the same outlines with a CAD kernel (OpenCascade) with no grid at all — corners exact at any zoom — and hands back a <b>STEP</b> file you can keep editing in any CAD package.</div>
+      </div>
+    </details>
+
+    <details class="sec">
+      <summary><span class="idx">◇</span><span class="ttl">Cloud saves</span><span class="chev">▶</span></summary>
+      <div class="sec-body">
+        <div class="hint" id="wireState" style="margin-bottom:6px"></div>
+        <div class="hint">Saves the full model — trace, drawings and all — so it follows you across devices. It should be wired in at deploy so nobody ever types a key; see <code>SETUP.md</code>. <a href="#" id="sbHelp" style="color:var(--accent);text-decoration:none">▸ show setup SQL</a></div>
+        <input id="sbUrl" class="proj-name mono" placeholder="https://xxxx.supabase.co" spellcheck="false" style="width:100%;margin-bottom:5px;font-size:11px">
+        <input id="sbKey" class="proj-name mono" placeholder="anon public key" spellcheck="false" style="width:100%;font-size:11px">
+        <div class="btn-row" style="margin-top:6px">
+          <button class="btn" id="sbConnect">Connect</button>
+          <span class="hint" id="sbState" style="margin:0 0 0 2px">not set</span>
+        </div>
+        <pre id="sbSql" style="display:none;white-space:pre-wrap;font-size:10px;line-height:1.5;background:#0c1119;border:1px solid var(--line-2);border-radius:6px;padding:8px;margin:8px 0 0;color:var(--ink-dim);overflow:auto"></pre>
+        <div style="border-top:1px solid var(--line-2);margin:10px 0 8px;padding-top:8px"></div>
+        <button class="btn primary" id="sbSave" style="width:100%">Save project to cloud</button>
+        <button class="btn" id="sbRefresh" style="width:100%;margin-top:5px">⟳ Browse cloud projects</button>
+        <div id="sbList" class="ws-list" style="margin-top:6px"></div>
+      </div>
+    </details>
+
+    <details class="sec">
+      <summary><span class="idx">◇</span><span class="ttl">Shared library</span><span class="chev">▶</span></summary>
+      <div class="sec-body">
+        <div class="hint">Models shared by everyone on the project. They also show up as pictures in the <b>Workshop</b> tab — click one to use it. <b>Publish</b> adds yours to the shared set (it goes through the backend, so there is nothing to set up).</div>
+        <div class="btn-row" style="margin-top:6px">
+          <button class="btn" id="ghRefresh">⟳ Refresh</button>
+          <span class="hint" id="ghState" style="margin:0 0 0 2px">—</span>
+        </div>
+        <button class="btn" id="ghPublish" style="width:100%;margin-top:6px">Publish to shared library</button>
+        <div id="ghList" class="ws-list" style="margin-top:6px"></div>
+        <details id="ghWrite" style="margin-top:10px;border-top:1px solid var(--line-2);padding-top:8px">
+          <summary style="cursor:pointer;font-size:11px;color:var(--ink-dim);list-style:none">Publishing tools <span style="opacity:.6">· for the repo owner</span></summary>
+          <div style="margin-top:7px">
+            <label id="ghRepoLbl" style="font-size:11px;color:var(--ink-dim)">Repo (owner/name)</label>
+            <input id="ghRepo" class="proj-name mono" value="BEARME-A/LEE3D-Lib" spellcheck="false" style="width:100%;font-size:11px" title="owner/repo (public)">
+            <input id="ghToken" type="password" class="proj-name mono" placeholder="GitHub token (Contents: write)" autocomplete="off" spellcheck="false" style="width:100%;font-size:11px;margin-top:5px">
+            <label style="display:flex;gap:6px;align-items:center;font-size:11px;margin:5px 0;cursor:pointer"><input type="checkbox" id="ghRemember"> Remember token in this browser</label>
+            <button class="btn primary" id="ghCommit" style="width:100%">Publish current model to the repo</button>
+            <div class="hint" style="margin-top:6px">A write token is a real secret (unlike the Supabase key), so it is never baked into the site — it lives only in this browser. Use a <b>fine-grained token limited to LEE3D-Lib</b> with <b>Contents: Read and write</b>. Everyone else should just use <b>Save</b>, which goes to the cloud.</div>
+          </div>
+        </details>
+      </div>
+    </details>
+  </aside>
+  <div id="railScrim"></div>
+
+  <!-- ================= STAGE ================= -->
+  <section class="stage">
+    <div class="tabs" id="mainTabs">
+      <div class="tab on" data-main="build">Build</div>
+      <div class="tab" data-main="workshop">Workshop</div>
+    </div>
+    <div class="tabs subtabs" id="subTabs">
+      <div class="tab on" data-tab="import">Import Sheet</div>
+      <div class="tab" data-tab="trace">Reference &amp; Trace</div>
+      <div class="tab" data-tab="three">3D Preview</div>
+    </div>
+
+    <!-- Blueprint import -->
+    <div class="view" id="viewImport">
+      <div class="trace-wrap">
+        <div class="trace-bar wrap">
+          <label class="btn" id="iLoad" for="sheetFile">⤓ Load sheet</label>
+          <input type="file" id="sheetFile" class="filepick" accept="image/*,image/svg+xml,.svg,.dxf,.png,.jpg,.jpeg,.heic,.webp" multiple>
+          <div class="seg" id="unitSeg" style="margin:0;width:172px;flex:0 0 auto">
+            <button data-u="mm" class="on">mm</button>
+            <button data-u="cm">cm</button>
+            <button data-u="in">in</button>
+            <button data-u="px">px</button>
+          </div>
+          <button class="btn" id="iScale">⊹ Set scale</button>
+          <button class="btn" id="iDetect">Auto-detect views</button>
+          <button class="btn" id="iAdd">＋ Add box</button>
+          <span class="seg" style="margin:0;width:auto;flex:0 0 auto">
+            <button id="iZoomOut" title="Zoom out">−</button>
+            <button id="iZoomFit" title="Fit the whole sheet on screen">Fit</button>
+            <button id="iZoomIn" title="Zoom in">＋</button>
+          </span>
+          <span class="tag mono" id="iZoomLbl" style="align-self:center">100%</span>
+          <button class="btn primary" id="iBuild" style="width:auto">▶ Send views to Reference &amp; Trace</button>
+          <span class="hint" id="iStatus" style="margin:0 0 0 4px"></span>
+        </div>
+        <div id="pageStrip" style="display:none"></div>
+        <div id="sheetHost">
+          <div id="sheetWrap">
+            <img id="sheetImg" alt="" draggable="false">
+            <div id="cropLayer"></div>
+            <div id="calLayer"></div>
+          </div>
+          <!-- What the model has so far, as the block it will be carved from. A face fills
+               once that view is spoken for; when all six are in, the block closes up. -->
+          <div id="impBox" title="Which sides the model has">
+            <svg viewBox="-46 -48 92 96" id="impBoxSvg" aria-hidden="true"></svg>
+            <div class="ib-cap"><b id="ibCount">0 of 6</b><span id="ibMiss"></span></div>
+          </div>
+          <div id="pdfPick" class="hide" style="position:absolute;left:8px;right:8px;top:8px;z-index:6;
+               background:var(--panel,#1a1d22);border:1px solid #2c323a;border-radius:10px;padding:10px;max-height:60%;overflow:auto">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+              <b id="pdfPickTitle">Details on this sheet</b>
+              <span class="hint mono" id="pdfPickInfo" style="flex:1;opacity:.75"></span>
+              <button id="pdfPickClose" class="mini">Close</button>
+            </div>
+            <p class="hint" style="margin:0 0 8px">Pick the one you want to model. Its scale comes from the drawing, so you do not type a size.</p>
+            <div id="pdfPickList"></div>
+          </div>
+          <div class="drop-note" id="iDrop"><div class="box"><b>Drop blueprints, sheets or SVGs</b><span>Drop <b>several files at once</b> — each becomes a page. A page can be a full multi-view sheet (auto-detect cuts the views out) or just a single side. Give each view a role, then <b>Send</b> collects them from every page into one model.</span></div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3D -->
+    <div class="view hide" id="viewThree">
+      <canvas id="gl"></canvas>
+      <div class="vp-tools">
+        <button class="btn" id="tZoomIn" style="font-weight:700">＋</button>
+        <button class="btn" id="tZoomOut" style="font-weight:700">－</button>
+        <button class="btn" id="tWire">Wireframe</button>
+        <button class="btn" id="tRef">Reference</button>
+        <button class="btn" id="tSculpt">Sculpt</button>
+        <button class="btn" id="tReset">Recenter</button>
+      </div>
+      <div class="sc-panel" id="scPanel" style="display:none">
+        <div class="ws-lbl">Sculpt brush — trim &amp; add</div>
+        <div class="seg" id="scMode" style="width:100%;margin-bottom:6px">
+          <button data-m="add" class="on">Add</button>
+          <button data-m="trim">Trim</button>
+          <button data-m="smooth">Smooth</button>
+        </div>
+        <div class="field"><label>Brush size <span class="val"><span id="vScR">14</span> mm</span></label><input type="range" id="scR" min="3" max="80" value="14"></div>
+        <div class="field"><label>Strength <span class="val"><span id="vScS">1.4</span></span></label><input type="range" id="scS" min="0.1" max="6" value="1.4" step="0.1"></div>
+        <label style="display:flex;align-items:center;gap:7px;font-size:11px;margin:2px 0 7px;cursor:pointer"><input type="checkbox" id="scSym" checked> Symmetry <span style="opacity:.55">· both sides at once</span></label>
+        <button class="btn ghost" id="scClear" style="width:100%">⌫ Clear sculpt</button>
+        <div class="hint" style="margin-top:6px">Drag on the model to paint. The ring shows your brush. Right-drag orbits · scroll zooms · <b>[</b> and <b>]</b> resize the brush. Always stays sealed.</div>
+      </div>
+      <div class="vp-overlay">
+        <div><span class="k">drag</span> orbit · <span class="k">scroll</span> zoom · <span class="k">right-drag</span> pan</div>
+        <div id="dims">—</div>
+      </div>
+    </div>
+
+    <!-- 2D trace -->
+    <div class="view hide" id="viewTrace">
+      <div class="trace-wrap">
+        <div class="trace-bar">
+          <div class="seg" id="viewSeg">
+            <button data-v="side" class="on">Left</button>
+            <button data-v="sideR">Right</button>
+            <button data-v="top">Top</button>
+            <button data-v="bottom">Bottom</button>
+            <button data-v="front">Front</button>
+            <button data-v="rear">Rear</button>
+          </div>
+          <span id="vSizeRow" style="display:none;align-items:center;gap:4px;font-size:10.5px;color:var(--ink-dim)">
+            <span id="vSizeLbl">across</span>
+            <input id="vSizeW" class="proj-name mono" style="width:56px;font-size:11px;padding:4px 5px" placeholder="mm" title="How wide this view really is, in mm">
+            <span>×</span>
+            <input id="vSizeH" class="proj-name mono" style="width:56px;font-size:11px;padding:4px 5px" placeholder="mm" title="How tall this view really is, in mm">
+          </span>
+          <button class="btn" id="bCal">⊹ Set scale</button>
+          <span style="width:1px;height:18px;background:var(--line-2);margin:0 2px"></span>
+          <button class="btn primary" id="bAuto">Auto-trace shape</button>
+          <button class="btn primary" id="bAutoDetail">Auto-trace detail</button>
+          <button class="btn ghost" id="manualToggle" title="Draw features by hand when the automatic pass misses something">Manual ▾</button>
+          <div class="seg" id="featTool" style="display:none">
+            <button data-t="poly" class="on">Shape</button>
+            <button data-t="box">Box</button>
+            <button data-t="text">Text</button>
+            <button data-t="join">Join</button>
+            <button data-t="svg">Pick detail</button>
+          </div>
+          <div id="featJoinRow" style="display:none;align-items:center;gap:6px">
+            <div class="seg" style="margin:0;width:130px;flex:0 0 auto">
+              <button id="jPeg" class="on" data-j="peg">Peg</button>
+              <button id="jSock" data-j="socket">Socket</button>
+            </div>
+            <input id="jSize" class="proj-name mono" style="width:60px;font-size:11px" value="5" title="nominal size in mm — the peg and its socket must share this">
+          </div>
+          <button class="btn primary" id="featNew">+ Feature</button>
+          <button class="btn ghost" id="featDone" style="display:none">✓ Finish</button>
+          <button class="btn ghost" id="featCancel" style="display:none">Cancel</button>
+          <input id="featText" class="proj-name mono" style="width:110px;font-size:11px;display:none" placeholder="wording…" value="LEE3D">
+          <button class="btn ghost" id="featSvgAll" style="display:none">Take all</button>
+          <button class="btn ghost" id="featTidy" style="display:none;color:var(--warn);border-color:rgba(245,179,66,.4)">Remove duplicates</button>
+          <span id="featSelRow" style="display:none;align-items:center;gap:5px">
+            <span class="hint" style="margin:0;opacity:.6">select</span>
+            <button class="btn ghost" id="featSelFace">Face</button>
+            <button class="btn ghost" id="featSelAll">All</button>
+            <button class="btn ghost" id="featSelNone" style="display:none">None</button>
+          </span>
+          <button class="btn ghost" id="bRot" title="Rotate this view 90° — use it if the object is drawn sideways">⟳ 90°</button>
+          <label class="btn ghost" id="pickImg" for="imgFile" style="display:none">Drawing</label>
+          <input type="file" id="imgFile" class="filepick" accept="image/*,image/svg+xml,.svg,.dxf,.png,.jpg,.jpeg,.heic,.webp">
+          <span id="imgOpField" style="display:none;align-items:center;gap:6px;font-size:11px;color:var(--ink-dim)">
+            <span>fade</span><input type="range" id="sOp" min="10" max="100" value="55" style="width:70px"><span id="vOp" class="mono">55</span>
+            <button class="btn ghost" id="refInv" title="Flip the drawing's light/dark if the auto-contrast guessed wrong" style="padding:3px 7px">◐</button>
+          </span>
+          <span class="seg" style="margin:0;width:auto;flex:0 0 auto">
+            <button id="trZoomOut" title="Zoom out">−</button>
+            <button id="trZoomFit" title="Back to the whole view">Fit</button>
+            <button id="trZoomIn" title="Zoom in to trace fine detail">＋</button>
+          </span>
+          <span class="tag mono" id="tZoomLbl" style="align-self:center">100%</span>
+          <button class="btn ghost" id="featBoxes" title="Show every feature as a draggable box, or only the ones you\u2019ve selected">Boxes: auto</button>
+          <button class="btn ghost" id="bUndo">Undo</button>
+          <button class="btn ghost" id="bClear">⌫ Clear tracings</button>
+          <button class="btn" id="bSave">Save</button>
+          <button class="btn primary" id="b3D" style="width:auto">→ 3D Preview</button>
+          <span class="hint" id="traceStatus" style="margin:0 0 0 4px"></span>
+        </div>
+        <div id="canvasHost">
+          <canvas id="trace"></canvas>
+          <div id="featLayer"></div>
+          <div id="featPanel" style="display:none">
+            <div class="fp-bar" id="fpDrag"><span id="fpTitle">feature</span><span class="fp-x" id="fpClose">×</span></div>
+            <div class="fp-body" id="fpBody"></div>
+          </div>
+          <div class="drop-note" id="dropNote"><div class="box"><b id="dropTitle">Drop a side-view drawing</b><span id="dropSub">Load your drawings in <b>Import Sheet</b>, give each one a view, then <b>Send views to Reference &amp; Trace</b>. Or drop a file straight onto this panel.</span></div></div>
+        </div>
+        <div class="hint" style="padding:6px 12px 0;user-select:none">Drop an <b>SVG</b> and it traces itself from the real lines — press <b>Auto-trace</b> again to step to the next shape if it grabbed the wrong one. Otherwise trace <b>one closed outline</b> around the silhouette — click points all the way around; it connects automatically (no gaps). Drag a point to move it · right-click to delete · then open 3D Preview.</div>
+      </div>
+    </div>
+
+    <!-- Workshop / assembly -->
+    <div class="view hide" id="viewWorkshop">
+      <canvas id="wsgl"></canvas>
+      <div class="ws-panel" id="wsPanel">
+        <div class="ws-h">Workshop <span style="opacity:.5;font-weight:400">· assemble parts into one object</span></div>
+
+        <div class="ws-sec">
+          <div class="ws-lbl">Library</div>
+          <div class="btn-row">
+            <button class="btn" id="wsAddCur">＋ Add current model</button>
+            <label class="btn" id="wsImport" for="wsFile">Import</label>
+          </div>
+          <button class="btn" id="wsAddBox" style="margin-top:5px;width:100%">＋ Add a box (build &amp; colour by hand)</button>
+          <button class="btn ghost" id="wsSaveCur" style="margin-top:5px;width:100%">⤓ Save current model to library</button>
+          <input type="file" id="wsFile" class="filepick" accept=".json,application/json,text/plain,*/*" multiple>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-top:9px">
+            <div class="ws-lbl" style="margin:0">Your models</div>
+            <button class="btn ghost" id="wsLibRefresh" style="padding:2px 7px;font-size:10px">⟳</button>
+          </div>
+          <div id="wsLib" class="ws-list"></div>
+        </div>
+
+        <div class="ws-sec">
+          <div class="ws-lbl">Parts in scene <span id="wsCount" style="opacity:.5"></span></div>
+          <div id="wsParts" class="ws-list"></div>
+        </div>
+
+        <div class="ws-sec" id="wsXform" style="display:none">
+          <div class="ws-lbl">Selected · <span id="wsSelName" class="mono"></span></div>
+          <div id="wsBoxSize" style="display:none">
+            <div class="ws-lbl2">box size (mm)</div>
+            <div class="ws-grid3">
+              <label>L<input type="number" id="wsBoxL" step="1" min="1"></label>
+              <label>W<input type="number" id="wsBoxW" step="1" min="1"></label>
+              <label>H<input type="number" id="wsBoxH" step="1" min="1"></label>
+            </div>
+          </div>
+          <div class="ws-lbl2">position (mm)</div>
+          <div class="ws-grid3">
+            <label>X<input type="number" id="wsPX" step="1"></label>
+            <label>Y up<input type="number" id="wsPY" step="1"></label>
+            <label>Z<input type="number" id="wsPZ" step="1"></label>
+          </div>
+          <div class="ws-lbl2">rotation (°)</div>
+          <div class="ws-grid3">
+            <label>X<input type="number" id="wsRX" step="5"></label>
+            <label>Y<input type="number" id="wsRY" step="5"></label>
+            <label>Z<input type="number" id="wsRZ" step="5"></label>
+          </div>
+          <div class="ws-grid3" style="margin-top:5px">
+            <label>scale<input type="number" id="wsSC" step="0.05" value="1"></label>
+            <button class="btn" id="wsFloor" style="align-self:end">⤓ floor</button>
+            <button class="btn" id="wsDup" style="align-self:end">Duplicate</button>
+          </div>
+          <div class="ws-lbl2" style="margin-top:9px">colour</div>
+          <div class="sw-row" id="wsSwatches"></div>
+          <div class="color-in">
+            <input type="color" id="wsColor" value="#9fb0c4" title="Pick any custom colour">
+            <input type="text" id="wsHex" spellcheck="false" maxlength="7" value="#9FB0C4" title="Type a hex colour, e.g. #C81E2A">
+            <button class="btn ghost" id="wsColorReset" style="padding:5px 9px" title="Back to steel">↺</button>
+          </div>
+          <button class="btn ghost" id="wsPaintBtn" style="width:100%;margin-top:7px">Paint a region</button>
+          <div id="wsPaintPanel" style="display:none;margin-top:6px;padding:8px;border:1px solid var(--line);border-radius:6px;background:var(--panel-2)">
+            <div class="hint" style="margin:0 0 7px">Drag the box <b>corners</b> to frame part of the model, or its <b>centre dot</b> to slide it. Pick a colour above, then paint. Paint again elsewhere for a second colour.</div>
+            <button class="btn primary" id="wsPaintGo" style="width:100%">Paint this region</button>
+            <button class="btn ghost" id="wsPaintClear" style="width:100%;margin-top:5px">Clear painted regions</button>
+          </div>
+          <button class="btn ghost" id="wsUndo" style="width:100%;margin-top:7px">Undo change</button>
+          <button class="btn ghost" id="wsDel" style="width:100%;margin-top:6px">⌫ Delete part</button>
+        </div>
+
+        <div class="ws-sec">
+          <div class="ws-lbl">Grid</div>
+          <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer"><input type="checkbox" id="wsGridOn" checked> Show grid <span style="opacity:.5">· measured cubes</span></label>
+          <div class="field" style="margin-top:6px"><label>Cube size <span class="val"><span id="wsStepV">10</span> mm</span></label>
+            <select id="wsStep" class="proj-name" style="width:100%">
+              <option value="5">5 mm cubes</option><option value="10" selected>10 mm cubes</option><option value="25">25 mm cubes</option><option value="50">50 mm cubes</option><option value="100">100 mm cubes</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="ws-sec">
+          <div class="ws-lbl">Site plan underneath</div>
+          <p class="hint" style="margin:2px 0 6px">Drop your plan drawing on the floor and place buildings straight onto it. It is a tracing aid only — it is never part of the model and never exported.</p>
+          <label for="wsPlanFile" class="btn" style="width:100%;display:block;text-align:center">⊹ Choose plan image</label>
+          <input type="file" id="wsPlanFile" accept="image/*" style="width:100%">
+          <label style="margin-top:6px">How wide is the plan in real life
+            <span class="val"><span id="wsPlanWv">80</span> m</span></label>
+          <input type="range" id="wsPlanW" min="1" max="500" value="80" step="1">
+          <label style="margin-top:6px">Drawn at 1:<input type="number" id="wsPlanScale" step="1" min="1" value="200" style="width:70px"></label>
+          <p class="hint" style="margin:6px 0 2px">Line the drawing up with the model. A plan is never square to the axes and its origin is wherever the scan happened to start.</p>
+          <label style="margin-top:2px">Slide across <span class="val"><span id="wsPlanXv">0</span> mm</span></label>
+          <input type="range" id="wsPlanX" min="-400" max="400" value="0" step="1">
+          <label style="margin-top:4px">Slide up the page <span class="val"><span id="wsPlanZv">0</span> mm</span></label>
+          <input type="range" id="wsPlanZ" min="-400" max="400" value="0" step="1">
+          <label style="margin-top:4px">Turn <span class="val"><span id="wsPlanRv">0</span>°</span></label>
+          <input type="range" id="wsPlanR" min="-180" max="180" value="0" step="1">
+          <label style="margin-top:4px">Fade <span class="val"><span id="wsPlanOv">85</span>%</span></label>
+          <input type="range" id="wsPlanO" min="10" max="100" value="85" step="1">
+          <div class="row" style="margin-top:6px">
+            <button class="btn ghost" id="wsPlanHide" style="flex:1">Hide</button>
+            <button class="btn ghost" id="wsPlanClear" style="flex:1">Remove</button>
+          </div>
+        </div>
+
+        <div class="ws-sec">
+          <div class="ws-lbl">Save assembly as an object</div>
+          <input id="wsName" class="proj-name mono" value="assembly-1" spellcheck="false" style="width:100%">
+          <button class="btn primary" id="wsSave" style="width:100%;margin-top:6px">Save assembly to library</button>
+          <button class="btn" id="wsSTL" style="width:100%;margin-top:5px">↓ Export combined STL</button>
+        </div>
+      </div>
+      <div class="vp-tools">
+        <button class="btn" id="wsZoomIn" style="font-weight:700">＋</button>
+        <button class="btn" id="wsZoomOut" style="font-weight:700">－</button>
+        <button class="btn" id="wsRecenter">Recenter</button>
+        <button class="btn" id="wsHolo" style="border-color:var(--accent);color:var(--accent)">Hologram</button>
+      </div>
+      <div class="vp-overlay">
+        <div><span class="k">drag</span> orbit · <span class="k">scroll</span> zoom · <span class="k">right-drag</span> pan · <span class="k">drag a part</span> move</div>
+        <div id="wsInfo">—</div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="toast" id="toast"></div>
+<div id="holoOverlay" aria-hidden="true">
+  <canvas id="holoCanvas"></canvas>
+  <div class="holo-scan"></div>
+  <div class="holo-frame"></div>
+  <div class="holo-hud">
+    <span id="holoTitle" class="mono">MODEL</span>
+    <button class="btn ghost" id="holoClose">Close ×</button>
+  </div>
+</div>
+
+<div class="modal-bg" id="modalBg">
+  <div class="modal">
+    <h3 class="disp" id="mTitle">Set real-world scale</h3>
+    <p id="mDesc">You clicked two points on the drawing. Enter the real distance between them so every dimension comes out true to size.</p>
+    <input id="mInput" type="number" placeholder="e.g. 100" step="any" />
+    <div class="row">
+      <button class="btn ghost" id="mCancel" style="flex:1">Cancel</button>
+      <button class="btn primary" id="mOk" style="flex:1">Set</button>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* =========================================================================
+   LEE3D Orthographic Studio — single file, no build step.
+   Pipeline:  2D drawing / parameters  ->  cross-section loft  ->  open-bottom
+   thin shell  ->  live 3D + binary STL.
+   The geometry core below is byte-for-byte the algorithm validated in Node as
+   a watertight, manifold, valid-STL solid.
+   ========================================================================= */
+
+/* ---------- tiny math ---------- */
+const lerp=(a,b,t)=>a+(b-a)*t;
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const smoothstep=t=>{t=clamp(t,0,1);return t*t*(3-2*t);};
+function sampleProfile(pts,xf){
+  if(pts.length===1)return pts[0][1];
+  if(xf<=pts[0][0])return pts[0][1];
+  if(xf>=pts[pts.length-1][0])return pts[pts.length-1][1];
+  for(let i=0;i<pts.length-1;i++){
+    const[x0,y0]=pts[i],[x1,y1]=pts[i+1];
+    if(xf>=x0&&xf<=x1){const t=(x1-x0)===0?0:(xf-x0)/(x1-x0);return lerp(y0,y1,t);}
+  }
+  return pts[pts.length-1][1];
 }
 
-// tiny helpers the app defines outside functions
-// the app's one-line helpers, lifted verbatim so they can't drift either
-function grabConst(decl) {
-  const m = script.match(new RegExp("^const " + decl + "=.*$", "m"));
-  if (!m) throw new Error("const not found in index.html: " + decl);
-  return m[0];
+/* ---------- THE GEOMETRY CORE (validated) ---------- */
+// resample a section profile to fixed control points (anchored to the sill at both ends)
+function resampleSection(prof,K){
+  K=K||12; const out=[];
+  for(let k=0;k<=K;k++){const t=k/K; out.push([t, clamp(sampleProfile(prof,t),0,1.4)]);}
+  out[0][1]=0; out[out.length-1][1]=0;
+  return out;
 }
-/* featDupIdx and featPickAt read the app's module-level `features` list rather than taking
-   it as an argument, so the harness has to provide one — otherwise they throw ReferenceError
-   the moment they're called and the tests around them go dark without saying why. */
-// a bit of the app that may not exist yet, without bringing the run down with it
-function soft(fn){ try { return fn() || ""; } catch { return ""; } }
-const PRELUDE = [grabConst("clamp"), grabConst("lerp"), grabConst("smoothstep"),
-  /* A new top-level CONST is the same trap as a new top-level function. makeVisualHull
-     reads these two, and without them it throws ReferenceError — which shows up as a pile
-     of unrelated geometry failures rather than "you forgot to list it". Hard, not soft: if
-     they go missing the suite should say so immediately. */
-  grabConst("HOLLOW_WALL_CELLS"), grabConst("HOLLOW_THIN_CELLS"),
-  "const DEFAULT_LEN=200;", "let features=[]; let activeView='front';",
-  /* the unit tables are plain data, not functions, so they come across whole. Without them
-     svgLengthMM and dxfUnitMM throw ReferenceError the moment they're called — which is how
-     the suite caught this being added, and why they belong here rather than being inlined. */
-  /* Soft, like NAMES below. A hard grab here takes the WHOLE suite down with a stack trace
-     if the constant isn't there, instead of failing the two tests that need it — which is
-     the difference between "these three tests are red" and "nothing ran, good luck". */
-  soft(() => grabConst("SVG_UNIT_MM")),
-  soft(() => script.match(/^const DXF_UNIT_MM=[\s\S]*?\n *21:[^\n]*$/m)[0]),
-  soft(() => script.match(/^const DXF_UNIT_NAME=[\s\S]*?16:"hm"[^\n]*$/m)[0]),
-  soft(() => grabConst("dxfLoopArea"))].join("\n");
-const NAMES = ["outlineEnvelope", "anchorPxPerMm", "makeRevolve", "makeLathe", "revProfileFromElevation", "pointInPoly",
-  "makeVisualHull", "checkManifold", "traceExtentFrac", "profileScaleFromTrace", "impPdfListItems", "impPdfSummary", "drawnSpanToReal", "profileScaleFromDetail", "outlineCircularity", "polyArea", "resamplePoly", "svgPhysicalWidthMM",
-  "htmlSafe", "boxPtsToPage", "viewRealSize",
-  "libCanonical", "sampleProfile", "resampleSection", "morphSections", "makeBody", "autoOutline",
-  "publishRoute", "distToPoly", "viewUV", "applyFeatures", "pickSilhouette", "sampleMask", "ptInPolyPts", "polyAreaPts",
-  "rasterRegions", "otsuThreshold", "lumOf", "regionOutline", "dilateMask", "labelBlobs", "outlineBBox", "sdPoly",
-  "wallSpec", "wallAt", "minWall",
-  "connDiameter", "connWarn", "connPoly", "simplifyPoly",
-  // a file that states its own dimensions — DXF $INSUNITS, SVG absolute units
-  "svgLengthMM", "dxfUnitMM", "dxfParse", "fmtMM",
-  // stitching line art back into the shape it encloses
-  "dxfWeldNodes", "dxfFaces", "dxfSilhouette", "dxfPolys", "dxfBspline",
-  "featOnView", "featNextName", "featGroupStats", "baseCutZ",
-  // taking a shape twice, and reaching the small one under the big one
-  "featSig", "featDupIdx", "featPickAt", "featBox",
-  "applyHullStrokes", "applyStroke", "hullVertexNormals", "hullAdjacency", "bottomSkinTris", "innerOffsets", "embossHull", "viewSkinVerts", "dropStrayShells", "sampleMask", "distToPoly", "viewUV",
-  /* EVERY new top-level function belongs on this list. One that is missing is not
-     extracted, so every test touching it throws, gets swallowed, and the suite goes quiet
-     about a whole feature while still printing PASS. dropTinyShells and the point-cloud
-     pair have both been through exactly that. */
-  "dropTinyShells", "shellWallStats",
-  "dedupeVerts", "samplePointCloud", "toPLY", "toXYZ", "toPCD",
-  "parsePLY", "parseXYZ", "parsePCD", "parsePointCloud"];
-const found = [];
-const src = PRELUDE + NAMES.map(n => {
-  try { const s = grab(n); found.push(n); return s; }
-  catch { return "/* not in index.html yet: " + n + " */"; }
-}).join("\n");
-const API = new Function(src
-  + "\nconst setFeatures=l=>{features.length=0;l.forEach(f=>features.push(f));return features;};"
-  + "\nconst setView=v=>{activeView=v;};"
-  + "\nreturn {" + found.join(",") + ",setFeatures,setView};")();
-const MISSING = NAMES.filter(n => !found.includes(n));
-
-// --- test plumbing ---
-let pass = 0, fail = 0, warn = 0;
-const results = [];
-// Correctness: if this breaks, do not ship it.
-/* ASYNC TESTS ARE AWAITED, NOT FIRED AND FORGOTTEN.
-   The runner used to call fn() and count a pass the moment it returned. An async test
-   returns a Promise immediately, so it "passed" before it had done anything, and a
-   rejection surfaced as an unhandled warning long after the report had printed
-   RESULT: PASS. Point-cloud export is Blob-based and therefore async, so this had to be
-   fixed before those tests meant anything at all. */
-const PENDING = [];
-function t(name, fn) {
-  let r;
-  try { r = fn(); }
-  catch (e) { fail++; results.push("  ❌ " + name + "\n       " + e.message); return; }
-  if (r && typeof r.then === "function") {
-    const slot = results.length;
-    results.push("  ⏳ " + name);
-    PENDING.push(r.then(
-      () => { pass++; results[slot] = "  ✅ " + name; },
-      e => { fail++; results[slot] = "  ❌ " + name + "\n       " + ((e && e.message) || e); }));
-    return;
-  }
-  pass++; results.push("  ✅ " + name);
+// cross-section at length-fraction xf, morphed between sorted section cuts
+function morphSections(ss,xf){
+  if(ss.length===1)return ss[0].prof;
+  if(xf<=ss[0].at)return ss[0].prof;
+  if(xf>=ss[ss.length-1].at)return ss[ss.length-1].prof;
+  for(let i=0;i<ss.length-1;i++){const a=ss[i],b=ss[i+1];
+    if(xf>=a.at&&xf<=b.at){const t=(b.at-a.at)?(xf-a.at)/(b.at-a.at):0,K=24,out=[];
+      for(let k=0;k<=K;k++){const tt=k/K;const za=sampleProfile(a.prof,tt),zb=sampleProfile(b.prof,tt);out.push([tt,za+(zb-za)*t]);}
+      return out;}}
+  return ss[ss.length-1].prof;
 }
-// Hygiene: worth fixing, never a reason to block a deploy. Reported, not fatal.
-function h(name, fn) {
-  try { fn(); pass++; results.push("  ✅ " + name); }
-  catch (e) { warn++; results.push("  ⚠️  " + name + "\n       " + e.message + "\n       (housekeeping — does not block the deploy)"); }
+function sortSections(){ if(traced.sections) traced.sections.sort((a,b)=>a.at-b.at); }
+// insert/replace the section coming from a given source ('front'|'rear'|'manual')
+function setSourceSection(src,at,prof){
+  if(!traced.sections)traced.sections=[];
+  traced.sections=traced.sections.filter(s=>s.src!==src);
+  traced.sections.push({at,prof:resampleSection(prof),src});
+  sortSections();
 }
-function eq(a, b, m) { if (a !== b) throw new Error(`${m || ""} expected ${b}, got ${a}`); }
-function ok(c, m) { if (!c) throw new Error(m || "expected truthy"); }
-function near(a, b, tol, m) { if (Math.abs(a - b) > tol) throw new Error(`${m || ""} expected ~${b}, got ${a}`); }
-
-// --- shared fixtures ---
-function manifold(indices) {
-  const ec = new Map(), key = (a, b) => (a < b ? a + "_" + b : b + "_" + a);
-  for (let k = 0; k < indices.length; k += 3) {
-    const [a, b, c] = [indices[k], indices[k + 1], indices[k + 2]];
-    for (const [u, v] of [[a, b], [b, c], [c, a]]) { const kk = key(u, v); ec.set(kk, (ec.get(kk) || 0) + 1); }
-  }
-  let boundary = 0, nonMani = 0;
-  for (const v of ec.values()) { if (v === 1) boundary++; else if (v > 2) nonMani++; }
-  return { boundary, nonMani, tris: indices.length / 3 };
-}
-const watertight = (g, m) => { const r = manifold(g.indices); ok(r.boundary === 0 && r.nonMani === 0,
-  `${m}: ${r.boundary} open edges, ${r.nonMani} non-manifold (tris ${r.tris})`); return r; };
-
-// a closed side silhouette, traced clockwise (screen y grows downward: roof = small y)
-const SIDE = [{x:20,y:150},{x:80,y:90},{x:160,y:55},{x:260,y:52},{x:340,y:80},
-              {x:400,y:120},{x:360,y:185},{x:200,y:190},{x:70,y:188}];
-const rot = (a, k) => a.slice(k).concat(a.slice(0, k));
-
-// =====================  1. TRACE ENVELOPE  =====================
-// This is the exact class of bug that shipped the "blob of mess".
-t("envelope: top is above bottom everywhere (can't invert)", () => {
-  const e = API.outlineEnvelope(SIDE);
-  for (let i = 0; i < e.top.length; i++) ok(e.top[i].y <= e.bot[i].y, `slice ${i} inverted`);
-});
-t("envelope: order-independent — reversed winding gives the same shape", () => {
-  const a = API.outlineEnvelope(SIDE), b = API.outlineEnvelope([...SIDE].reverse());
-  for (let i = 0; i < a.top.length; i++) {
-    near(a.top[i].y, b.top[i].y, 1e-6, `top ${i}`); near(a.bot[i].y, b.bot[i].y, 1e-6, `bot ${i}`);
-  }
-});
-t("envelope: order-independent — any starting point gives the same shape", () => {
-  const a = API.outlineEnvelope(SIDE);
-  for (const k of [1, 3, 5, 7]) {
-    const b = API.outlineEnvelope(rot(SIDE, k));
-    for (let i = 0; i < a.top.length; i++) near(a.top[i].y, b.top[i].y, 1e-6, `rot${k} slice${i}`);
-  }
-});
-t("envelope: spans the full outline width", () => {
-  const e = API.outlineEnvelope(SIDE);
-  near(e.minX, 20, 1e-9); near(e.maxX, 400, 1e-9); near(e.span, 380, 1e-9);
-});
-
-// =====================  2. SCALE ANCHORING  =====================
-// The "model comes out very wide" bug: views calibrated independently disagreed.
-t("scale: a view anchored to a known length ignores its own (wrong) calibration", () => {
-  // top view drawn at 1px/mm, 190px long, for an object the side view says is 190mm
-  for (const wrongScale of [0.25, 0.5, 2, 8, null]) {
-    const pxmm = API.anchorPxPerMm(190, 190, wrongScale, 200);
-    near(pxmm, 1, 1e-9, `wrongScale=${wrongScale}`);
-  }
-});
-t("scale: with no anchor it uses the view's own calibration", () => {
-  near(API.anchorPxPerMm(380, null, 2, 200), 2, 1e-9);
-});
-t("scale: with neither, falls back to the standard length", () => {
-  near(API.anchorPxPerMm(400, null, null, 200), 2, 1e-9);
-});
-t("scale: end-to-end — mismatched views still give the true 80mm width", () => {
-  const top = [{x:0,y:100},{x:60,y:62},{x:130,y:60},{x:190,y:95},{x:130,y:140},{x:60,y:140}];
-  const eS = API.outlineEnvelope(SIDE), lenMM = Math.round(eS.span / 2);   // side @ 2px/mm -> 190mm
-  const eT = API.outlineEnvelope(top);
-  for (const bogus of [0.5, 2, null]) {
-    const pxmm = API.anchorPxPerMm(eT.span, lenMM, bogus, 200);
-    const halfW = Math.max(...eT.top.map((p, i) => (eT.bot[i].y - p.y) / pxmm / 2));
-    near(halfW * 2, 80, 4, `top scale ${bogus}`);
-  }
-});
-
-// =====================  3. LOFT SHELL  =====================
-t("loft: traced profile builds a watertight shell", () => {
-  const g = API.makeBody({
-    length: 190, stations: 48, arcSegments: 40, roofFlatness: 1.3, wallThickness: 1.8,
-    topProfile: [[0,10],[0.5,60],[1,20]], bottomProfile: [[0,2],[0.5,2],[1,2]],
-    widthProfile: [[0,10],[0.5,40],[1,16]], section: null, sections: null, mode: "loft",
-  });
-  const r = watertight(g, "loft");
-  ok(r.tris > 1000, "suspiciously few triangles: " + r.tris);
-  ok(g.volume > 0, "non-positive volume");
-});
-
-// =====================  4. SCULPT  =====================
-t("sculpt: add / trim / mixed strokes all stay watertight", () => {
-  const base = { length: 190, stations: 40, arcSegments: 32, roofFlatness: 1.3, wallThickness: 1.8,
-    topProfile: [[0,10],[0.5,60],[1,20]], bottomProfile: [[0,2],[0.5,2],[1,2]],
-    widthProfile: [[0,10],[0.5,40],[1,16]], mode: "loft" };
-  const n = (40 + 1) * (32 + 1);
-  const mk = f => Float32Array.from({ length: n }, (_, i) => f(i));
-  for (const [name, off] of [
-    ["add",   mk(() => 3)],
-    ["trim",  mk(() => -1)],
-    ["mixed", mk(i => Math.sin(i) * 3)],
-  ]) watertight(API.makeBody({ ...base, sculpt: off }), "sculpt " + name);
-});
-
-// =====================  5. REVOLVE  =====================
-t("revolve: sphere / cylinder / dome / cone are all watertight solids", () => {
-  const N = 32, R = 50;
-  const shapes = { sphere: t => Math.sin(Math.PI * t), dome: t => Math.cos(Math.PI / 2 * t),
-                   cone: t => 1 - t, cylinder: () => 1 };
-  for (const [name, f] of Object.entries(shapes)) {
-    const prof = Array.from({ length: N + 1 }, (_, i) => [i / N, R * f(i / N)]);
-    const g = API.makeBody({ shape: "revolve", arcSegments: 40, revProfile: prof,
-                             revLen: name === "sphere" ? 2 * R : 100 });
-    watertight(g, "revolve " + name);
-    ok(g.volume > 0, name + " has no volume");
-  }
-});
-
-// =====================  6. VISUAL HULL (any shape)  =====================
-t("hull: sphere is watertight", () => {
-  const circle = Array.from({ length: 36 }, (_, i) => {
-    const a = i / 36 * 2 * Math.PI; return [0.5 + 0.45 * Math.cos(a), 0.5 + 0.45 * Math.sin(a)];
-  });
-  watertight(API.makeBody({ mode: "projection", length: 100, stations: 32,
-    sidePoly: circle, topPoly: circle, frontPoly: circle,
-    topProfile: [[0,100]], widthProfile: [[0,50]] }), "hull sphere");
-});
-t("hull: L-bracket (a shape the loft CANNOT make) is watertight", () => {
-  const L = [[0.1,0.1],[0.9,0.1],[0.9,0.35],[0.4,0.35],[0.4,0.9],[0.1,0.9]];
-  const box = [[0.1,0.1],[0.9,0.1],[0.9,0.9],[0.1,0.9]];
-  const g = API.makeBody({ mode: "projection", length: 100, stations: 36,
-    sidePoly: L, topPoly: box, frontPoly: box, topProfile: [[0,100]], widthProfile: [[0,30]] });
-  watertight(g, "hull L-bracket");
-  ok(g.volume > 0, "no volume");
-});
-t("hull: dense features + through-cuts stay watertight (saddle-cell repair)", () => {
-  // This load used to leave open or over-shared edges at saddle cells — the "N OPEN EDGES"
-  // badge on heavily detailed traces. sealMesh must drive every such mesh to fully closed.
-  const carSide=[[0.02,0.12],[0.10,0.30],[0.30,0.34],[0.40,0.55],[0.62,0.58],[0.72,0.36],[0.95,0.30],[0.98,0.14],[0.80,0.10],[0.20,0.10]];
-  const carTop=[[0.03,0.30],[0.20,0.16],[0.80,0.16],[0.97,0.32],[0.97,0.68],[0.80,0.84],[0.20,0.84],[0.03,0.70]];
-  const carFront=[[0.10,0.05],[0.90,0.05],[0.98,0.45],[0.85,0.92],[0.15,0.92],[0.02,0.45]];
-  const feats=[]; let i=0;
-  for(let r=0;r<6;r++)for(let c=0;c<10;c++){
-    const cx=0.10+(c+0.5)/10*0.80, cy=0.14+(r+0.5)/6*0.40, w=0.80/10*0.32, h=0.40/6*0.30;
-    const through=(i%7===0);
-    feats.push({poly:[[cx-w,cy-h],[cx+w,cy-h],[cx+w,cy+h],[cx-w,cy+h]],view:"side",
-      depth:through?-30:-(1.5+i%4), through, soft:0.03}); i++;
-  }
-  for(const [stations,crisp] of [[64,0.9],[54,0.5],[46,0.2]]){
-    const g=API.makeBody({mode:"projection", length:166, stations, hullCrisp:crisp,
-      sidePoly:carSide, topPoly:carTop, frontPoly:carFront, features:feats,
-      topProfile:[[0,89]], widthProfile:[[0,58]], wallThickness:1.8});
-    watertight(g, `dense hull st=${stations} crisp=${crisp}`);
-  }
-});
-t("hull: respects the silhouette — a notched side view removes material", () => {  const box = [[0.05,0.05],[0.95,0.05],[0.95,0.95],[0.05,0.95]];
-  const notched = [[0.05,0.05],[0.95,0.05],[0.95,0.95],[0.55,0.95],[0.55,0.5],[0.45,0.5],[0.45,0.95],[0.05,0.95]];
-  // solid on purpose: this asks whether a notch removes MATERIAL, which only means
-  // anything for a lump — on a shell a notch adds surface, so it adds material.
-  const mk = side => API.makeBody({ mode: "projection", hullHollow: false, length: 100, stations: 32, hullCrisp: 1,
-    sidePoly: side, topPoly: box, frontPoly: box, topProfile: [[0,60]], widthProfile: [[0,30]] });
-  const full = mk(box), cut = mk(notched);
-  watertight(cut, "hull notched");
-  ok(cut.volume < full.volume * 0.95, `notch removed nothing (${cut.volume} vs ${full.volume})`);
-});
-
-// =====================  7. MANIFOLD CHECKER ITSELF  =====================
-t("checkManifold: flags a mesh with a hole", () => {
-  const g = API.makeBody({ length: 120, stations: 20, arcSegments: 16, roofFlatness: 1.2,
-    wallThickness: 1.5, topProfile: [[0,10],[1,40]], bottomProfile: [[0,0],[1,0]],
-    widthProfile: [[0,10],[1,20]], mode: "loft" });
-  ok(API.checkManifold(g.indices).watertight, "a good mesh should read watertight");
-  const holed = g.indices.slice(0, g.indices.length - 3);          // drop one triangle
-  ok(!API.checkManifold(holed).watertight, "a mesh with a hole should NOT read watertight");
-});
-
-// =====================  8. SVG IMPORT  =====================
-t("svg: physical units give an exact scale", () => {
-  const mk = w => ({ getAttribute: () => w });
-  near(API.svgPhysicalWidthMM(mk("190mm")), 190, 0.01);
-  near(API.svgPhysicalWidthMM(mk("19cm")), 190, 0.01);
-  near(API.svgPhysicalWidthMM(mk("7.48in")), 190, 0.1);
-  eq(API.svgPhysicalWidthMM(mk("1000")), null, "unitless must stay unknown:");
-  eq(API.svgPhysicalWidthMM(mk("500px")), null, "px must stay unknown:");
-});
-t("svg: silhouette picker skips a full-canvas background rect", () => {
-  const RW = 1000, RH = 400, full = RW * RH;
-  const bg = [{x:0,y:0},{x:RW,y:0},{x:RW,y:RH},{x:0,y:RH}];
-  const body = [{x:50,y:300},{x:250,y:120},{x:600,y:100},{x:930,y:200},{x:800,y:350},{x:150,y:355}];
-  const detail = [{x:200,y:300},{x:260,y:300},{x:260,y:360},{x:200,y:360}];
-  const polys = [bg, body, detail];
-  const cand = polys.filter(p => API.polyArea(p) < full * 0.95);
-  const pick = (cand.length ? cand : polys).sort((a, b) => API.polyArea(b) - API.polyArea(a))[0];
-  ok(pick === body, "picked the wrong shape as the silhouette");
-});
-t("svg: resample caps points but keeps the shape", () => {
-  const dense = Array.from({ length: 400 }, (_, i) => {
-    const a = i / 400 * 2 * Math.PI; return { x: 500 + 400 * Math.cos(a), y: 200 + 150 * Math.sin(a) };
-  });
-  const rs = API.resamplePoly(dense, 90);
-  eq(rs.length, 90, "point count:");
-  ok(API.polyArea(rs) / API.polyArea(dense) > 0.99, "shape drifted while resampling");
-});
-
-// =====================  9. LIBRARY  =====================
-t("library: one model saved in 3 places shows once (device wins)", () => {
-  const items = API.libCanonical([
-    { src: "local", name: "countach", category: "Car frame" },
-    { src: "cloud", name: "countach", category: "Car frame" },
-    { src: "repo",  name: "countach", category: "Car-frame" },
-  ]);
-  eq(items.length, 1, "duplicates not collapsed:");
-  eq(items[0].src, "local", "wrong source preferred:");
-});
-t("library: slugged repo folders fold into the typed category", () => {
-  const items = API.libCanonical([
-    { src: "local", name: "bracket", category: "Parts" },
-    { src: "repo",  name: "hinge",   category: "parts" },
-    { src: "cloud", name: "wheel-a", category: "Wheels" },
-  ]);
-  const cats = [...new Set(items.map(i => i.category))];
-  eq(cats.length, 2, `expected 2 real categories, got ${cats.join(", ")}:`);
-  ok(cats.includes("Parts") && !cats.includes("parts"), "kept the ugly spelling");
-});
-t("library: different models are never merged", () => {
-  eq(API.libCanonical([
-    { src: "local", name: "a", category: "X" },
-    { src: "local", name: "b", category: "X" },
-  ]).length, 2);
-});
-
-// =====================  10. AUTO-TRACE  =====================
-if (API.autoOutline) {
-  t("auto-trace: finds a closed outline around a dark shape on light paper", () => {
-    const W = 120, H = 80, px = new Uint8ClampedArray(W * H * 4).fill(255);
-    const inShape = (x, y) => x > 20 && x < 100 && y > 20 && y < 60;
-    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (inShape(x, y)) {
-      const i = (y * W + x) * 4; px[i] = px[i + 1] = px[i + 2] = 20;
-    }
-    const pts = API.autoOutline({ data: px, width: W, height: H });
-    ok(pts && pts.length >= 8, "no outline found");
-    const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
-    near(Math.min(...xs), 20, 4, "left edge:");  near(Math.max(...xs), 100, 4, "right edge:");
-    near(Math.min(...ys), 20, 4, "top edge:");   near(Math.max(...ys), 60, 4, "bottom edge:");
-  });
-  t("auto-trace: the outline feeds the envelope without inverting", () => {
-    const W = 120, H = 80, px = new Uint8ClampedArray(W * H * 4).fill(255);
-    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-      const cx = (x - 60) / 40, cy = (y - 40) / 25;
-      if (cx * cx + cy * cy < 1) { const i = (y * W + x) * 4; px[i] = px[i + 1] = px[i + 2] = 15; }
-    }
-    const pts = API.autoOutline({ data: px, width: W, height: H });
-    ok(pts && pts.length > 8, "no outline");
-    const e = API.outlineEnvelope(pts);
-    for (let i = 0; i < e.top.length; i++) ok(e.top[i].y <= e.bot[i].y, "inverted at slice " + i);
-  });
-}
-
-// =====================  10b. VIEW ORIENTATION  =====================
-// Blueprints often draw the top view rotated 90° (car pointing up). Everything downstream
-// assumes length runs left-to-right, so a sideways view makes the length get measured as
-// the width -> the model came out as a flat slab. This is that bug, pinned down.
-/* THE SITE PLAN UNDERLAY IS NOT A PART. It lies on the Workshop floor so buildings can be
-   placed onto a real drawing, and it must never reach the model. All three of the things that
-   would leak it walk WS.inst, and the plan is deliberately kept out of that list — so this is
-   a source check, not a geometry one. Workshop needs THREE.js and a DOM and cannot be built
-   headlessly, but the property that matters IS statically checkable and worth pinning: a plan
-   in an exported STL would be printed. */
-t("site plan: the underlay never enters WS.inst, so it cannot be picked, sized or exported", () => {
-  ok(/function wsPlanSet\(/.test(html), "wsPlanSet is gone — the underlay has been removed");
-  ok(/WS\.planMesh\s*=\s*mesh/.test(html), "the plan must be held in WS.planMesh, not an instance");
-
-  // it must never be pushed as an instance
-  const pushes = [...html.matchAll(/WS\.inst\.push\(([^)]*)\)/g)].map(m => m[1]);
-  ok(pushes.length > 0, "WS.inst.push has vanished — this test is no longer checking anything");
-  for (const arg of pushes)
-    ok(!/plan/i.test(arg), "something pushes a plan into WS.inst: " + arg);
-
-  // and the three leak paths must still be the ones that only walk instances
-  for (const fn of ["wsExportSTL", "wsRecomputeExtent"]) {
-    const i = html.indexOf("function " + fn);
-    ok(i > 0, fn + " is missing");
-    const body = html.slice(i, i + 900);
-    ok(/for\s*\(\s*const it of WS\.inst\b/.test(body),
-       fn + " no longer iterates WS.inst — the plan may now leak into it");
-  }
-  const pick = html.slice(html.indexOf("function wsPick"), html.indexOf("function wsPick") + 400);
-  ok(/WS\.inst\.forEach/.test(pick), "wsPick no longer builds its pick list from WS.inst");
-});
-
-/* CIRCULARITY. A turned object — fountain, bollard, column, roundabout island — cannot be built
-   by a visual hull: measured at 36% out of round, all but a square, anywhere it narrows below
-   its widest plan circle. So a round plan has to be RECOGNISED, and it is recognised from the
-   geometry rather than from words on the drawing — one of the two example sheets that prompted
-   this is annotated in biro, and no OCR would read it. The thresholds below were picked from
-   these shapes, not guessed. */
-/* READING A DRAWING. The backend reports a detail's PLOT scale, the frame it occupies in paper
-   millimetres, and — on a rotated sheet — that the rendered image's axes are SWAPPED relative
-   to that frame. Every sheet in the real set is rotated 270, so the swap is the normal case.
-   These conversions are where a mistake is SILENT: the building comes out a plausible size and
-   simply the wrong one, and nothing downstream can tell. */
-/* A PDF USED TO BE TURNED AWAY WITH "screenshot a page" — which is the retyping-by-hand that
-   reading a file exists to remove, and a screenshot discards the scale, the dimensions and the
-   sheet number along with the vectors. These pin the wiring, because the failure mode when
-   writing it was calling helpers that do not exist: `apiBase()`, `backendOn()` and
-   `impPdfRenderList()` were all invented in the first draft and all parse perfectly. */
-t("drawing: a trace off a drawing becomes a real size, with nobody typing one", () => {
-  const A = API;
-  // the real L406 column: a 4398 x 2186px crop of a 185.0 x 372.3mm frame, sheet rotated 270
-  const drawing = {plotScale: 48,
-                   crop: {frame_mm: {w: 185.0, h: 372.3}, axes_swapped: true, rotation: 270}};
-  const W = 4398, H = 2186;
-  // the column is 4'-0" = 25.4mm of paper across and 12'-4" = 78.32mm down
-  const pts = [{x: 0, y: 0}, {x: W * 25.4 / 372.3, y: 0},
-               {x: W * 25.4 / 372.3, y: H * 78.32 / 185.0}, {x: 0, y: H * 78.32 / 185.0}];
-  const r = A.profileScaleFromTrace(pts, W, H, drawing, 200);
-  ok(Math.abs(r.realLength - 1219.2) < 1.0, `4'-0" wide, got ${r.realLength}`);
-  ok(Math.abs(r.realHeight - 3759.2) < 3.0, `12'-4" tall, got ${r.realHeight}`);
-  ok(Math.abs(r.length - 1219.2 / 200) < 1e-6, "and the model size follows the chosen ratio");
-
-  /* THE EXTENT HAS TO BE TAKEN BEFORE `normPoly`. That normalises a trace to its OWN bounding
-     box, which throws away how much of the image it spans — and that span IS the measurement.
-     A trace half the size covering the same shape must read half the size. */
-  const half = pts.map(q => ({x: q.x / 2, y: q.y / 2}));
-  const rh = A.profileScaleFromTrace(half, W, H, drawing, 200);
-  ok(Math.abs(rh.realLength - r.realLength / 2) < 1e-6,
-     "a trace covering half as much image is half the building");
-
-  eq(A.profileScaleFromTrace([], W, H, drawing, 200), null, "two points make no extent");
-  eq(A.profileScaleFromTrace(pts, 0, H, drawing, 200), null, "no image size, no answer");
-  eq(A.profileScaleFromTrace(pts, W, H, null, 200), null, "no drawing, no scale to apply");
-  eq(A.profileScaleFromTrace(pts, W, H, {plotScale: 0, crop: drawing.crop}, 200), null);
-  eq(A.traceExtentFrac([{x: NaN, y: 0}, {x: 1, y: 1}], W, H), null, "junk points are not an extent");
-});
-
-t("drawing: the picker lists what is on the sheet, in the order it dispatches", () => {
-  const sheet = {
-    sheet: {number: "L406"},
-    scale: {printed: null, inferred: 48, used: 48},
-    details: [
-      {title: "MAIN COLUMN FRONT ELEVATION", scale: 48},
-      {title: "WAYFINDING SIGN", scale: 32},
-      {title: "SIGN COLUMN REAR ELEVATION", scale: 48}
-    ],
-    dimensions: [
-      {detail: {title: "MAIN COLUMN FRONT ELEVATION"}},
-      {detail: {title: "MAIN COLUMN FRONT ELEVATION"}},
-      {detail: {title: "WAYFINDING SIGN"}},
-      {detail: null}
-    ],
-    points: []
-  };
-  const items = API.impPdfListItems(sheet);
-  eq(items.length, 3, "one entry per titled detail");
-
-  /* THE INDEX IS THE POINT. A list that displays one order and dispatches another hands
-     somebody a different drawing from the one they tapped — the same fault already fixed once
-     between the two endpoints, where the listing came from one source and the crop from
-     another. Nothing may sort or filter between the display and the dispatch. */
-  items.forEach((it, i) => {
-    eq(it.index, i, "index must be the position in sheet.details");
-    eq(it.title, sheet.details[i].title, "and the title at that position");
-    eq(it.scale, sheet.details[i].scale, "and its own scale, not the sheet's");
-  });
-
-  eq(items[1].scale, 32, "a detail at a different scale keeps it — L406 really does mix them");
-  eq(items[0].dimensions, 2);
-  eq(items[1].dimensions, 1);
-  eq(items[2].dimensions, 0);
-  ok(/no dimensions matched/.test(items[2].note), "say so rather than showing a bare zero");
-
-  eq(API.impPdfListItems(null).length, 0, "no sheet is an empty list, not a crash");
-  eq(API.impPdfListItems({}).length, 0);
-});
-
-t("drawing: the sheet summary says what was read, not what the schema calls it", () => {
-  const s = API.impPdfSummary({
-    sheet: {number: "L406"}, scale: {printed: null, inferred: 48, used: 48},
-    details: [{title: "A", scale: 48}], dimensions: [{}, {}], points: []
-  });
-  ok(/sheet L406/.test(s) && /1 details/.test(s) && /2 dimensions read/.test(s), s);
-  ok(/read off the line work/.test(s),
-     "an inferred scale must say it was inferred — a printed one is a different claim");
-  ok(/printed/.test(API.impPdfSummary({scale:{printed:240, used:240}})) === false,
-     "and a printed scale carries no such note");
-  eq(API.impPdfSummary(null), "");
-});
-
-t("drawing: the PDF path calls only helpers that exist", () => {
-  const src = html;
-  const called = ["beBase", "impAddPage", "switchTab", "layoutSheet", "renderCrops",
-                  "updateImpStatus", "impRenderPages", "toast", "drawnSpanToReal",
-                  // implemented since: this list caught its own arrival, which is the job
-                  "impPdfRenderList", "impPdfListItems", "impPdfSummary", "impPdfUseDetail",
-                  "htmlSafe"];
-  for (const fn of called) {
-    ok(new RegExp("function\\s+" + fn + "\\s*\\(").test(src),
-       `the import path calls ${fn}() — it must be defined, not assumed`);
-  }
-  /* `impPdfRenderList` was on this list and has since been written, so the test failed —
-     correctly. A helper moving from invented to real is exactly the change this guards. */
-  for (const ghost of ["apiBase", "backendOn", "escapeHTML"]) {
-    ok(!src.includes(ghost + "("), `${ghost}() does not exist and must not be called`);
-  }
-});
-
-t("drawing: a PDF is read, not refused", () => {
-  const src = html;
-  /* A POSITION, NOT A PHRASE. Two earlier versions of this checked that the source contained
-     no "screenshot a page": the first was fooled by the COMMENT explaining what the code used
-     to say, and narrowing the regex to `toast(...)` did not help, because a regex over a whole
-     file cannot tell a string literal from prose around it. What actually matters is ORDER —
-     the PDF branch has to come BEFORE the not-an-image rejection, or a drawing is turned away
-     before anything reads it. */
-  const pdfAt = src.indexOf("impPdfPick(file");
-  const rejectAt = src.indexOf("!looksImage");
-  ok(pdfAt > 0 && rejectAt > 0 && pdfAt < rejectAt,
-     "a PDF must be handed to the reader before the not-an-image rejection can turn it away");
-  ok(/impPdfPick\(file/.test(src), "a dropped PDF must go to the reader");
-  ok(/\/import\/pdf\/sheet/.test(src) && /\/import\/pdf\/detail/.test(src),
-     "both endpoints must be reached: one reads a page, one crops the chosen detail");
-  ok(/axes_swapped/.test(src),
-     "the crop record must be kept whole — a trace cannot be sized without the swap");
-});
-
-t("drawing: a trace is measured against the PAGE, not against the box it was cropped into", () => {
-  /* THE BASIS BUG, which was left open as a decision and is now closed the larger way.
-     `drawing.crop.frame_mm` describes the WHOLE page image. A view's traced points live in the
-     BOX canvas that `cropCanvas` cut out of that page and scaled by `cf`. Hand
-     `profileScaleFromTrace` the box and its size and every step of the arithmetic is right and
-     the answer is wrong by the box's share of the page — a building covering a third of the
-     page comes back three times too small, which is exactly the kind of plausible number
-     nothing downstream can question.
-
-     The fixture makes the error impossible to miss: the SAME trace, measured once against the
-     page and once against a box a third of its width. */
-  const A = API;
-  const pageW = 3000, pageH = 1500;
-  // a 1000 x 800mm crop of paper at 1:100 -> 100m across the page
-  const drawing = {plotScale: 100,
-                   crop: {frame_mm: {w: 1000, h: 800}, axes_swapped: false, rotation: 0}};
-
-  // the box: a third of the page wide, cropped 1:1 (cf = 1), offset into it
-  const src = {x0: 600, y0: 300, cf: 1, pageW, pageH};
-  // a trace spanning the full width of that box
-  const boxPts = [{x: 0, y: 0}, {x: 1000, y: 0}, {x: 1000, y: 400}, {x: 0, y: 400}];
-
-  const pagePts = A.boxPtsToPage(boxPts, src);
-  ok(pagePts, "the conversion must succeed on well-formed points");
-  eq(pagePts[0].x, 600, "x0 puts the box back where it sat on the page");
-  eq(pagePts[1].x, 1600);
-  eq(pagePts[2].y, 700, "and y likewise");
-
-  const right = A.profileScaleFromTrace(pagePts, pageW, pageH, drawing, 1);
-  const wrong = A.profileScaleFromTrace(boxPts, 1000, 400, drawing, 1);
-  ok(right && wrong, "both forms produce a number — which is the whole problem");
-
-  // page basis: 1000 of 3000 px across 1000mm of paper at 1:100 = 33.33m
-  near(right.realLength, 1000 / 3000 * 1000 * 100, 1,
-        "measured against the page, the trace is a third of 100m");
-  // box basis: the same trace reads as the WHOLE width, three times too big
-  near(wrong.realLength, 1000 * 100, 1, "measured against the box it reads full width");
-  ok(wrong.realLength > right.realLength * 2.9,
-     "the two bases disagree by the box's share of the page — this is the bug, pinned");
-
-  // and cf has to be undone, or a scaled-down crop reads small by exactly that factor
-  const half = A.boxPtsToPage(boxPts, {x0: 600, y0: 300, cf: 0.5, pageW, pageH});
-  eq(half[1].x - half[0].x, 2000, "cf scaled the box DOWN on the way in; dividing undoes it");
-});
-
-t("drawing: viewRealSize is the only way to ask, and it refuses what it cannot place", () => {
-  /* `profileScaleFromTrace` takes points and an image size and cannot tell which image they
-     are in. Every caller that decides that for itself is a chance to decide it differently, so
-     there is one function that does and the rest go through it. These are the cases where it
-     must return null rather than a plausible number. */
-  const A = API;
-  const drawing = {plotScale: 100,
-                   crop: {frame_mm: {w: 1000, h: 800}, axes_swapped: false, rotation: 0}};
-  const src = {x0: 0, y0: 0, cf: 1, pageW: 3000, pageH: 1500};
-  const pts = [{x: 0, y: 0}, {x: 900, y: 0}, {x: 900, y: 300}];
-
-  ok(A.viewRealSize({A: pts, drawing, drawingSrc: src}, 1), "the ordinary case works");
-  eq(A.viewRealSize({A: pts, drawing: null, drawingSrc: src}, 1), null,
-     "a view not taken from a drawing has no real size, and must not invent one");
-  eq(A.viewRealSize({A: pts, drawing, drawingSrc: null}, 1), null,
-     "a drawing record with no basis is worse than none — it is the silent case");
-  eq(A.viewRealSize({A: pts, drawing, drawingSrc: {...src, pageW: 0}}, 1), null,
-     "a page with no width would divide by zero and report Infinity metres");
-  eq(A.viewRealSize({A: pts, drawing, drawingSrc: {...src, cf: 0}}, 1), null,
-     "cf of zero likewise");
-  eq(A.viewRealSize(null, 1), null);
-
-  /* and it must actually DO the conversion, not just accept the basis and ignore it */
-  const off = {x0: 1200, y0: 400, cf: 1, pageW: 3000, pageH: 1500};
-  const viaView = A.viewRealSize({A: pts, drawing, drawingSrc: off}, 1);
-  const viaPage = A.profileScaleFromTrace(A.boxPtsToPage(pts, off), 3000, 1500, drawing, 1);
-  eq(viaView.realLength, viaPage.realLength,
-     "viewRealSize must equal the page-basis answer — if it passed the box points straight "
-     + "through, an offset box would not change the result and this would still agree");
-});
-
-t("drawing: the drawing record never travels without the basis it is in", () => {
-  /* THE LINE THE HANDOFF WARNED ABOUT. `view.drawing = pg.drawing` alone is a one-line change
-     that compiles, runs, and reports a building three times too small. The arithmetic is
-     tested above with its own fixtures, so nothing there can see the assignment site going
-     wrong — only the source can. POSITIONAL, like the other checks of this shape: what matters
-     is that the two assignments are together, which no value can express. */
-  const src = html;
-  /* EVERY occurrence, not the first. The comment above the assignment quotes the wrong version
-     of the line in order to explain why it is wrong, and `indexOf` found the COMMENT — the
-     third time in this file's history that prose describing code has fooled a check of that
-     code, and the second time from the hand that wrote the warning about it. Asking whether
-     ANY occurrence has the basis beside it is both honest and immune to the comment. */
-  const hits = [];
-  for (let i = src.indexOf("view.drawing = pg.drawing"); i >= 0;
-       i = src.indexOf("view.drawing = pg.drawing", i + 1)) hits.push(i);
-  ok(hits.length > 0, "the crop-to-view assignment must still carry the drawing record");
-  const good = hits.some(i => {
-    const after = src.slice(i, i + 400);
-    return /view\.drawingSrc\s*=/.test(after)
-        && /cf\s*[,:]/.test(after) && /pageW\s*:/.test(after) && /pageH\s*:/.test(after);
-  });
-  ok(good,
-     "view.drawingSrc — the box offset, the crop factor and the PAGE size — has to be set "
-     + "right beside view.drawing. The record on its own IS the bug.");
-  // and nobody may measure a view's own canvas against the page's paper size
-  ok(!/profileScaleFromTrace\(\s*view\.A/.test(src),
-     "a view's points are in its BOX canvas — they go through viewRealSize, never direct");
-});
-
-t("export: every header the backend sends about a difference is read here", () => {
-  /* THE SAME FAILURE ONE LAYER OUT. `X-LEE3D-Hollow-Failed` has a whole section in STATUS.md
-     about getting it OUT of `build_solid`, where it was written to a local dict and dropped on
-     return — "a value written to a local you are about to drop is not set internally, it is
-     not set at all." It was threaded through export_bytes to main.py to a header, and then
-     stopped one step short of a person, because this end read two of the seven headers.
-
-     The five it dropped are precisely the ones that say the STEP is not what is on screen: a
-     shell that came back solid, pockets that open into the cavity, extra views that make the
-     part fatter. A file quietly different from the preview is the one thing this project
-     treats as unacceptable, and the backend was already saying so.
-
-     SOURCE-LEVEL and POSITIVE: it asserts each header is READ, so a rewrite cannot pass by
-     deleting a branch. The list is taken from main.py's own header block — if a header is
-     added there and not here, this goes red, which is the point.
-
-     COMMENTS ARE STRIPPED FIRST, and that is not tidiness. The first version of this test
-     checked `block.includes("X-LEE3D-Hollow-Failed")` and PASSED when the read was replaced
-     with `false`, because the comment above the code lists every header by name. This file
-     already records that a test for a string's ABSENCE is fooled by a comment describing that
-     string; a test for its PRESENCE is fooled the same way, and by the same comment. So: strip
-     the prose, then require the full call expression rather than the bare name. */
-  const decomment = (t) => t.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
-  const src = html;
-  const i = src.indexOf("/solid?fmt=step");
-  ok(i > 0, "the exact-export call must still be findable");
-  /* The window has to reach past the toast at the end of the handler, not just the header
-     reads. Measured from `/solid?fmt=step`: the last header is at +955, `download(` at +2931
-     and the message at +3496 — so a 3500-char window found the headers and cut the message in
-     half, and the download-ordering check below failed on a slice boundary rather than on
-     anything real. 5000 leaves the block room to grow. */
-  const block = decomment(src.slice(i, i + 5000));
-  for (const hdr of ["X-LEE3D-Through-Cuts", "X-LEE3D-Symmetric-Only", "X-LEE3D-Hollow-Failed",
-                     "X-LEE3D-Pockets-Through-Wall", "X-LEE3D-Unusable-Views",
-                     "X-LEE3D-Skipped"]) {
-    ok(block.includes(`headers.get("${hdr}")`),
-       `${hdr} is sent by the backend and nothing here READS it — the STEP can differ from the `
-       + `preview in that way and the person is never told`);
-  }
-  /* and the file still downloads. A header saying the part differs is a reason to TELL
-     somebody, never a reason to withhold what they asked for. */
-  const dl = block.indexOf("download(");
-  const msg = block.indexOf("Exact build done");
-  ok(dl > 0 && msg > dl,
-     "the download must happen before the message, not be gated behind a clean result");
-});
-
-t("an opening may thin the rim, but it may not do it silently", () => {
-  /* MEASURED 2026-09-21 on a short, thick-walled body — the regime the exact backend used to
-     plant a floating slab in, and which no fixture here reached. On a 100 x 60 x 40 block at a
-     14mm wall with the underside open, rays ALONG Y (the face normal on a box, so the 1.41x
-     inflation this file warns about cannot apply) say the side walls TAPER toward the opening:
-
-         z= 2   2.64mm      z=12   10.04mm      z=20   13.86mm
-         z= 5   3.51mm      z=16   13.22mm      z=24   13.99mm
-         z= 8   6.54mm
-
-     and it gets worse on a coarser grid, not better: the gate reads a 2.59mm worst patch at
-     normal and 0.01mm at fast, which is a rim of no wall at all.
-
-     Closed, the same body builds 14.16 / 13.86 / 13.99 — uniform, exactly as asked. So the
-     underside-opening machinery eats the wall near the rim, and the exact backend's sweep does
-     not: the two ends disagree by 14.2% on material there, flat across resolution.
-
-     WHETHER THAT TAPER IS RIGHT IS COLLIN'S CALL — an opening arguably should fair into the
-     body — so this test does not assert a thickness. It asserts the invariant that holds
-     WHICHEVER WAY HE DECIDES: the rim is one wall thick, OR the thin-wall gate says so. What
-     must never happen is the third case, a rim at a fifth of the requested wall with nothing
-     on screen about it. Today the gate fires: worstPatch 2.59mm over 151 readings at (50,0,5).
-
-     Note it is `wall 14 on a 40mm body` on purpose. `the rim you see at an opening is a clean
-     band, one wall thick` uses the traced car at 4.2mm and passes — its fixture cannot reach
-     this regime, which is the seventh time in this project a fixture has been the reason a
-     real difference went unseen. */
-  const box = [[0,0],[1,0],[1,1],[0,1]];
-  const prof = { length:100, height:40, width:60,
-    topProfile:[[0,40],[0.5,40],[1,40]], bottomProfile:[[0,0],[0.5,0],[1,0]],
-    widthProfile:[[0,30],[0.5,30],[1,30]],          // a HALF-width: this block is 60 wide
-    sidePoly:box, topPoly:box, frontPoly:box, features:null,
-    /* NORMAL, not fast, and that is the measurement talking. At fast (res 34, cell 2.9mm) the
-       CLOSED control picks up a worstPatch of 4.44mm over exactly THREE readings — the bare
-       cluster minimum — which is a couple of rays grazing a corner on a coarse grid, not a
-       thin wall. A control that fires on nothing in particular cannot support the assertion
-       below. At normal it is null and the open build still reports 2.59mm over 110 readings,
-       so the difference between them is the geometry rather than the grid.
-       I wrote this test at fast after measuring at normal, and it went red on the control —
-       the same assert-in-one-configuration-measure-in-another mistake as the CI guard earlier
-       today. Cost is nothing: 0.6s to build and 1.1s to measure, each way. */
-    hullQuality:"normal", hullHollow:true, wallThickness:14 };
-
-  const closed = API.makeVisualHull({ ...prof, closedBottom:true,  openUnderside:false });
-  const open   = API.makeVisualHull({ ...prof, closedBottom:false, openUnderside:true  });
-
-  const sClosed = API.shellWallStats(closed.positions, closed.indices, { wall:14, samples:400 });
-  const sOpen   = API.shellWallStats(open.positions,   open.indices,   { wall:14, samples:400 });
-  ok(sClosed && sOpen, "both builds have to be measurable, or this test is checking nothing");
-
-  /* the closed body is the control: uniform wall, and the gate must stay QUIET on it, or the
-     assertion below is satisfied by a warning that fires on everything */
-  near(sClosed.median, 14, 1.2, "closed: the wall is the thickness that was asked for");
-  eq(sClosed.worstPatch, null,
-     "closed: nothing is thin here, so a gate that fires would be crying wolf");
-
-  const thin = sOpen.p10 < 14 * 0.8;
-  if (thin) {
-    ok(sOpen.worstPatch,
-       `open: the wall drops to ${sOpen.p10.toFixed(2)}mm against a 14mm ask and the thin-wall `
-       + `gate reports nothing. Either the opening stops eating the wall or the gate has to say `
-       + `so — a rim at a fifth of the requested wall with a silent screen is the one outcome `
-       + `that is not allowed.`);
-    ok(sOpen.worstPatch.at[2] < 40 * 0.5,
-       "open: and it must point LOW, at the rim, not somewhere unrelated up the body");
-  } else {
-    ok(sOpen.median > 14 * 0.8,
-       "open: if the taper has been fixed, the wall should hold near its full thickness — "
-       + "update the measurements in this test's note, they were taken before the change");
-  }
-});
-
-t("readout: the hollow volume does not claim to be what prints", () => {
-  /* THE ONE NUMBER SOMEBODY SPENDS MONEY ON. The header's cm3 is what a person estimates
-     filament from, and for a hollow body it OVER-STATES — the preview meshes the inner wall in
-     facets where the exact build offsets it smoothly, and area times wall is material.
-     Measured on a real car against the kernel's 89.73 cm3: +45.7% on Fast, +30.8% on Normal,
-     +23.7% on Fine. Monotonic in the cell size, which is what makes it faceting rather than a
-     geometry error.
-
-     The tooltip used to say "Exact for this wall thickness" and "This is the real material of
-     the frame". Both were wrong in the only place it costs anything.
-
-     Source-level, because the readout needs a DOM and the suite has none — but positive, not
-     an absence check: this asserts what the branch must SAY, so a rewrite that keeps the old
-     claim cannot pass by deleting a phrase. */
-  const src = html;
-  const i = src.indexOf("rVol.textContent=");
-  ok(i > 0, "the volume readout must still be findable");
-  const block = src.slice(i, i + 1400);
-
-  ok(/!hollow/.test(block.slice(0, 120)),
-     "a hollow figure is approximate whether or not the mesh closed, so it always carries the ≈");
-  ok(/OVER-ESTIMATE/i.test(block), "the hollow tooltip has to say which way it is wrong");
-  ok(/STEP/.test(block), "and point at the export, which is the figure that is accurate");
-  ok(!/Exact for this wall thickness/.test(block),
-     "the old claim: the signed volume is exact for the SURFACE, and the surface is not the part");
-  ok(!/This is the real material of the frame/.test(block),
-     "and the other old claim, which is the one somebody would have quoted filament from");
-
-  /* A correction factor would be a fudge — the bias depends on how much inner surface a body
-     has, and the three percentages above are one model. This file's standing answer to a
-     discretisation gap is resolution plus reporting. Pin that no factor crept in. */
-  ok(!/volume\s*\*\s*0\.|volume\s*\/\s*1\.[0-9]/.test(block),
-     "the number must stay what the mesh measured — no correction factor on a displayed figure");
-});
-
-t("deploy: the four connection placeholders are still what deploy.yml substitutes", () => {
-  /* `deploy.yml` copies index.html into `_site/` and replaces four literal strings from repo
-     secrets and variables. If one is renamed on this side, the substitution finds nothing and
-     leaves the placeholder in — and the workflow's own log line says "wired: BACKEND_URL"
-     regardless, because it reports which ENV VARS were set, not which replacements landed.
-     The app then comes up with `backendUrl` literally equal to "__BACKEND_URL__", which fails
-     the same way as unset: "anything you leave unset simply stays switched off". A deploy with
-     no backend and no cloud saves, reported green, found by whoever next presses Build exact.
-
-     Exactly once each, because two copies would leave one of them unsubstituted in some builds
-     and neither the workflow nor the app would say so. */
-  const want = ["__SUPABASE_URL__", "__SUPABASE_ANON_KEY__", "__BACKEND_URL__", "__LIB_REPO__"];
-  for (const ph of want) {
-    const n = html.split(ph).length - 1;
-    eq(n, 1, `${ph} must appear exactly once in index.html — deploy.yml substitutes it`);
-  }
-});
-
-t("drawing: reading a PDF stops at the end of the document, not at page 12", () => {
-  /* The walk ran to page 12 whatever the file held, with ONE try around the whole loop. Asking
-     for a page past the end is a 400, so on any shorter set where no page carries titled
-     details the loop fell out of the bottom into the catch and reported "Couldn't read
-     Drawings.pdf: the backend could not read page 9" — which reads as a broken file. The
-     honest message written for that case sat below, unreachable unless the PDF had twelve
-     pages or more. POSITIONAL, like the test above it: what matters is that the try is INSIDE
-     the loop, which no phrase can express. */
-  const src = html;
-  const fn = src.slice(src.indexOf("async function impPdfPick"),
-                       src.indexOf("async function impPdfUseDetail"));
-  ok(fn.length > 100, "impPdfPick must be findable ahead of impPdfUseDetail");
-  const loopAt = fn.indexOf("for(; page < 12");
-  const readAt = fn.indexOf("await impPdfSheet");
-  const tryAt = fn.lastIndexOf("try{", readAt);
-  ok(loopAt > 0 && tryAt > loopAt,
-     "each page is read inside its own try, so a failure past the end ends the walk "
-     + "instead of abandoning the whole read");
-  ok(/page === 0/.test(fn),
-     "only page 0 failing means the FILE could not be read; anything later is the end of it");
-});
-
-t("drawing: a title out of a PDF never reaches innerHTML raw", () => {
-  /* `toast()` is an innerHTML sink by design and most callers pass markup on purpose. A detail
-     TITLE is not one of those: it comes out of an arbitrary PDF, and Dylan's set arrives from
-     a third-party studio. This app's stated property is that untrusted strings go in with
-     textContent and never have HTML built around them — the picker list keeps it by returning
-     data, and a toast has nowhere to put a text node, so it escapes at the interpolation. */
-  const A = API;
-  eq(A.htmlSafe('<img src=x onerror=alert(1)>'), '&lt;img src=x onerror=alert(1)&gt;',
-     "a tag out of a PDF must not survive as a tag");
-  eq(A.htmlSafe('a&b'), 'a&amp;b', "& first, or the other escapes get double-escaped");
-  /* Quotes too — a dimension is nothing BUT quotes, and so is an attribute. My first version
-     of this line wrote the input as '4\\'-0\\""', which puts a literal backslash in the string
-     and then expected it not to come back. The fixture was wrong, not the escaper. */
-  eq(A.htmlSafe(`4'-0" WIDE`), '4&#39;-0&quot; WIDE',
-     "a feet-and-inches title is quotes all the way down");
-  eq(A.htmlSafe(null), "", "a missing title is empty, not the string 'null'");
-  eq(A.htmlSafe(undefined), "");
-  eq(A.htmlSafe(48), "48", "a number is fine, it just comes back as text");
-
-  const src = html;
-  const fn = src.slice(src.indexOf("async function impPdfUseDetail"),
-                       src.indexOf("function fmtLen"));
-  ok(fn.length > 100, "impPdfUseDetail must be findable");
-  ok(!/\$\{det\.title\}/.test(fn),
-     "the title is interpolated into markup here — it has to go through htmlSafe()");
-  ok(/htmlSafe\(det\.title\)/.test(fn), "and it must be that helper, not a hand-rolled one");
-});
-
-t("drawing: the plot scale comes back with the picture, not from the listing", () => {
-  /* Two copies of the same number: `det` is this client's own listing of the sheet, `crop` is
-     what the backend actually cropped. They agree — the endpoints index one list now — but
-     sizing a trace off the listing while looking at the crop is a disagreement waiting for the
-     next indexing bug, and a wrong plot scale is silent: the building just comes out the wrong
-     size, which is what every check in this area exists to stop. */
-  const src = html;
-  const fn = src.slice(src.indexOf("async function impPdfUseDetail"),
-                       src.indexOf("function fmtLen"));
-  ok(/plotScale: crop\.scale/.test(fn),
-     "the drawing record must take its scale from the crop the backend returned");
-  ok(!/plotScale: det\.scale/.test(fn), "not from the client's own listing of the sheet");
-});
-
-t("drawing: a traced span becomes the real size it stands for", () => {
-  const A = API;
-  // the real L406 case: a 185.0 x 372.3mm frame (with margin) at 1:48, sheet rotated 270
-  const crop = { frame_mm: { w: 185.0, h: 372.3 }, axes_swapped: true, rotation: 270 };
-  // the main column is 4'-0" = 1219.2mm, which at 1:48 is 25.4mm of paper. The image is the
-  // frame turned upright, so 25.4mm spans 25.4/372.3 of its WIDTH.
-  const acrossFrac = 25.4 / 372.3;
-  ok(Math.abs(A.drawnSpanToReal(acrossFrac, crop, 48) - 1219.2) < 0.5,
-     "a 4'-0\" column traced across the image must read 1219.2mm");
-  // 12'-4" = 3759.2mm is 78.32mm of paper, down the image, which spans the frame's other side
-  ok(Math.abs(A.drawnSpanToReal(78.32 / 185.0, crop, 48, true) - 3759.2) < 2.0,
-     "and 12'-4\" traced down the image must read 3759.2mm");
-
-  /* THE SWAP IS THE WHOLE POINT. Ignoring it uses the frame's own width for an image x-span,
-     which is out by the aspect ratio — 372.3/185.0 here, very nearly two. The answer is 605.8
-     instead of 1219.2: a believable building at half size, with nothing to signal it. */
-  const noSwap = { frame_mm: { w: 185.0, h: 372.3 }, axes_swapped: false };
-  const wrong = A.drawnSpanToReal(acrossFrac, noSwap, 48);
-  ok(Math.abs(wrong - 605.8) < 1.0 && Math.abs(wrong - 1219.2) > 500,
-     "ignoring the swap must not quietly agree with honouring it");
-
-  eq(A.drawnSpanToReal(0.5, null, 48), null, "no crop is not a size");
-  eq(A.drawnSpanToReal(0.5, crop, 0), null, "no scale is not a size");
-  eq(A.drawnSpanToReal(NaN, crop, 48), null, "junk is not a size");
-});
-
-t("drawing: plot scale is not the ratio the model is built at", () => {
-  const A = API;
-  // a sheet plotted at 1/4"=1'-0" says nothing about how big a model somebody wants
-  const at100 = A.profileScaleFromDetail(1219.2, 100);
-  const at200 = A.profileScaleFromDetail(1219.2, 200);
-  ok(Math.abs(at100.length - at200.length * 2) < 1e-6, "halving the ratio halves the model");
-  eq(at100.realLength, 1219.2, "the real size is carried, not recomputed from the model");
-  eq(A.profileScaleFromDetail(0, 48), null);
-  eq(A.profileScaleFromDetail(-5, 48), null);
-  eq(A.profileScaleFromDetail("nonsense", 48), null);
-});
-
-t("circularity: circles read round, everything else does not", () => {
-  const C = API.outlineCircularity;
-  const circle = (n, rx, ry, wob) => {
-    const o = [];
-    for (let i = 0; i < n; i++) {
-      const a = 2 * Math.PI * i / n;
-      const w = wob ? 1 + wob * Math.sin(a * 5.3 + 1) : 1;
-      o.push([rx * w * Math.cos(a), ry * w * Math.sin(a)]);
-    }
-    return o;
-  };
-  ok(C(circle(64, 1, 1, 0)).round, "a clean circle must read round");
-  ok(C(circle(16, 1, 1, 0)).round, "so must a coarsely traced one");
-  ok(C(circle(48, 1, 1, 0.08)).round, "and a hand-traced one wobbling by 8%");
-  ok(!C(circle(48, 1.3, 1, 0)).round, "a 1.3:1 ellipse is not a lathe shape");
-  ok(!C([[0, 0], [1, 0], [1, 1], [0, 1]]).round, "a square is not round");
-  ok(!C(null).round && !C([[0, 0], [1, 1]]).round,
-     "junk and degenerate input must not claim round");
-
-  /* THE VERTEX TRAP, and the reason this test exists at all. Measuring only the corners let a
-     2:1 rounded rectangle score 0.014 — ROUNDER THAN A HAND-TRACED CIRCLE — because all eight
-     of its corners sit at one radius and its long flat sides were never looked at. The
-     perimeter is walked at even arc length instead, which cannot be fooled by where somebody
-     happened to put a point, and the same shape now reads 0.493. */
-  const roundedRect = [[0, .2], [0, .8], [.1, 1], [1.9, 1], [2, .8], [2, .2], [1.9, 0], [.1, 0]];
-  ok(!C(roundedRect).round,
-     "a 2:1 rounded rectangle is not round — if this passes, the measure is back on vertices");
-});
-
-t("orient: a sideways top view is detected as portrait", () => {
-  // real proportions: a car 190 long x 80 wide, but DRAWN pointing up
-  const sideways = [{x:20,y:10},{x:100,y:10},{x:100,y:200},{x:20,y:200}];
-  const xs = sideways.map(p => p.x), ys = sideways.map(p => p.y);
-  const w = Math.max(...xs) - Math.min(...xs), h = Math.max(...ys) - Math.min(...ys);
-  ok(h > w * 1.15, "should read as portrait (drawn sideways)");
-});
-t("orient: rotating -90° maps the points correctly and makes it landscape", () => {
-  const W = 120, H = 220;                                  // the portrait drawing
-  const pts = [{x:20,y:10},{x:100,y:10},{x:100,y:200},{x:20,y:200}];
-  const rot = pts.map(p => ({ x: p.y, y: W - p.x }));       // the app's dir=-1 mapping
-  const xs = rot.map(p => p.x), ys = rot.map(p => p.y);
-  const w = Math.max(...xs) - Math.min(...xs), h = Math.max(...ys) - Math.min(...ys);
-  ok(w > h, `after rotating it must be landscape, got ${w}x${h}`);
-  near(w, 190, 1, "length should now run left-to-right:");
-  near(h, 80, 1, "width should now be the vertical extent:");
-  for (const p of rot) { ok(p.x >= 0 && p.x <= H, "x escaped the rotated canvas"); ok(p.y >= 0 && p.y <= W, "y escaped"); }
-});
-t("orient: THE BUG — a sideways top view ruins the width; rotating fixes it", () => {
-  // side view says the car is 190mm long (drawn at 2 px/mm)
-  const lenMM = 190;
-  // top view drawn sideways at 1 px/mm: 190px tall (length), 80px wide (width)
-  const sideways = [{x:10,y:10},{x:90,y:10},{x:90,y:200},{x:10,y:200}];
-  const widthFrom = pts => {
-    const e = API.outlineEnvelope(pts);
-    const pxmm = API.anchorPxPerMm(e.span, lenMM, null, 200);
-    return 2 * Math.max(...e.top.map((p, i) => (e.bot[i].y - p.y) / pxmm / 2));
-  };
-  const bad = widthFrom(sideways);
-  ok(bad > 300, `expected the broken width to be absurd, got ${bad.toFixed(0)}mm`);
-  const upright = sideways.map(p => ({ x: p.y, y: 100 - p.x }));   // rotate -90°
-  const good = widthFrom(upright);
-  near(good, 80, 5, "after rotating, the width must be the real 80mm:");
-});
-
-// =====================  10c. SIZE vs SHAPE  =====================
-// The drawing owns the shape; the sliders own the measurements. Resizing must never
-// require a re-trace, and must never alter the traced points.
-t("size: scaling hits the requested width and height exactly", () => {
-  const topP = [[0, 10], [0.5, 60], [1, 20]], botP = [[0, 0], [0.5, 0], [1, 0]];
-  const widP = [[0, 10], [0.5, 40], [1, 16]];
-  const natHgt = 60, natWid = 80;                       // what the drawing measured
-  const scale = (want, nat, prof) => prof.map(p => [p[0], p[1] * (want / nat)]);
-  const tall = scale(120, natHgt, topP);                // ask for double height
-  near(Math.max(...tall.map(p => p[1])), 120, 1e-6, "height:");
-  const wide = scale(40, natWid, widP);                 // ask for half width
-  near(2 * Math.max(...wide.map(p => p[1])), 40, 1e-6, "width:");
-  // shape is preserved: every ratio along the profile is unchanged
-  for (let i = 0; i < topP.length; i++)
-    near(tall[i][1] / tall[0][1] || 0, topP[i][1] / topP[0][1] || 0, 1e-9, "profile shape drifted at " + i);
-});
-t("size: resizing leaves the traced points untouched", () => {
-  const traced = { top: [[0, 10], [1, 60]], natHgt: 60 };
-  const before = JSON.stringify(traced.top);
-  const out = traced.top.map(p => [p[0], p[1] * (120 / traced.natHgt)]);   // sizedProfiles()
-  eq(JSON.stringify(traced.top), before, "the trace was mutated:");
-  near(out[1][1], 120, 1e-9);
-});
-t("size: a resized model is still watertight", () => {
-  const base = { length: 190, stations: 40, arcSegments: 32, roofFlatness: 1.3,
-    wallThickness: 1.8, bottomProfile: [[0,2],[1,2]], mode: "loft" };
-  const topP = [[0,10],[0.5,60],[1,20]], widP = [[0,10],[0.5,40],[1,16]];
-  for (const [hk, wk] of [[0.4, 0.4], [1, 1], [2.5, 0.6], [0.5, 3]]) {
-    const g = API.makeBody({ ...base,
-      topProfile: topP.map(p => [p[0], p[1] * hk]),
-      widthProfile: widP.map(p => [p[0], p[1] * wk]) });
-    const r = manifold(g.indices);
-    ok(r.boundary === 0 && r.nonMani === 0, `h×${hk} w×${wk}: ${r.boundary} open edges`);
-    ok(g.volume > 0, `h×${hk} w×${wk}: no volume`);
-  }
-});
-
-// =====================  10d. PUBLISH ROUTING  =====================
-// A GitHub write token must never be shipped inside a static page — the source is public,
-// so it would hand the repo to anyone (and GitHub revokes exposed tokens anyway). The
-// backend holds one server-side instead, which is what lets everyone publish with no setup.
-t("publish: prefers the backend, so nobody needs a token", () => {
-  eq(API.publishRoute(true, false), "backend");
-  eq(API.publishRoute(true, true), "backend", "the backend must win over a local token:");
-});
-t("publish: falls back to the owner's own token when there's no backend", () => {
-  eq(API.publishRoute(false, true), "token");
-});
-t("publish: offers nothing when it cannot actually publish", () => {
-  eq(API.publishRoute(false, false), null);
-});
-t("secrets: no GitHub token is baked into the page", () => {
-  const leaks = [
-    [/ghp_[A-Za-z0-9]{20,}/, "classic GitHub token"],
-    [/github_pat_[A-Za-z0-9_]{20,}/, "fine-grained GitHub token"],
-    [/gho_[A-Za-z0-9]{20,}/, "GitHub OAuth token"],
-  ];
-  for (const [re, what] of leaks) ok(!re.test(html), `a ${what} is embedded in index.html`);
-  // the placeholder is fine; a real value would not be
-  ok(!/LEE3D_CONFIG[\s\S]{0,400}?token/i.test(html), "the injected config must not carry a token");
-});
-
-// =====================  10e. FEATURES  =====================
-// A feature is a region traced in a view, pressed into or out of the body. It must move
-// the surface where you drew it, leave the rest alone, and never break the seal.
-const FEAT_BASE = { length: 190, stations: 40, arcSegments: 32, roofFlatness: 1.3,
-  wallThickness: 1.8, topProfile: [[0,10],[0.5,60],[1,20]], bottomProfile: [[0,2],[1,2]],
-  widthProfile: [[0,10],[0.5,40],[1,16]], mode: "loft" };
-const WINDOW = [[0.35,0.55],[0.62,0.55],[0.62,0.85],[0.35,0.85]];   // a window on the side
-
-t("features: a recessed window keeps the model watertight", () => {
-  const g = API.makeBody({ ...FEAT_BASE, features: [{ view: "side", poly: WINDOW, depth: -3, soft: 0.1 }] });
-  const r = manifold(g.indices);
-  ok(r.boundary === 0 && r.nonMani === 0, `${r.boundary} open edges, ${r.nonMani} non-manifold`);
-  ok(g.volume > 0, "no volume");
-});
-t("features: pressing in removes material, bulging out adds it", () => {
-  const plain = API.makeBody({ ...FEAT_BASE });
-  const dish  = API.makeBody({ ...FEAT_BASE, features: [{ view: "side", poly: WINDOW, depth: -3, soft: 0.1 }] });
-  const bulge = API.makeBody({ ...FEAT_BASE, features: [{ view: "side", poly: WINDOW, depth: 3, soft: 0.1 }] });
-  ok(dish.volume < plain.volume, `recess didn't remove material (${dish.volume} vs ${plain.volume})`);
-  ok(bulge.volume > plain.volume, `bulge didn't add material (${bulge.volume} vs ${plain.volume})`);
-});
-t("features: only the traced region moves — the rest of the body is untouched", () => {
-  const plain = API.makeBody({ ...FEAT_BASE });
-  const feat  = API.makeBody({ ...FEAT_BASE, features: [{ view: "side", poly: WINDOW, depth: -3, soft: 0.05 }] });
-  eq(feat.positions.length, plain.positions.length, "vertex count changed:");
-  let moved = 0, still = 0;
-  for (let i = 0; i < plain.positions.length; i += 3) {
-    const d = Math.hypot(feat.positions[i] - plain.positions[i],
-                         feat.positions[i+1] - plain.positions[i+1],
-                         feat.positions[i+2] - plain.positions[i+2]);
-    if (d > 0.01) moved++; else still++;
-  }
-  ok(moved > 0, "the feature moved nothing at all");
-  ok(still > moved * 2, `the feature leaked across the body (${moved} moved vs ${still} still)`);
-});
-t("features: stacking several stays watertight", () => {
-  const g = API.makeBody({ ...FEAT_BASE, features: [
-    { view: "side", poly: WINDOW, depth: -3, soft: 0.1 },
-    { view: "side", poly: [[0.1,0.2],[0.2,0.2],[0.2,0.35],[0.1,0.35]], depth: 2, soft: 0.06 },   // mirror
-    { view: "top",  poly: [[0.75,0.4],[0.9,0.4],[0.9,0.6],[0.75,0.6]], depth: -2, soft: 0.08 },  // vent
-  ]});
-  const r = manifold(g.indices);
-  ok(r.boundary === 0 && r.nonMani === 0, `${r.boundary} open edges with 3 features`);
-});
-t("features: a zero-depth or empty feature changes nothing", () => {
-  const plain = API.makeBody({ ...FEAT_BASE });
-  for (const f of [{ view: "side", poly: WINDOW, depth: 0, soft: 0.1 }, { view: "side", poly: [[0,0]], depth: -3, soft: 0.1 }]) {
-    const g = API.makeBody({ ...FEAT_BASE, features: [f] });
-    near(g.volume, plain.volume, 1e-6, "a no-op feature altered the model:");
-  }
-});
-t("features: distToPoly measures distance to the edge, not the centre", () => {
-  const sq = [[0,0],[1,0],[1,1],[0,1]];
-  near(API.distToPoly(sq, 0.5, 0.5), 0.5, 1e-9, "centre of a unit square:");
-  near(API.distToPoly(sq, 0.9, 0.5), 0.1, 1e-9, "near the right edge:");
-  near(API.distToPoly(sq, 0.5, 0.02), 0.02, 1e-9, "near the bottom edge:");
-});
-
-// =====================  10f. SVG IS THE TRACE  =====================
-// An SVG already contains the real lines. Reading its pixels back would throw away exact
-// geometry to guess at it, so the vector paths get kept and re-used.
-t("svg: the silhouette picker skips a background rect and takes the body", () => {
-  const RW = 1000, RH = 400, full = RW * RH;
-  const bg = [{x:0,y:0},{x:RW,y:0},{x:RW,y:RH},{x:0,y:RH}];
-  const body = [{x:50,y:300},{x:250,y:120},{x:600,y:100},{x:930,y:200},{x:800,y:350},{x:150,y:355}];
-  const wheel = [{x:200,y:300},{x:260,y:300},{x:260,y:360},{x:200,y:360}];
-  ok(API.pickSilhouette([bg, body, wheel], full, 0) === body, "didn't pick the body");
-});
-t("svg: pressing auto-trace again steps to the next shape", () => {
-  const full = 1e9;
-  const big = [{x:0,y:0},{x:100,y:0},{x:100,y:100},{x:0,y:100}];
-  const mid = [{x:0,y:0},{x:50,y:0},{x:50,y:50},{x:0,y:50}];
-  const small = [{x:0,y:0},{x:10,y:0},{x:10,y:10},{x:0,y:10}];
-  const polys = [small, big, mid];
-  eq(API.pickSilhouette(polys, full, 0), big, "first pick should be the largest:");
-  eq(API.pickSilhouette(polys, full, 1), mid, "second pick:");
-  eq(API.pickSilhouette(polys, full, 2), small, "third pick:");
-  eq(API.pickSilhouette(polys, full, 3), big, "it should wrap around:");
-});
-t("svg: an all-background drawing still yields something rather than nothing", () => {
-  const full = 100;
-  const bg = [{x:0,y:0},{x:10,y:0},{x:10,y:10},{x:0,y:10}];   // 100% of the canvas
-  ok(API.pickSilhouette([bg], full, 0) === bg, "should fall back to the only shape present");
-});
-t("svg: vector paths beat pixels — the outline keeps its exact points", () => {
-  // a circle sampled from vector data survives resampling with its shape intact
-  const circle = Array.from({ length: 300 }, (_, i) => {
-    const a = i / 300 * 2 * Math.PI; return { x: 500 + 400 * Math.cos(a), y: 200 + 150 * Math.sin(a) };
-  });
-  const pick = API.pickSilhouette([circle], 1e9, 0);
-  const out = API.resamplePoly(pick, 90);
-  ok(API.polyArea(out) / API.polyArea(circle) > 0.99, "vector shape drifted");
-});
-
-// =====================  10g. BOTTOM VIEW  =====================
-// A traced bottom gives the floor its OWN plan — on a real car it's narrower and a
-// different shape from the body above. It must share the length, narrow the body near the
-// ground, and never break the seal.
-const BOT_BASE = { length: 190, stations: 44, arcSegments: 36, roofFlatness: 1.3,
-  wallThickness: 1.8, topProfile: [[0,10],[0.5,60],[1,20]], bottomProfile: [[0,2],[1,2]],
-  widthProfile: [[0,10],[0.5,40],[1,16]], mode: "loft" };
-const FLOOR = [[0, 6], [0.5, 26], [1, 10]];        // a narrower floor, different shape
-
-t("bottom: a traced floor keeps the model watertight", () => {
-  const g = API.makeBody({ ...BOT_BASE, widthBottomProfile: FLOOR });
-  const r = manifold(g.indices);
-  ok(r.boundary === 0 && r.nonMani === 0, `${r.boundary} open edges, ${r.nonMani} non-manifold`);
-  ok(g.volume > 0, "no volume");
-});
-t("bottom: the floor narrows the body near the ground, not the roof", () => {
-  const plain = API.makeBody({ ...BOT_BASE });
-  const withFloor = API.makeBody({ ...BOT_BASE, widthBottomProfile: FLOOR });
-  eq(withFloor.positions.length, plain.positions.length, "vertex count changed:");
-  // widest |y| found low down vs high up
-  const spread = (g, lo, hi) => {
-    let w = 0;
-    for (let i = 0; i < g.positions.length; i += 3) {
-      const z = g.positions[i + 2];
-      if (z >= lo && z <= hi) w = Math.max(w, Math.abs(g.positions[i + 1]));
-    }
-    return w;
-  };
-  const lowPlain = spread(plain, 0, 8), lowFloor = spread(withFloor, 0, 8);
-  const topPlain = spread(plain, 40, 70), topFloor = spread(withFloor, 40, 70);
-  ok(lowFloor < lowPlain * 0.9, `the floor didn't narrow the underside (${lowFloor.toFixed(1)} vs ${lowPlain.toFixed(1)})`);
-  near(topFloor, topPlain, 1.5, "the floor must not disturb the upper body:");
-});
-t("bottom: a floor equal to the body width changes nothing", () => {
-  const same = API.makeBody({ ...BOT_BASE, widthBottomProfile: BOT_BASE.widthProfile });
-  const plain = API.makeBody({ ...BOT_BASE });
-  near(same.volume, plain.volume, plain.volume * 0.02, "a matching floor altered the model:");
-});
-t("bottom: the body's width at the floor IS the traced floor width", () => {
-  // (volume is the shell material here, not enclosed space — narrowing adds curvature and
-  // can add material, so measure the geometry instead of guessing from volume)
-  const g = API.makeBody({ ...BOT_BASE, widthBottomProfile: FLOOR });
-  const zBot = 2;                                   // bottomProfile is flat at 2mm
-  let atFloor = 0;
-  for (let i = 0; i < g.positions.length; i += 3) {
-    const x = g.positions[i], z = g.positions[i + 2];
-    if (Math.abs(x) < 6 && z >= zBot - 0.5 && z <= zBot + 0.6) atFloor = Math.max(atFloor, Math.abs(g.positions[i + 1]));
-  }
-  near(atFloor, 26, 2.5, "mid-body floor half-width should match the traced 26mm:");
-});
-t("bottom: a floor plus features and sculpt together stay watertight", () => {
-  const n = (44 + 1) * (36 + 1);
-  const g = API.makeBody({ ...BOT_BASE, widthBottomProfile: FLOOR,
-    sculpt: Float32Array.from({ length: n }, (_, i) => Math.sin(i) * 2),
-    features: [{ view: "side", poly: [[0.35,0.55],[0.62,0.55],[0.62,0.85],[0.35,0.85]], depth: -3, soft: 0.1 }] });
-  const r = manifold(g.indices);
-  ok(r.boundary === 0 && r.nonMani === 0, `${r.boundary} open edges with floor+sculpt+feature`);
-});
-
-// =====================  10h. STAMPED FEATURES (box / text)  =====================
-// A mask feature covers a rectangle of the view; its greyscale is how deep each spot goes.
-// Text is one of these. Engraved = negative depth, raised = positive.
-const MASK_BASE = { length: 190, stations: 44, arcSegments: 36, roofFlatness: 1.3,
-  wallThickness: 1.8, topProfile: [[0,10],[0.5,60],[1,20]], bottomProfile: [[0,2],[1,2]],
-  widthProfile: [[0,10],[0.5,40],[1,16]], mode: "loft" };
-// a 4x4 stamp: solid block in the middle, empty border
-const BLOCK = { w: 4, h: 4, d: Uint8Array.from([0,0,0,0, 0,255,255,0, 0,255,255,0, 0,0,0,0]) };
-
-t("mask: samples full depth in the middle and nothing outside the box", () => {
-  const f = { box: [0.2, 0.5, 0.8, 0.9], mask: BLOCK };
-  near(API.sampleMask(f, 0.5, 0.7), 1, 0.001, "centre should be full coverage:");
-  eq(API.sampleMask(f, 0.05, 0.7), 0, "left of the box must be untouched:");
-  eq(API.sampleMask(f, 0.5, 0.1), 0, "below the box must be untouched:");
-});
-t("mask: edges fade smoothly rather than stair-stepping", () => {
-  const f = { box: [0, 0, 1, 1], mask: BLOCK };
-  const mid = API.sampleMask(f, 0.5, 0.5), edge = API.sampleMask(f, 0.5, 0.85);
-  ok(mid > edge, "the stamp should fade towards its border");
-  ok(edge > 0 && edge < 1, `expected a partial value at the edge, got ${edge}`);
-});
-t("mask: engraved text presses in, raised text stands out, both stay watertight", () => {
-  const mk = depth => API.makeBody({ ...MASK_BASE,
-    features: [{ kind: "text", view: "side", box: [0.35, 0.5, 0.7, 0.75], mask: BLOCK, depth, soft: 0.05 }] });
-  const plain = API.makeBody({ ...MASK_BASE });
-  for (const depth of [-1.5, 1.5]) {
-    const g = mk(depth);
-    const r = manifold(g.indices);
-    ok(r.boundary === 0 && r.nonMani === 0, `depth ${depth}: ${r.boundary} open edges`);
-    let moved = 0;
-    for (let i = 0; i < g.positions.length; i += 3)
-      if (Math.hypot(g.positions[i] - plain.positions[i], g.positions[i+1] - plain.positions[i+1],
-                     g.positions[i+2] - plain.positions[i+2]) > 0.01) moved++;
-    ok(moved > 0, `depth ${depth} moved nothing`);
-  }
-});
-t("mask: engrave and emboss push the same spot opposite ways", () => {
-  // measure AT the stamp, not at the model's widest point (which the stamp never touches)
-  const mk = depth => API.makeBody({ ...MASK_BASE,
-    features: [{ kind: "text", view: "side", box: [0.3, 0.4, 0.75, 0.8], mask: BLOCK, depth, soft: 0.05 }] });
-  const plain = API.makeBody({ ...MASK_BASE }), out = mk(2.5), inn = mk(-2.5);
-  let best = -1, bd = 0;
-  for (let i = 0; i < plain.positions.length; i += 3) {
-    const d = Math.abs(out.positions[i + 1]) - Math.abs(plain.positions[i + 1]);
-    if (d > bd) { bd = d; best = i; }
-  }
-  ok(best >= 0 && bd > 0.2, `embossing didn't raise anything (best rise ${bd.toFixed(3)}mm)`);
-  ok(Math.abs(inn.positions[best + 1]) < Math.abs(plain.positions[best + 1]) - 0.2,
-     "at the same spot, engraving must go inward");
-});
-t("mask: a box feature is just a 4-point shape and still seals", () => {
-  const g = API.makeBody({ ...MASK_BASE,
-    features: [{ kind: "poly", view: "side", poly: [[0.3,0.5],[0.6,0.5],[0.6,0.8],[0.3,0.8]], depth: -3, soft: 0.06 }] });
-  const r = manifold(g.indices);
-  ok(r.boundary === 0 && r.nonMani === 0, `${r.boundary} open edges`);
-});
-t("mask: a stamp with no depth is a no-op", () => {
-  const plain = API.makeBody({ ...MASK_BASE });
-  const g = API.makeBody({ ...MASK_BASE,
-    features: [{ kind: "text", view: "side", box: [0.3,0.4,0.7,0.8], mask: BLOCK, depth: 0, soft: 0.05 }] });
-  near(g.volume, plain.volume, 1e-6, "a zero-depth stamp altered the model:");
-});
-
-// =====================  10i. SVG DETAIL -> FEATURES  =====================
-// The drawing's own lines become features with no tracing. The biggest path is already the
-// body outline, so it must never be offered as detail, and clicking must pick the most
-// specific shape under the cursor rather than whatever encloses it.
-const sdRect = (x0,y0,x1,y1) => [{x:x0,y:y0},{x:x1,y:y0},{x:x1,y:y1},{x:x0,y:y1}];
-const SD_BODY   = sdRect(20, 40, 980, 380);        // the silhouette (already the outline)
-const SD_WIN = sdRect(300, 90, 560, 200);       // a window inside it
-const SD_HANDLE = sdRect(380, 150, 420, 175);      // a small handle inside the window
-const SD_BG     = sdRect(0, 0, 1000, 400);         // full-canvas background
-const SD_FULL   = 1000 * 400;
-
-// mirror of svgDetails(): drop the background, drop the body, keep the rest
-const sdDetails = (polys, bodyPoly) => polys.filter(p => p.length >= 3
-  && API.polyAreaPts(p) < API.polyAreaPts(bodyPoly) * 0.9
-  && API.polyAreaPts(p) < SD_FULL * 0.95
-  && API.polyAreaPts(p) > SD_FULL * 1e-5);
-const sdDetailAt = (polys, bodyPoly, x, y) => {
-  let best = null, bestA = Infinity;
-  for (const p of sdDetails(polys, bodyPoly)) {
-    if (!API.ptInPolyPts(p, x, y)) continue;
-    const a = API.polyAreaPts(p); if (a < bestA) { bestA = a; best = p; }
+/* =========================================================================
+   FEATURES — a shape traced in a view (window, mirror, tailpipe…) pressed into
+   or out of the body. It reuses the tracer's mapping: the region is stored in the
+   same 0..1 frame as that view's body outline, then projected onto the model along
+   that view's axis. Displacement only — both shells move together, so the model
+   stays watertight. (A real cut-through needs CSG and is not this.)
+   ========================================================================= */
+function distToPoly(poly,x,y){
+  let best=Infinity;
+  for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+    const ax=poly[j][0],ay=poly[j][1],bx=poly[i][0],by=poly[i][1];
+    const dx=bx-ax,dy=by-ay, L2=dx*dx+dy*dy;
+    let t=L2?((x-ax)*dx+(y-ay)*dy)/L2:0; t=t<0?0:t>1?1:t;
+    const px=ax+dx*t-x, py=ay+dy*t-y, d=Math.hypot(px,py);
+    if(d<best)best=d;
   }
   return best;
-};
-
-t("svg detail: the body outline is never offered as a detail", () => {
-  const d = sdDetails([SD_BG, SD_BODY, SD_WIN, SD_HANDLE], SD_BODY);
-  ok(!d.includes(SD_BODY), "the silhouette was offered as detail");
-  ok(!d.includes(SD_BG), "the background rect was offered as detail");
-  eq(d.length, 2, "expected just the window and handle:");
-});
-t("svg detail: clicking picks the most specific shape under the cursor", () => {
-  const polys = [SD_BG, SD_BODY, SD_WIN, SD_HANDLE];
-  eq(sdDetailAt(polys, SD_BODY, 400, 160), SD_HANDLE, "inside the handle should pick the handle:");
-  eq(sdDetailAt(polys, SD_BODY, 320, 100), SD_WIN, "inside the window only should pick the window:");
-  eq(sdDetailAt(polys, SD_BODY, 900, 350), null, "empty bodywork should pick nothing:");
-});
-t("svg detail: point-in-polygon agrees with the geometry", () => {
-  ok(API.ptInPolyPts(SD_WIN, 400, 150), "a point inside should read inside");
-  ok(!API.ptInPolyPts(SD_WIN, 600, 150), "a point outside should read outside");
-  ok(!API.ptInPolyPts(SD_WIN, 400, 300), "a point below should read outside");
-});
-t("svg detail: a grabbed line lands where it was drawn", () => {
-  // normalise against the body outline's box, the same frame features live in
-  const xs = SD_BODY.map(p=>p.x), ys = SD_BODY.map(p=>p.y);
-  const minX = Math.min(...xs), maxY = Math.max(...ys);
-  const sx = Math.max(...xs) - minX, sy = maxY - Math.min(...ys);
-  const norm = SD_WIN.map(p => [(p.x-minX)/sx, (maxY-p.y)/sy]);
-  for (const [u,v] of norm) { ok(u>=0&&u<=1, "u escaped 0..1: "+u); ok(v>=0&&v<=1, "v escaped 0..1: "+v); }
-  // and it must actually shape the model
-  const g = API.makeBody({ length:190, stations:44, arcSegments:36, roofFlatness:1.3, wallThickness:1.8,
-    topProfile:[[0,10],[0.5,60],[1,20]], bottomProfile:[[0,2],[1,2]], widthProfile:[[0,10],[0.5,40],[1,16]],
-    mode:"loft", features:[{kind:"poly", view:"side", poly:norm, depth:-3, soft:0.08}] });
-  const r = manifold(g.indices);
-  ok(r.boundary === 0 && r.nonMani === 0, `${r.boundary} open edges`);
-});
-t("svg detail: rotating a view turns its detail lines with it", () => {
-  const W = 120, H = 220;                       // portrait drawing, auto-straightened
-  const turn = p => ({ x: p.y, y: W - p.x });   // the app's dir=-1 mapping
-  const outline = sdRect(10, 10, 100, 200), win = sdRect(30, 40, 70, 90);
-  const rOutline = outline.map(turn), rWin = win.map(turn);
-  // the window must still sit inside the outline after the turn
-  const cx = rWin.reduce((s,p)=>s+p.x,0)/4, cy = rWin.reduce((s,p)=>s+p.y,0)/4;
-  ok(API.ptInPolyPts(rOutline, cx, cy), "the detail fell outside the body after rotating");
-  for (const p of rWin) { ok(p.x >= 0 && p.x <= H, "x escaped"); ok(p.y >= 0 && p.y <= W, "y escaped"); }
-});
-
-// =====================  10j. ANY FILE TYPE, SAME PRINCIPLE  =====================
-// An SVG hands over its paths. A photo/PNG/JPEG doesn't — but in a line drawing the shapes
-// ARE the regions the lines fence in, so they can be recovered. Past that point the file
-// type stops mattering.
-function drawnPage(W, H, strokes) {                    // white paper, black lines
-  const px = new Uint8ClampedArray(W * H * 4).fill(255);
-  const ink = (x, y) => { if (x < 0 || y < 0 || x >= W || y >= H) return;
-    const i = (y * W + x) * 4; px[i] = px[i+1] = px[i+2] = 15; };
-  const box = (x0, y0, x1, y1, t) => {                 // an unfilled rectangle, t px thick
-    for (let x = x0; x <= x1; x++) for (let k = 0; k < t; k++) { ink(x, y0 + k); ink(x, y1 - k); }
-    for (let y = y0; y <= y1; y++) for (let k = 0; k < t; k++) { ink(x0 + k, y); ink(x1 - k, y); }
-  };
-  strokes.forEach(sx => box(...sx));
-  return { data: px, width: W, height: H };
 }
-
-t("any file: Otsu splits ink from paper without a slider", () => {
-  const img = drawnPage(120, 80, [[10, 10, 110, 70, 2]]);
-  const thr = API.otsuThreshold(API.lumOf(img));
-  // Otsu's t means class-0 is [0..t] INCLUSIVE, so on flat art t lands ON the ink value.
-  // What matters is that classifying with "<= t" puts ink in and paper out.
-  ok(15 <= thr && thr < 255, `threshold out of range: ${thr}`);
-  ok(15 <= thr, "ink must classify as ink");
-  ok(!(255 <= thr), "paper must not classify as ink");
-});
-t("any file: a PNG line drawing gives up its shapes — body plus the window inside it", () => {
-  // a body outline with a window drawn inside it, exactly like a blueprint
-  const img = drawnPage(240, 160, [[20, 20, 220, 140, 2], [60, 45, 130, 90, 2]]);
-  const regions = API.rasterRegions(img, 40);
-  ok(regions.length >= 2, `expected the body and the window, found ${regions.length}`);
-  const areas = regions.map(r => API.polyAreaPts(r)).sort((a, b) => b - a);
-  ok(areas[0] > areas[1] * 2, "the body should be clearly the biggest region");
-  // the window's region should sit roughly where it was drawn
-  const win = regions.find(r => {
-    const xs = r.map(p => p.x), ys = r.map(p => p.y);
-    return Math.min(...xs) > 50 && Math.max(...xs) < 140 && Math.min(...ys) > 35 && Math.max(...ys) < 100;
-  });
-  ok(win, "the window region wasn't found where it was drawn");
-});
-t("any file: the outside background is never returned as a shape", () => {
-  const img = drawnPage(240, 160, [[20, 20, 220, 140, 2]]);
-  const regions = API.rasterRegions(img, 40);
-  for (const r of regions) {
-    const xs = r.map(p => p.x), ys = r.map(p => p.y);
-    ok(!(Math.min(...xs) <= 1 && Math.min(...ys) <= 1 && Math.max(...xs) >= 238),
-       "a region covering the whole page came back — the outside leaked in");
+/* Where a vertex lands in a given view's 0..1 frame.
+   All SIX views are named here. sideR used to fall through to the front/rear line and
+   right-hand detail was measured landing on the nose; bottom fell through as well and its
+   v was read off y instead of z. The 1- on top/bottom is the frame correction: features are
+   stored v screen-UP (featNormalize) while topPoly/bottomPoly are stored v screen-DOWN
+   (normPoly), so without it plan-view detail lands on the opposite flank. */
+function viewUV(view,x,y,z,B){
+  if(view==="side"||view==="sideR")  return [(x-B.x0)/B.dx, (z-B.z0)/B.dz];
+  if(view==="top"||view==="bottom")  return [(x-B.x0)/B.dx, 1-(y-B.y0)/B.dy];
+  return                               [(y-B.y0)/B.dy, (z-B.z0)/B.dz];        // front / rear
+}
+// A mask feature covers a rectangle of the view; the greyscale says how deep each spot
+// goes. Text becomes one of these, and so could any imported artwork. Sampled smoothly so
+// letter edges come out clean instead of stair-stepped.
+function sampleMask(f,u,v){
+  const b=f.box, m=f.mask; if(!b||!m||!m.d)return 0;
+  const du=b[2]-b[0], dv=b[3]-b[1];
+  if(du<=0||dv<=0)return 0;
+  const mu=(u-b[0])/du, mv=(v-b[1])/dv;
+  if(mu<0||mu>1||mv<0||mv>1)return 0;
+  const fx=mu*(m.w-1), fy=(1-mv)*(m.h-1);          // mask rows run top-down
+  const x0=Math.floor(fx), y0=Math.floor(fy);
+  const x1=Math.min(m.w-1,x0+1), y1=Math.min(m.h-1,y0+1);
+  const tx=fx-x0, ty=fy-y0;
+  const g=(X,Y)=>m.d[Y*m.w+X]/255;
+  const a=g(x0,y0)+(g(x1,y0)-g(x0,y0))*tx, c=g(x0,y1)+(g(x1,y1)-g(x0,y1))*tx;
+  return a+(c-a)*ty;
+}
+function applyFeatures(p,outer,inner,nrm){
+  if(p.plainFrame)return 0;                        // "Plain frame" — press nothing into the skin
+  const F=p.features; if(!F||!F.length)return 0;
+  let x0=Infinity,x1=-Infinity,y0=Infinity,y1=-Infinity,z0=Infinity,z1=-Infinity;
+  for(const P of outer){
+    if(P[0]<x0)x0=P[0]; if(P[0]>x1)x1=P[0];
+    if(P[1]<y0)y0=P[1]; if(P[1]>y1)y1=P[1];
+    if(P[2]<z0)z0=P[2]; if(P[2]>z1)z1=P[2];
   }
-});
-t("any file: a blank page yields nothing rather than nonsense", () => {
-  const px = new Uint8ClampedArray(80 * 60 * 4).fill(255);
-  eq(API.rasterRegions({ data: px, width: 80, height: 60 }, 40).length, 0);
-});
-t("any file: recovered shapes feed the envelope without inverting", () => {
-  const img = drawnPage(240, 160, [[20, 20, 220, 140, 2], [60, 45, 130, 90, 2]]);
-  for (const r of API.rasterRegions(img, 40)) {
-    const e = API.outlineEnvelope(r);
-    for (let i = 0; i < e.top.length; i++) ok(e.top[i].y <= e.bot[i].y, "a recovered region inverted");
-  }
-});
-t("any file: a recovered shape becomes a working feature", () => {
-  const img = drawnPage(240, 160, [[20, 20, 220, 140, 2], [60, 45, 130, 90, 2]]);
-  const regions = API.rasterRegions(img, 40).sort((a, b) => API.polyAreaPts(b) - API.polyAreaPts(a));
-  const body = regions[0], win = regions[1];
-  ok(win, "no window region to test with");
-  const xs = body.map(p => p.x), ys = body.map(p => p.y);
-  const minX = Math.min(...xs), maxY = Math.max(...ys);
-  const sx = Math.max(...xs) - minX, sy = maxY - Math.min(...ys);
-  const norm = API.resamplePoly(win, 48).map(p => [(p.x - minX) / sx, (maxY - p.y) / sy]);
-  const g = API.makeBody({ length:190, stations:44, arcSegments:36, roofFlatness:1.3, wallThickness:1.8,
-    topProfile:[[0,10],[0.5,60],[1,20]], bottomProfile:[[0,2],[1,2]], widthProfile:[[0,10],[0.5,40],[1,16]],
-    mode:"loft", features:[{ kind:"poly", view:"side", poly:norm, depth:-3, soft:0.08 }] });
-  const r = manifold(g.indices);
-  ok(r.boundary === 0 && r.nonMani === 0, `${r.boundary} open edges from a PNG-derived feature`);
-});
-
-// =====================  10k. WHERE A MEASUREMENT COMES FROM  =====================
-// Reading a drawing: the side/top views give the length, the top view gives the width
-// along that length, and the front/rear views give the width head-on. Any of them should
-// be able to size the model, and a nudge shouldn't be wiped by touching a trace.
-t("measure: with no top view, the front view still gives the width", () => {
-  // frontHull is [[y mm, z mm], …]; the spread of y IS the width, measured head-on
-  const frontHull = [[-40, 5], [-30, 40], [0, 55], [30, 40], [40, 5]];
-  const xs = frontHull.map(q => q[0]);
-  const measured = Math.max(...xs) - Math.min(...xs);
-  near(measured, 80, 1e-9, "the front view should read 80mm across:");
-  // the slider profile gets scaled until it is that wide
-  const parProfile = [[0, 10], [0.5, 25], [1, 12]];
-  const par = 2 * Math.max(...parProfile.map(q => q[1]));
-  const k = measured / par;
-  const scaled = parProfile.map(p => [p[0], p[1] * k]);
-  near(2 * Math.max(...scaled.map(q => q[1])), 80, 1e-9, "after scaling it must be the measured width:");
-});
-t("measure: a slider nudge survives re-tracing", () => {
-  // you set 100mm on a drawing that measured 80 -> a ratio of 1.25
-  let natWid = 80, widMM = 100;
-  const widK = widMM / natWid;
-  near(widK, 1.25, 1e-9);
-  // now a trace point moves and the drawing re-measures at 84mm
-  natWid = 84;
-  const after = Math.max(1, Math.round(natWid * widK));
-  eq(after, 105, "the nudge should ride along, not be wiped back to 84:");
-  // and with no nudge (ratio 1) it just tracks the drawing
-  eq(Math.max(1, Math.round(84 * 1)), 84);
-});
-t("measure: length is anchored from the side/top views, width from top or front", () => {
-  // length: the side view's span over its own scale
-  near(API.anchorPxPerMm(380, null, 2, 200), 2, 1e-9, "side view sets px/mm:");
-  // the top view is then forced to agree about the length
-  near(API.anchorPxPerMm(190, 190, 99, 200), 1, 1e-9, "top view anchored to the same length:");
-  // and the front view is forced to agree about the width
-  near(API.anchorPxPerMm(160, 80, 99, 200), 2, 1e-9, "front view anchored to the same width:");
-});
-
-// =====================  10l. SHARP EDGES  =====================
-// The reason angular objects used to come out mushy: averaging the surface crossings in a
-// cell always rounds a corner off. Dual contouring solves for the point that satisfies
-// every crossing plane, so a corner lands ON the corner.
-const SQ = [[0.1,0.1],[0.9,0.1],[0.9,0.9],[0.1,0.9]];          // a hard-edged box
-const cube = crisp => API.makeBody({ mode:"projection", hullHollow:false, length:100, stations:36, hullCrisp:crisp,
-  sidePoly:SQ, topPoly:SQ, frontPoly:SQ, topProfile:[[0,60]], widthProfile:[[0,30]] });
-
-t("sharp: signed distance is negative inside, positive outside, zero on the edge", () => {
-  const sq = [[0,0],[10,0],[10,10],[0,10]];
-  ok(API.sdPoly(sq, 5, 5) < 0, "the middle should read inside");
-  near(API.sdPoly(sq, 5, 5), -5, 1e-6, "and 5mm from the nearest wall:");
-  ok(API.sdPoly(sq, 15, 5) > 0, "outside should read outside");
-  near(API.sdPoly(sq, 15, 5), 5, 1e-6, "5mm out:");
-  near(Math.abs(API.sdPoly(sq, 10, 5)), 0, 1e-6, "right on the edge should be zero:");
-});
-t("sharp: a boxy trace produces a boxy model, still watertight", () => {
-  const g = cube(0.9);
-  const r = manifold(g.indices);
-  ok(r.boundary === 0 && r.nonMani === 0, `${r.boundary} open edges, ${r.nonMani} non-manifold`);
-  ok(g.volume > 0, "no volume");
-});
-t("sharp: corners are crisp, not rounded off", () => {
-  // how square is it? compare the model's volume to the box it should fill.
-  const boxiness = g => {
-    let x0=1e9,x1=-1e9,y0=1e9,y1=-1e9,z0=1e9,z1=-1e9;
-    for (let i = 0; i < g.positions.length; i += 3) {
-      x0=Math.min(x0,g.positions[i]);   x1=Math.max(x1,g.positions[i]);
-      y0=Math.min(y0,g.positions[i+1]); y1=Math.max(y1,g.positions[i+1]);
-      z0=Math.min(z0,g.positions[i+2]); z1=Math.max(z1,g.positions[i+2]);
+  const B={x0,y0,z0,dx:Math.max(1e-6,x1-x0),dy:Math.max(1e-6,y1-y0),dz:Math.max(1e-6,z1-z0)};
+  let hits=0;
+  const cap=minWall(p);                 // you cannot press 3mm into a 1.8mm panel
+  for(const f of F){
+    if(!f.depth)continue;
+    if(!f.mask && (!f.poly||f.poly.length<3))continue;
+    const soft=Math.max(0.001,(f.soft??0.12));
+    const side=(f.view==="rear")?-1:1;                        // rear is traced mirrored
+    const flank=(f.view==="side"||f.view==="sideR");
+    for(let k=0;k<outer.length;k++){
+      const P=outer[k], nx=nrm[k];
+      /* Only the surface actually facing this view gets stamped — and every view has to be
+         named. "bottom" used to be tested against nx[0], the nose-facing component; an
+         underside normal is about (0,0,-1), so the test read ~0, failed the 0.05 gate, and
+         EVERY bottom-view feature was thrown away in silence. Measured: 0.00mm of dent on
+         all six faces. sideR fell through the same way and was tested as a front view. */
+      const face = flank                ? Math.abs(nx[1])
+                 : f.view==="top"       ?  nx[2]
+                 : f.view==="bottom"    ? -nx[2]
+                 :                         nx[0]*side;
+      if(flank){ if(face<0.25)continue; }
+      else if(face<=0.05)continue;
+      let [u,v]=viewUV(f.view,P[0],P[1],P[2],B);
+      // both are traced standing on the far side, so their length axis is mirrored
+      if(f.view==="rear"||f.view==="sideR")u=1-u;
+      if(u<-0.02||u>1.02||v<-0.02||v>1.02)continue;
+      let cover;
+      if(f.mask){ cover=sampleMask(f,u,v); if(cover<=0.004)continue; }
+      else {
+        if(!f.poly||!pointInPoly(f.poly,u,v))continue;
+        const d=distToPoly(f.poly,u,v), t=Math.min(1,d/soft); cover=t*t*(3-2*t);
+      }
+      const d=(f.depth<0)?Math.max(f.depth,-cap):f.depth;   // indents are held to the frame
+      const amt=d*cover;
+      if(!amt)continue;
+      outer[k][0]+=nx[0]*amt; outer[k][1]+=nx[1]*amt; outer[k][2]+=nx[2]*amt;
+      inner[k][0]+=nx[0]*amt; inner[k][1]+=nx[1]*amt; inner[k][2]+=nx[2]*amt;
+      hits++;
     }
-    return g.volume / Math.max(1e-9, (x1-x0)*(y1-y0)*(z1-z0));   // 1.0 = a perfect box
-  };
-  const crisp = boxiness(cube(1)), soft = boxiness(cube(0));
-  ok(crisp > 0.9, `a boxy trace should fill >90% of its bounding box, got ${(crisp*100).toFixed(1)}%`);
-  ok(crisp > soft, `crisp (${(crisp*100).toFixed(1)}%) should beat rounded (${(soft*100).toFixed(1)}%)`);
-});
-t("sharp: the crispness dial actually does something, and both ends are watertight", () => {
-  for (const c of [0, 0.5, 1]) {
-    const r = manifold(cube(c).indices);
-    ok(r.boundary === 0 && r.nonMani === 0, `crisp=${c}: ${r.boundary} open edges`);
   }
-});
-t("sharp: a round trace still comes out round (crispness doesn't wreck curves)", () => {
-  const circle = Array.from({ length: 40 }, (_, i) => {
-    const a = i / 40 * 2 * Math.PI; return [0.5 + 0.45 * Math.cos(a), 0.5 + 0.45 * Math.sin(a)];
-  });
-  const g = API.makeBody({ mode:"projection", hullHollow:false, length:100, stations:36, hullCrisp:0.9,
-    sidePoly:circle, topPoly:circle, frontPoly:circle, topProfile:[[0,100]], widthProfile:[[0,50]] });
-  const r = manifold(g.indices);
-  ok(r.boundary === 0 && r.nonMani === 0, `${r.boundary} open edges on a sphere`);
-  // a sphere fills ~52% of its bounding cube; a cube would be ~100%
-  let x0=1e9,x1=-1e9; for (let i=0;i<g.positions.length;i+=3){x0=Math.min(x0,g.positions[i]);x1=Math.max(x1,g.positions[i]);}
-  ok(g.volume > 0, "no volume");
-});
+  return hits;
+}
+// How thick the frame is at a given spot, decided by which way that spot FACES. Roof,
+// sides and floor can each be their own thickness; in between it blends, so there is no
+// seam and no change to the topology — it stays sealed whatever you pick.
+function wallSpec(p){
+  const base=Math.max(0.2,p.wallThickness??1.8);
+  return {top:Math.max(0.2,p.wallTop??base), side:Math.max(0.2,p.wallSide??base),
+          bot:Math.max(0.2,p.wallBottom??base), base};
+}
+function wallAt(n,W){
+  const up=Math.max(0,n[2]), down=Math.max(0,-n[2]), side=Math.hypot(n[0],n[1]);
+  const s=up+down+side; if(s<1e-9)return W.base;
+  return (W.top*up + W.bot*down + W.side*side)/s;
+}
+// The thinnest the frame ever gets — nothing pressed into it should go deeper than this,
+// or you are through the panel rather than shaping it.
+function minWall(p){const W=wallSpec(p);return Math.min(W.top,W.side,W.bot);}
+function makeBody(p){
+  if(p.shape==="revolve") return makeRevolve(p);        // round objects (sphere/cylinder/…)
+  if(p.shape==="lathe") return makeLathe(p);            // fountains, columns — turned upright
+  if(p.mode==="projection" && p.sidePoly && p.sidePoly.length>2) return makeVisualHull(p);  // any-shape solid
+  const N=Math.max(8,p.stations|0), M=Math.max(6,p.arcSegments|0);
+  const L=p.length, pow=p.roofFlatness??1, WSPEC=wallSpec(p);
+  /* THE SMOOTH BUILDER GETS THE SAME LEVELLED BASE AS THE EXACT ONE.
+     Levelling the base — reading the traced side view to find where the body comes down and
+     meets the ground, and finishing it flat there — was built into the exact builder and
+     never reached this one. So the same model finished on a flat plane under "follow my
+     drawing" and, under "smooth", just ran off the bottom: measured on this car, down to
+     1.5mm BELOW the ground the drawing sits on, with no flat base at all. Two builders
+     disagreeing about where an object ends is not a style choice, it is a bug, and it is
+     exactly what he noticed.
+     The same reading is used here, and each station's floor is lifted to it. */
+  const loftBase = p.closedBottom ? -Infinity
+    : baseCutZ((p.sidePoly&&p.sidePoly.length>2)
+        ? p.sidePoly.map(q=>[q[0]*L, q[1]*Math.max(8,Math.max(...p.topProfile.map(t=>t[1])))])
+        : null,
+      Math.max(8,Math.max(...p.topProfile.map(t=>t[1]))));
+  const rows=M+1; const gi=(i,j)=>i*rows+j;
+  const outer=new Array((N+1)*rows);
 
-// =====================  10m. REAL OPENINGS, NO SERVER  =====================
-// The lofted shell can only move the surface it has, so a window gets dented. The hull is
-// a distance field, so a window can be genuinely subtracted — an actual hole, in the
-// browser, with nothing to install. A hole means the shape gains a tunnel: same closed
-// surface, but no longer a simple ball — which is exactly what Euler's formula detects.
-const HULL_BOX = [[0.08,0.08],[0.92,0.08],[0.92,0.92],[0.08,0.92]];
-const hullWith = feats => API.makeBody({ mode:"projection", hullHollow:false, length:120, stations:40, hullCrisp:0.9,
-  sidePoly:HULL_BOX, topPoly:HULL_BOX, frontPoly:HULL_BOX,
-  topProfile:[[0,60]], widthProfile:[[0,25]], features:feats });
-// V - E + F for a closed surface: 2 = a ball, 0 = one tunnel through it
-function euler(g) {
-  const E = new Set();
-  const key = (a, b) => (a < b ? a + "_" + b : b + "_" + a);
-  const V = new Set();
-  for (let i = 0; i < g.indices.length; i += 3) {
-    const [a, b, c] = [g.indices[i], g.indices[i+1], g.indices[i+2]];
-    V.add(a); V.add(b); V.add(c);
-    E.add(key(a,b)); E.add(key(b,c)); E.add(key(c,a));
+  const sections=(p.sections&&p.sections.length)?p.sections:null;        // morph these along length
+  const singleSec=(!sections && p.section&&p.section.length>1)?p.section:null;
+  // Orthographic projection mode (unchanged): intersect side + front + top silhouettes.
+  const proj=(p.mode==="projection" && p.frontHull && p.frontHull.length>1);
+  const FH=proj?p.frontHull:null, fW=FH?Math.max(...FH.map(q=>Math.abs(q[0]))):0;
+  const fUp=FH?(yy)=>{
+    if(yy<=FH[0][0])return FH[0][1]; if(yy>=FH[FH.length-1][0])return FH[FH.length-1][1];
+    for(let k=0;k<FH.length-1;k++){const a=FH[k],b=FH[k+1];if(yy>=a[0]&&yy<=b[0]){const t=(b[0]-a[0])?(yy-a[0])/(b[0]-a[0]):0;return a[1]+(b[1]-a[1])*t;}}
+    return FH[FH.length-1][1];
+  }:null;
+  for(let i=0;i<=N;i++){
+    const xf=i/N, x=(xf-0.5)*L;
+    const zTop=sampleProfile(p.topProfile,xf);
+    let zBot=sampleProfile(p.bottomProfile,xf);
+    if(loftBase>-1e29 && zBot<loftBase) zBot=loftBase;      // finish flat where it meets the ground
+    const halfW=Math.max(0.05,sampleProfile(p.widthProfile,xf));
+    // A traced BOTTOM view gives the floor's own plan, which on a real car is narrower and
+    // a different shape from the body above it. Blend from the floor width up to the body
+    // width over the first third of the height — the section keeps the same point count, so
+    // the topology (and the seal) is untouched.
+    const halfWB=p.widthBottomProfile?Math.max(0.05,sampleProfile(p.widthBottomProfile,xf)):null;
+    const secHere = sections ? morphSections(sections,xf) : singleSec;   // cross-section at this station
+    const Y=proj?Math.max(0.05,Math.min(halfW,fW)):halfW;
+    for(let j=0;j<=M;j++){
+      const u=j/M;
+      let yNorm, z;
+      if(proj){
+        yNorm=2*u-1; const yy=yNorm*Y;
+        let zUp=Math.min(zTop, fUp(yy));
+        const e=(Math.abs(yNorm)-0.92)/0.08; if(e>0)zUp=zBot+(zUp-zBot)*(1-clamp(e,0,1));
+        z=Math.max(zBot,zUp);
+      } else if(secHere){ yNorm=2*u-1; z=zBot+(zTop-zBot)*clamp(sampleProfile(secHere,u),0,1.4); }
+      else { const th=Math.PI*u; yNorm=-Math.cos(th); z=zBot+(zTop-zBot)*Math.pow(Math.max(0,Math.sin(th)),pow); }
+      let W=Y;
+      if(halfWB!==null && !proj){
+        const zf=(zTop-zBot)>1e-6?clamp((z-zBot)/(zTop-zBot),0,1):0;
+        W = halfWB + (Y-halfWB)*smoothstep(Math.min(1, zf/0.35));
+      }
+      const y=yNorm*W;
+      outer[gi(i,j)]=[x,y,z];
+    }
   }
-  return V.size - E.size + g.indices.length / 3;
+  const tris=[];
+  for(let i=0;i<N;i++)for(let j=0;j<M;j++){
+    const a=gi(i,j),b=gi(i+1,j),c=gi(i+1,j+1),d=gi(i,j+1);
+    tris.push([a,b,c],[a,c,d]);
+  }
+  const nrm=Array.from({length:outer.length},()=>[0,0,0]);
+  const sub=(P,Q)=>[P[0]-Q[0],P[1]-Q[1],P[2]-Q[2]];
+  const crs=(U,V)=>[U[1]*V[2]-U[2]*V[1],U[2]*V[0]-U[0]*V[2],U[0]*V[1]-U[1]*V[0]];
+  for(const[a,b,c]of tris){const n=crs(sub(outer[b],outer[a]),sub(outer[c],outer[a]));
+    for(const k of[a,b,c]){nrm[k][0]+=n[0];nrm[k][1]+=n[1];nrm[k][2]+=n[2];}}
+  for(const n of nrm){const l=Math.hypot(n[0],n[1],n[2])||1;n[0]/=l;n[1]/=l;n[2]/=l;}
+  const inner=outer.map((P,k)=>{const t=wallAt(nrm[k],WSPEC);
+    return [P[0]-nrm[k][0]*t,P[1]-nrm[k][1]*t,P[2]-nrm[k][2]*t];});
+
+  // SCULPT: per-vertex trim(-)/add(+) along the outer normal, applied to BOTH shells
+  // together so wall thickness and topology are preserved (stays watertight).
+  const sc=p.sculpt;
+  if(sc && sc.length===outer.length){
+    for(let k=0;k<outer.length;k++){
+      const d=sc[k]; if(!d)continue; const n=nrm[k];
+      outer[k][0]+=n[0]*d; outer[k][1]+=n[1]*d; outer[k][2]+=n[2]*d;
+      inner[k][0]+=n[0]*d; inner[k][1]+=n[1]*d; inner[k][2]+=n[2]*d;
+    }
+  }
+
+  applyFeatures(p,outer,inner,nrm);      // windows / mirrors / vents, same watertight rule
+
+  const positions=[];
+  for(const P of outer)positions.push(P[0],P[1],P[2]);
+  const io=outer.length;
+  for(const P of inner)positions.push(P[0],P[1],P[2]);
+  const indices=[];
+  for(const[a,b,c]of tris)indices.push(a,b,c);
+  for(const[a,b,c]of tris)indices.push(io+a,io+c,io+b);
+  const loop=[];
+  for(let j=0;j<=M;j++)loop.push(gi(0,j));
+  for(let i=1;i<=N;i++)loop.push(gi(i,M));
+  for(let j=M-1;j>=0;j--)loop.push(gi(N,j));
+  for(let i=N-1;i>=1;i--)loop.push(gi(i,0));
+  for(let k=0;k<loop.length;k++){
+    const a=loop[k],b=loop[(k+1)%loop.length];
+    indices.push(a,b,io+b); indices.push(a,io+b,io+a);
+  }
+  // orient outward
+  let vol=0;
+  for(let k=0;k<indices.length;k+=3){
+    const A=indices[k]*3,B=indices[k+1]*3,C=indices[k+2]*3;
+    vol+=(positions[A]*(positions[B+1]*positions[C+2]-positions[B+2]*positions[C+1])
+        -positions[A+1]*(positions[B]*positions[C+2]-positions[B+2]*positions[C])
+        +positions[A+2]*(positions[B]*positions[C+1]-positions[B+1]*positions[C]))/6;
+  }
+  if(vol<0){for(let k=0;k<indices.length;k+=3){const t2=indices[k+1];indices[k+1]=indices[k+2];indices[k+2]=t2;}vol=-vol;}
+  return {positions,indices,volume:vol,hollow:true};
 }
 
-t("openings: a plain traced box is a plain closed shape", () => {
-  const g = hullWith([]);
-  const r = manifold(g.indices);
-  ok(r.boundary === 0 && r.nonMani === 0, "the plain box isn't sealed");
-  eq(euler(g), 2, "a box with no holes should have Euler characteristic 2:");
-});
-t("openings: a 'cut through' window puts a REAL hole in it, not a dent", () => {
-  const win = [{ kind:"poly", view:"side", depth:-4, through:true, soft:0.02,
-                 poly:[[0.35,0.35],[0.65,0.35],[0.65,0.65],[0.35,0.65]] }];
-  const g = hullWith(win);
-  const r = manifold(g.indices);
-  ok(r.boundary === 0 && r.nonMani === 0, `a hole must still leave it sealed: ${r.boundary} open edges`);
-  eq(euler(g), 0, "one tunnel through the body should give Euler characteristic 0 (2 - 2*1):");
-});
-t("openings: the same window WITHOUT 'cut through' only dents it", () => {
-  const dent = [{ kind:"poly", view:"side", depth:-4, through:false, soft:0.05,
-                  poly:[[0.35,0.35],[0.65,0.35],[0.65,0.65],[0.35,0.65]] }];
-  const g = hullWith(dent);
-  eq(euler(g), 2, "a dish must NOT punch through:");
-  ok(g.volume < hullWith([]).volume, "a dish should still remove material");
-});
-t("openings: two windows make two tunnels", () => {
-  const two = [
-    { kind:"poly", view:"side", depth:-4, through:true, soft:0.02, poly:[[0.2,0.35],[0.4,0.35],[0.4,0.65],[0.2,0.65]] },
-    { kind:"poly", view:"side", depth:-4, through:true, soft:0.02, poly:[[0.6,0.35],[0.8,0.35],[0.8,0.65],[0.6,0.65]] },
-  ];
-  const g = hullWith(two);
-  const r = manifold(g.indices);
-  ok(r.boundary === 0 && r.nonMani === 0, "two holes must still leave it sealed");
-  eq(euler(g), -2, "two tunnels should give 2 - 2*2 = -2:");
-});
-t("openings: a raised feature is never turned into a hole", () => {
-  const boss = [{ kind:"poly", view:"side", depth:3, through:true, soft:0.05,
-                  poly:[[0.35,0.35],[0.65,0.35],[0.65,0.65],[0.35,0.65]] }];
-  const g = hullWith(boss);
-  eq(euler(g), 2, "a bump marked 'through' must not cut a hole:");
-  ok(g.volume > hullWith([]).volume, "a bump should add material");
-});
-t("openings: a hole through the TOP view goes the other way and still seals", () => {
-  const roof = [{ kind:"poly", view:"top", depth:-4, through:true, soft:0.02,
-                  poly:[[0.4,0.35],[0.6,0.35],[0.6,0.65],[0.4,0.65]] }];
-  const g = hullWith(roof);
-  const r = manifold(g.indices);
-  ok(r.boundary === 0 && r.nonMani === 0, `${r.boundary} open edges`);
-  eq(euler(g), 0, "a sunroof is still one tunnel:");
-});
+/* Separate BOTTOM PLATE — its own watertight part, so the shell stays hollow.
+   Top follows the sill line (mates the shell); underside is a flat plane (prints
+   flat). Defaults to flat because the sill is flat unless a bottom is drawn.
+   This is the seam where a drawn/traced bottom object will plug in later. */
+function makeBottom(p){
+  const N=Math.max(8,Math.round(p.stations||72)), M=Math.max(6,Math.round((p.arcSegments||56)/2));
+  const L=p.length, plateT=Math.max(0.8,(p.wallThickness||1.8));
+  const rows=M+1, gi=(i,j)=>i*rows+j, topV=[]; let zFloor=Infinity;
+  const wProf=p.widthBottomProfile||p.widthProfile;      // follow the traced floor when there is one
+  for(let i=0;i<=N;i++){const xf=i/N,x=(xf-0.5)*L,hw=Math.max(0.05,sampleProfile(wProf,xf)),zb=Math.max(sampleProfile(p.bottomProfile,xf), loftBase>-1e29?loftBase:-Infinity);
+    if(zb<zFloor)zFloor=zb;
+    for(let j=0;j<=M;j++)topV[gi(i,j)]=[x,(2*j/M-1)*hw,zb];}
+  zFloor-=plateT;
+  const Vv=[...topV], io=topV.length;
+  for(let i=0;i<=N;i++){const xf=i/N,x=(xf-0.5)*L,hw=Math.max(0.05,sampleProfile(p.widthProfile,xf));
+    for(let j=0;j<=M;j++)Vv.push([x,(2*j/M-1)*hw,zFloor]);}
+  const idx=[];
+  for(let i=0;i<N;i++)for(let j=0;j<M;j++){const a=gi(i,j),b=gi(i+1,j),c=gi(i+1,j+1),d=gi(i,j+1);idx.push(a,c,b, a,d,c);}        // top face
+  for(let i=0;i<N;i++)for(let j=0;j<M;j++){const a=io+gi(i,j),b=io+gi(i+1,j),c=io+gi(i+1,j+1),d=io+gi(i,j+1);idx.push(a,b,c, a,c,d);} // flat underside
+  const wall=(a,b)=>{idx.push(a,b,io+b, a,io+b,io+a);};
+  for(let i=0;i<N;i++)wall(gi(i,0),gi(i+1,0));
+  for(let i=0;i<N;i++)wall(gi(i+1,M),gi(i,M));
+  for(let j=0;j<M;j++)wall(gi(0,j+1),gi(0,j));
+  for(let j=0;j<M;j++)wall(gi(N,j),gi(N,j+1));
+  const positions=new Float32Array(Vv.length*3); Vv.forEach((v,k)=>{positions[k*3]=v[0];positions[k*3+1]=v[1];positions[k*3+2]=v[2];});
+  let vol=0; for(let k=0;k<idx.length;k+=3){const A=idx[k]*3,B=idx[k+1]*3,C=idx[k+2]*3;
+    vol+=(positions[A]*(positions[B+1]*positions[C+2]-positions[B+2]*positions[C+1])-positions[A+1]*(positions[B]*positions[C+2]-positions[B+2]*positions[C])+positions[A+2]*(positions[B]*positions[C+1]-positions[B+1]*positions[C]))/6;}
+  if(vol<0){for(let k=0;k<idx.length;k+=3){const t=idx[k+1];idx[k+1]=idx[k+2];idx[k+2]=t;}vol=-vol;}
+  return {positions,indices:idx,volume:vol};
+}
 
-// =====================  10n. FRAME THICKNESS  =====================
-// How thick the frame is, per face, and the rule that nothing pressed in may go deeper
-// than the frame it is pressed into.
-const W_BASE = { length:190, stations:44, arcSegments:36, roofFlatness:1.3,
-  topProfile:[[0,10],[0.5,60],[1,20]], bottomProfile:[[0,2],[1,2]],
-  widthProfile:[[0,10],[0.5,40],[1,16]], mode:"loft" };
+/* ROUND OBJECTS — surface of revolution (sphere/cylinder/cone/dome, or revolve a
+   traced side silhouette). Revolves a radius-vs-length profile around the X axis
+   into a watertight closed solid. This is the path toward wheels/round parts. */
+/* A LATHE ABOUT THE VERTICAL AXIS — fountains, columns, bollards, planters.
+   A visual hull CANNOT do these. Measured on a fountain-shaped elevation with a circular
+   plan: the base, where the plan circle is the binding constraint, came out 1% out of round;
+   the stem and bowl came out 36% out of round, which is all but a square (a square is 41%).
+   The reason is structural, not a resolution problem — anywhere the object is narrower than
+   its widest plan circle, the hull's cross-section is side-width intersected with front-width,
+   and that is a rectangle. No grid refinement fixes it.
 
-t("thickness: one number still means a uniform frame", () => {
-  const W = API.wallSpec({ wallThickness: 2.5 });
-  eq(W.top, 2.5); eq(W.side, 2.5); eq(W.bot, 2.5);
-  near(API.wallAt([0,0,1], W), 2.5, 1e-9, "roof:");
-  near(API.wallAt([0,1,0], W), 2.5, 1e-9, "side:");
-});
-t("thickness: each face can be its own, and it blends in between", () => {
-  const W = API.wallSpec({ wallThickness:1.8, wallTop:4, wallSide:1, wallBottom:6 });
-  near(API.wallAt([0,0,1], W), 4, 1e-9, "straight up = roof:");
-  near(API.wallAt([0,1,0], W), 1, 1e-9, "sideways = side:");
-  near(API.wallAt([0,0,-1], W), 6, 1e-9, "straight down = floor:");
-  // a 45° shoulder should land between roof and side, not jump
-  const mid = API.wallAt([0, Math.SQRT1_2, Math.SQRT1_2], W);
-  ok(mid > 1 && mid < 4, `a blended corner should sit between 1 and 4, got ${mid}`);
-});
-t("thickness: the cap is the THINNEST face — that's what a feature can't exceed", () => {
-  eq(API.minWall({ wallThickness:1.8, wallTop:4, wallSide:1, wallBottom:6 }), 1);
-  eq(API.minWall({ wallThickness:2 }), 2);
-});
-t("thickness: a per-face frame is still watertight", () => {
-  for (const w of [{wallTop:4,wallSide:1,wallBottom:6}, {wallTop:0.5,wallSide:5,wallBottom:0.5}]) {
-    const g = API.makeBody({ ...W_BASE, wallThickness:1.8, ...w });
-    const r = manifold(g.indices);
-    ok(r.boundary === 0 && r.nonMani === 0, `${JSON.stringify(w)}: ${r.boundary} open edges`);
-    ok(g.volume > 0, "no volume");
-  }
-});
-t("thickness: a thicker frame is more material", () => {
-  const thin = API.makeBody({ ...W_BASE, wallThickness:0.8 });
-  const thick = API.makeBody({ ...W_BASE, wallThickness:4 });
-  ok(thick.volume > thin.volume * 2, `4mm should be far heavier than 0.8mm (${thick.volume.toFixed(0)} vs ${thin.volume.toFixed(0)})`);
-});
-t("thickness: a 3mm scoop on a 1.8mm frame is held to 1.8mm", () => {
-  const win = poly => [{ kind:"poly", view:"side", depth:-3, soft:0.06, poly }];
-  const P = [[0.35,0.4],[0.6,0.4],[0.6,0.7],[0.35,0.7]];
-  const plain = API.makeBody({ ...W_BASE, wallThickness:1.8 });
-  const deep  = API.makeBody({ ...W_BASE, wallThickness:1.8, features:win(P) });
-  const capped= API.makeBody({ ...W_BASE, wallThickness:1.8, features:[{...win(P)[0], depth:-1.8}] });
-  // asking for 3mm on a 1.8mm frame must give the same answer as asking for 1.8mm
-  let same = true;
-  for (let i = 0; i < deep.positions.length; i++)
-    if (Math.abs(deep.positions[i] - capped.positions[i]) > 1e-4) { same = false; break; }
-  ok(same, "a 3mm indent should have been held back to the 1.8mm frame");
-  ok(deep.volume !== plain.volume, "…but it should still have done something");
-});
-t("thickness: a deeper frame allows a deeper scoop", () => {
-  const P = [[0.35,0.4],[0.6,0.4],[0.6,0.7],[0.35,0.7]];
-  const f = [{ kind:"poly", view:"side", depth:-3, soft:0.06, poly:P }];
-  const onThin  = API.makeBody({ ...W_BASE, wallThickness:1, features:f });
-  const onThick = API.makeBody({ ...W_BASE, wallThickness:5, features:f });
-  let moved = 0;
-  for (let i = 0; i < onThin.positions.length; i++)
-    if (Math.abs(onThin.positions[i] - onThick.positions[i]) > 1e-4) moved++;
-  ok(moved > 0, "a 3mm scoop should press deeper into a 5mm frame than a 1mm one");
-  for (const g of [onThin, onThick]) {
-    const r = manifold(g.indices);
-    ok(r.boundary === 0 && r.nonMani === 0, "capping must not break the seal");
-  }
-});
-t("thickness: a cut-through is NOT capped — that's the point of it", () => {
-  const P = [[0.35,0.35],[0.65,0.35],[0.65,0.65],[0.35,0.65]];
-  const box = [[0.08,0.08],[0.92,0.08],[0.92,0.92],[0.08,0.92]];
-  const g = API.makeBody({ mode:"projection", hullHollow:false, length:120, stations:40, hullCrisp:0.9, wallThickness:1.8,
-    sidePoly:box, topPoly:box, frontPoly:box, topProfile:[[0,60]], widthProfile:[[0,25]],
-    features:[{ kind:"poly", view:"side", depth:-4, through:true, soft:0.02, poly:P }] });
-  const r = manifold(g.indices);
-  ok(r.boundary === 0 && r.nonMani === 0, "a through-cut must stay sealed");
-});
-
-// =====================  11. DOM CONTRACT  =====================
-// Every element the code reaches for must actually exist in the page. A missing
-// id doesn't throw for querySelector* — it silently matches nothing, so the
-// feature just quietly stops working. That is exactly how the Workshop tab
-// shipped unclickable: the handler was wired to "#mainTabs .tab" and no element
-// carried that id, so no listener was ever attached.
-const IDS = new Set([...html.matchAll(/id="([^"]+)"/g)].map(m => m[1]));
-
-t("dom: no duplicate ids", () => {
-  const all = [...html.matchAll(/id="([^"]+)"/g)].map(m => m[1]);
-  const dup = all.filter((v, i) => all.indexOf(v) !== i);
-  ok(dup.length === 0, "duplicated: " + [...new Set(dup)].join(", "));
-});
-t("dom: every getElementById target exists", () => {
-  const miss = [...new Set([...script.matchAll(/getElementById\(["'`]([^"'`]+)["'`]\)/g)]
-    .map(m => m[1]).filter(id => !IDS.has(id)))];
-  ok(miss.length === 0, "no such element: " + miss.join(", "));
-});
-t("dom: every querySelector('#id') target exists", () => {
-  const refs = [...script.matchAll(/querySelector(?:All)?\(\s*["'`]([^"'`]+)["'`]/g)].map(m => m[1]);
-  const miss = [...new Set(refs
-    .map(sel => (sel.trim().match(/^#([A-Za-z][\w-]*)/) || [])[1])
-    .filter(id => id && !IDS.has(id)))];
-  ok(miss.length === 0, "selector matches nothing: #" + miss.join(", #"));
-});
-t("dom: the tab bars are wired to elements that exist", () => {
-  for (const id of ["mainTabs", "subTabs"]) ok(IDS.has(id), "missing #" + id);
-  const mains = [...html.matchAll(/data-main="(\w+)"/g)].map(m => m[1]);
-  const subs = [...html.matchAll(/data-tab="(\w+)"/g)].map(m => m[1]);
-  ok(mains.includes("build") && mains.includes("workshop"), "main tabs: " + mains.join(","));
-  ok(["import", "trace", "three"].every(x => subs.includes(x)), "sub tabs: " + subs.join(","));
-  // and each tab must live inside the container its handler queries
-  const bar = html.match(/id="mainTabs"[\s\S]*?<\/div>\s*<div class="tabs subtabs"/);
-  ok(bar && /data-main="workshop"/.test(bar[0]), "the Workshop tab is not inside #mainTabs");
-});
-t("dom: every view the tabs switch to exists", () => {
-  for (const id of ["viewImport", "viewTrace", "viewThree", "viewWorkshop"]) ok(IDS.has(id), "missing #" + id);
-});
-
-// =====================  12. SHIP CONTRACT  =====================
-// index.html is the product. Anything that duplicates it will go stale and send
-// someone debugging a copy that isn't live.
-h("ship: index.html is the only copy of the studio", () => {
-  const root = path.join(HERE, "..");
-  const hits = [];
-  (function walk(dir, depth) {
-    if (depth > 4) return;
-    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (e.name === "node_modules" || e.name === ".git" || e.name === "test") continue;
-      const p = path.join(dir, e.name);
-      if (e.isDirectory()) walk(p, depth + 1);
-      else if (/\.html$/i.test(e.name) && p !== path.join(root, "index.html")) {
-        const txt = fs.readFileSync(p, "utf8");
-        if (txt.includes("LEE3D") && txt.includes("<canvas")) hits.push(path.relative(root, p));
+   `makeRevolve` already builds a watertight surface of revolution and is reused whole. It
+   turns about X, which suits a wheel; a fountain turns about vertical. The axes are permuted
+   CYCLICALLY (y,z,x), whose determinant is +1, so the winding `makeRevolve` already fixed
+   stays correct and the solid stays outward-facing. */
+function revProfileFromElevation(sidePoly, L){
+  if(!sidePoly || sidePoly.length < 3) return null;
+  const n = 48, out = [];
+  for(let i = 0; i <= n; i++){
+    const v = i / n;                        // height, normalised
+    let lo = Infinity, hi = -Infinity;      // the outline's horizontal span at this height
+    for(let k = 0; k < sidePoly.length; k++){
+      const a = sidePoly[k], b = sidePoly[(k + 1) % sidePoly.length];
+      if((a[1] > v) !== (b[1] > v)){
+        const x = a[0] + (b[0] - a[0]) * (v - a[1]) / ((b[1] - a[1]) || 1e-12);
+        if(x < lo) lo = x;
+        if(x > hi) hi = x;
       }
     }
-  })(root, 0);
-  ok(hits.length === 0, "duplicate studio copies that will drift: " + hits.join(", "));
-});
-t("ship: the deploy publishes index.html", () => {
-  const wf = path.join(HERE, "..", ".github", "workflows", "deploy.yml");
-  if (!fs.existsSync(wf)) return;                       // workflow not in this checkout
-  const y = fs.readFileSync(wf, "utf8");
-  ok(/cp index\.html _site\/index\.html/.test(y), "deploy.yml no longer stages index.html");
-  ok(/upload-pages-artifact/.test(y) && /path:\s*_site/.test(y), "deploy.yml doesn't upload _site");
-});
+    out.push([v, hi > lo ? (hi - lo) / 2 * L : 0]);   // half the span IS the radius
+  }
+  return out;
+}
+function makeLathe(p){
+  const H = Math.max(1, p.revHeight || p.length || 100);
+  const prof = (p.revProfileV && p.revProfileV.length > 1)
+    ? p.revProfileV
+    : revProfileFromElevation(p.sidePoly, p.length || 100);
+  const g = makeRevolve({...p, revProfile: prof || [[0,0],[0.5,50],[1,0]], revLen: H});
+  const P = g.positions, out = new Float32Array(P.length), h2 = H / 2;
+  for(let i = 0; i < P.length; i += 3){
+    out[i]     = P[i + 1];        // old Y  -> X
+    out[i + 1] = P[i + 2];        // old Z  -> Y
+    out[i + 2] = P[i] + h2;       // old X (the axis) -> Z, and sit the base on the floor
+  }
+  return {positions: out, indices: g.indices, volume: g.volume};
+}
+function makeRevolve(p){
+  const seg=Math.max(12,Math.round(p.arcSegments||56));
+  const prof=(p.revProfile&&p.revProfile.length>1)?p.revProfile:[[0,0],[0.5,50],[1,0]];
+  const L=p.revLen||p.length||100, eps=Math.max(0.02, L*0.001);
+  const rings=prof.length, V=[], start=[], pole=[];
+  for(let i=0;i<rings;i++){
+    const t=prof[i][0], r=Math.max(0,prof[i][1]), x=(t-0.5)*L;
+    start.push(V.length);
+    if(r<eps){pole.push(true); V.push([x,0,0]);}
+    else{pole.push(false); for(let j=0;j<seg;j++){const a=j/seg*2*Math.PI; V.push([x, r*Math.cos(a), r*Math.sin(a)]);}}
+  }
+  const idx=[];
+  for(let i=0;i<rings-1;i++){
+    const p0=pole[i],p1=pole[i+1],s0=start[i],s1=start[i+1];
+    if(p0&&p1)continue;
+    /* THE POLE FANS WERE WOUND BACKWARDS AGAINST THEIR NEIGHBOURING QUADS.
+       A side quad emits `s0+j -> s0+jn` on its LOWER ring and `s1+jn -> s1+j` on its UPPER one.
+       A fan meeting a ring must oppose whatever the quad on the other side of that ring did, or
+       the shared directed edge is traversed twice the SAME way and the surface is no longer
+       consistently oriented. Both fans matched their neighbour instead of opposing it.
 
-// =====================  12b. CSS CONTRACT  =====================
-// A rule for a class that doesn't exist is silently dead — the browser never complains,
-// it just does nothing. That's how a whole mobile layout shipped styling ".vp-bar" and
-// ".imp-bar", neither of which was ever a class in this app: every test passed and the
-// phone layout did nothing at all. Same failure as a querySelector that matches nothing.
-t("css: every selector targets something that actually exists", () => {
-  const css = html.slice(html.indexOf("<style>") + 7, html.indexOf("</style>"));
-  const rest = html.slice(0, html.indexOf("<style>")) + html.slice(html.indexOf("</style>"));
-  // pull class/id names out of selectors only (skip declaration blocks)
-  const names = new Set();
-  css.replace(/\{[^{}]*\}/g, "{}")                       // blank out declarations
-     .replace(/@media[^{]*/g, " ")                        // and media conditions
-     .replace(/([.#])(-?[A-Za-z_][\w-]*)/g, (_, sig, nm) => { names.add(sig + nm); return ""; });
-  // a class can also be added from JS, so accept the bare word anywhere outside the CSS
-  const phantom = [...names].filter(n => {
-    const bare = n.slice(1);
-    if (/^(on|active|sel|open|hide|primary|ghost|mono|disp|box|card|nm|tg|h|d|t|val)$/.test(bare)) return false;
-    return !new RegExp("\\b" + bare.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&") + "\\b").test(rest);
-  });
-  ok(phantom.length === 0, "these style rules match nothing and do nothing: " + phantom.join(", "));
-});
-t("css: no inline style silently beats the phone layout", () => {
-  // An inline style="" wins over any stylesheet rule, media query included. So a phone rule
-  // can be perfectly written, target a real element, and still do nothing — which is exactly
-  // how the import toolbar kept wrapping into four rows on a 390px screen while every test
-  // passed. If the phone layout sets a property, no element it targets may set that same
-  // property inline (unless the rule shouts !important).
-  const css = html.slice(html.indexOf("<style>"), html.indexOf("</style>"));
-  const mq = css.slice(css.indexOf("@media (max-width: 860px)"));
-  const clashes = [];
-  // every "#id{...}" rule inside the phone layout
-  for (const m of mq.matchAll(/#([A-Za-z][\w-]*)\s*\{([^}]*)\}/g)) {
-    const [, id, decls] = m;
-    const el = html.match(new RegExp('id="' + id + '"[^>]*'));
-    if (!el) continue;
-    const inline = (el[0].match(/style="([^"]*)"/) || [])[1];
-    if (!inline) continue;
-    for (const d of decls.split(";")) {
-      const prop = (d.split(":")[0] || "").trim();
-      if (!prop) continue;
-      if (new RegExp("(^|;)\\s*" + prop + "\\s*:").test(inline) && !/!important/.test(d))
-        clashes.push(`#${id} { ${prop} } is overridden by its own inline style`);
+       Nothing caught it: an edge-use count still reads two, so the mesh looks watertight, and
+       `checkManifold` says so. Only the SIGNED volume can see it, and the final `if(vol<0)`
+       flip cannot repair mixed winding — it flips everything, preserving the inconsistency.
+       Measured on a fountain profile with one pole: 56 bad directed edges, exactly one ring's
+       worth at z=88.1 just under the pole, and a volume of 341.1cm3 against an analytic truth
+       of 473.2 — 28% of the solid signed away. */
+    if(p0){for(let j=0;j<seg;j++){const jn=(j+1)%seg; idx.push(s0, s1+jn, s1+j);}}
+    else if(p1){for(let j=0;j<seg;j++){const jn=(j+1)%seg; idx.push(s1, s0+j, s0+jn);}}
+    else{for(let j=0;j<seg;j++){const jn=(j+1)%seg; idx.push(s0+j, s0+jn, s1+jn, s0+j, s1+jn, s1+j);}}
+  }
+  const cap=(i,dir)=>{ if(pole[i])return; const s=start[i], x=(prof[i][0]-0.5)*L, c=V.length; V.push([x,0,0]);
+    for(let j=0;j<seg;j++){const jn=(j+1)%seg; if(dir>0)idx.push(c,s+j,s+jn); else idx.push(c,s+jn,s+j);} };
+  cap(0,-1); cap(rings-1,1);
+  const positions=new Float32Array(V.length*3); V.forEach((v,k)=>{positions[k*3]=v[0];positions[k*3+1]=v[1];positions[k*3+2]=v[2];});
+  let vol=0; for(let k=0;k<idx.length;k+=3){const A=idx[k]*3,B=idx[k+1]*3,C=idx[k+2]*3;
+    vol+=(positions[A]*(positions[B+1]*positions[C+2]-positions[B+2]*positions[C+1])-positions[A+1]*(positions[B]*positions[C+2]-positions[B+2]*positions[C])+positions[A+2]*(positions[B]*positions[C+1]-positions[B+1]*positions[C]))/6;}
+  if(vol<0){for(let k=0;k<idx.length;k+=3){const t=idx[k+1];idx[k+1]=idx[k+2];idx[k+2]=t;}vol=-vol;}
+  return {positions,indices:idx,volume:vol};
+}
+function revLenFor(){const sp=S.revShape; if(sp==="sphere")return 2*(S.revSize||50); if(sp==="dome")return (S.revSize||50); return S.len;}
+function buildRevProfile(){
+  const n=32, R=S.revSize||50, shape=S.revShape||"sphere", out=[];
+  if(shape==="traced"){ const top=buildTop(), bot=buildBottom();
+    for(let i=0;i<=n;i++){const t=i/n; out.push([t, Math.max(0,(sampleProfile(top,t)-sampleProfile(bot,t))/2)]);}
+    return out; }
+  const f={sphere:t=>Math.sin(Math.PI*t), dome:t=>Math.cos(Math.PI/2*t), cone:t=>1-t, cylinder:t=>1}[shape]||(t=>Math.sin(Math.PI*t));
+  for(let i=0;i<=n;i++){const t=i/n; out.push([t, R*f(t)]);}
+  return out;
+}
+/* VISUAL HULL — the general "considers any shape" reconstruction. Carves the 3D volume
+   that lies inside ALL traced silhouettes (side ∩ top ∩ front), then meshes it with
+   Naive Surface Nets into a watertight solid. Handles shapes a sweep/loft cannot. */
+function pointInPoly(poly,x,y){let ins=false;
+  for(let i=0,j=poly.length-1;i<poly.length;j=i++){const xi=poly[i][0],yi=poly[i][1],xj=poly[j][0],yj=poly[j][1];
+    if(((yi>y)!==(yj>y))&&(x<(xj-xi)*(y-yi)/((yj-yi)||1e-9)+xi))ins=!ins;}
+  return ins;}
+// Signed distance to a polygon: negative inside, positive outside, in real mm. Knowing
+// HOW FAR (not just in/out) is what lets corners come out sharp instead of rounded.
+function sdPoly(poly,x,y){
+  let d=Infinity, inside=false;
+  for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+    const ax=poly[j][0],ay=poly[j][1],bx=poly[i][0],by=poly[i][1];
+    const ex=bx-ax,ey=by-ay, L2=ex*ex+ey*ey;
+    let t=L2?((x-ax)*ex+(y-ay)*ey)/L2:0; t=t<0?0:t>1?1:t;
+    const px=ax+ex*t-x, py=ay+ey*t-y, dd=px*px+py*py;
+    if(dd<d)d=dd;
+    if(((ay>y)!==(by>y)) && (x<(bx-ax)*(y-ay)/((by-ay)||1e-9)+ax))inside=!inside;
+  }
+  return (inside?-1:1)*Math.sqrt(d);
+}
+/* SCULPT for the hull (follow-my-drawing). The loft's sculpt is a per-grid-vertex offset,
+   which the dual-contouring hull has no equivalent for. Instead a hull sculpt is a list of
+   brush strokes in MODEL space; they replay on the freshly-built surface every rebuild and
+   bake straight into exports. add/trim push the surface along its normal; smooth relaxes a
+   vertex toward its one-ring neighbours. Applied to the OUTER surface BEFORE it's hollowed,
+   so the inner wall follows the sculpted shape at the same thickness. Deterministic build +
+   ordered strokes means the live preview and the rebuilt result agree. */
+function hullVertexNormals(positions,indices){
+  const n=positions.length/3, nrm=new Float32Array(positions.length);
+  for(let q=0;q<indices.length;q+=3){const a=indices[q],b=indices[q+1],c=indices[q+2];
+    const ax=positions[a*3],ay=positions[a*3+1],az=positions[a*3+2];
+    const ux=positions[b*3]-ax,uy=positions[b*3+1]-ay,uz=positions[b*3+2]-az;
+    const vx=positions[c*3]-ax,vy=positions[c*3+1]-ay,vz=positions[c*3+2]-az;
+    const fx=uy*vz-uz*vy,fy=uz*vx-ux*vz,fz=ux*vy-uy*vx;
+    for(const k of [a,b,c]){nrm[k*3]+=fx;nrm[k*3+1]+=fy;nrm[k*3+2]+=fz;}}
+  for(let k=0;k<n;k++){const l=Math.hypot(nrm[k*3],nrm[k*3+1],nrm[k*3+2])||1;nrm[k*3]/=l;nrm[k*3+1]/=l;nrm[k*3+2]/=l;}
+  return nrm;
+}
+function hullAdjacency(positions,indices){
+  const n=positions.length/3, adj=Array.from({length:n},()=>new Set());
+  for(let q=0;q<indices.length;q+=3){const a=indices[q],b=indices[q+1],c=indices[q+2];
+    adj[a].add(b);adj[a].add(c);adj[b].add(a);adj[b].add(c);adj[c].add(a);adj[c].add(b);}
+  return adj.map(s=>[...s]);
+}
+// apply ONE stroke to a position buffer in place. Iterates the OUTER vertices [0,vc); if an
+// inner copy exists (positions longer than vc), the paired inner vertex moves the same way so
+// wall thickness is preserved.
+function applyStroke(positions,nrm,adj,s,vc){
+  const r=s.r, r2=r*r, hasInner=positions.length>vc*3;
+  const hit=[];
+  for(let k=0;k<vc;k++){const dx=positions[k*3]-s.x,dy=positions[k*3+1]-s.y,dz=positions[k*3+2]-s.z,d2=dx*dx+dy*dy+dz*dz;
+    if(d2<r2)hit.push([k,1-Math.sqrt(d2)/r]);}
+  const move=(k,vx,vy,vz)=>{positions[k*3]+=vx;positions[k*3+1]+=vy;positions[k*3+2]+=vz;
+    if(hasInner){const m=vc+k; if(m*3+2<positions.length){positions[m*3]+=vx;positions[m*3+1]+=vy;positions[m*3+2]+=vz;}}};
+  if(s.mode==="smooth"){
+    const tgt=hit.map(([k])=>{const nb=adj&&adj[k]; if(!nb||!nb.length)return null;
+      let sx=0,sy=0,sz=0; for(const j of nb){sx+=positions[j*3];sy+=positions[j*3+1];sz+=positions[j*3+2];}
+      return [sx/nb.length,sy/nb.length,sz/nb.length];});
+    for(let i=0;i<hit.length;i++){const [k,fall]=hit[i],t=tgt[i]; if(!t)continue;
+      const w=Math.min(1,s.amt*0.5)*fall;
+      move(k,(t[0]-positions[k*3])*w,(t[1]-positions[k*3+1])*w,(t[2]-positions[k*3+2])*w);}
+  } else {
+    const dir=s.mode==="trim"?-1:1;
+    for(const [k,fall] of hit){const e=s.amt*dir*fall*fall; move(k,nrm[k*3]*e,nrm[k*3+1]*e,nrm[k*3+2]*e);}
+  }
+}
+function applyHullStrokes(positions,indices,strokes){
+  if(!strokes||!strokes.length)return;
+  const vc=positions.length/3;                       // pre-hollow: everything here is outer
+  const nrm=hullVertexNormals(positions,indices);
+  const adj=strokes.some(s=>s.mode==="smooth")?hullAdjacency(positions,indices):null;
+  for(const s of strokes)applyStroke(positions,nrm,adj,s,vc);
+}
+/* Which vertices are actually SEEN from a view — the outermost skin along that axis.
+   The smooth body could stamp any vertex facing the view, because a swept loft has no inside:
+   every side-facing point is on the outside. The hull does have insides — the walls inside a
+   wheel arch face sideways too, and so does the inner shell — so "faces the view" alone pressed
+   the drawing onto surfaces buried inside the model. This is a depth buffer along the view axis:
+   a vertex counts as seen only where it is the nearest surface to the viewer in its column. */
+function viewSkinVerts(positions,indices,axis){
+  const n=positions.length/3;
+  const A=axis, U=(axis+1)%3, V=(axis+2)%3;
+  let u0=1e30,u1=-1e30,v0=1e30,v1=-1e30;
+  for(let k=0;k<n;k++){const u=positions[k*3+U],v=positions[k*3+V];
+    if(u<u0)u0=u; if(u>u1)u1=u; if(v<v0)v0=v; if(v>v1)v1=v;}
+  const su=Math.max(1e-6,u1-u0), sv=Math.max(1e-6,v1-v0);
+  const G=96, cu=G/su, cv=G/sv;
+  const hi=new Float64Array(G*G).fill(-Infinity), lo=new Float64Array(G*G).fill(Infinity);
+  const cell=k=>{
+    const i=Math.max(0,Math.min(G-1,Math.floor((positions[k*3+U]-u0)*cu)));
+    const j=Math.max(0,Math.min(G-1,Math.floor((positions[k*3+V]-v0)*cv)));
+    return j*G+i;};
+  for(let k=0;k<n;k++){const o=cell(k), a=positions[k*3+A];
+    if(a>hi[o])hi[o]=a; if(a<lo[o])lo[o]=a;}
+  const tol=Math.max(su,sv)/G*1.5;
+  const outer=new Uint8Array(n), inner=new Uint8Array(n);
+  for(let k=0;k<n;k++){const o=cell(k), a=positions[k*3+A];
+    if(a>=hi[o]-tol)outer[k]=1;                      // nearest surface from the + side
+    if(a<=lo[o]+tol)inner[k]=1;}                     // nearest surface from the - side
+  return {outer,inner};
+}
+/* Stamp traced detail onto the BUILT surface, on the face it was drawn on.
+   In the distance field a feature moves every surface at that spot, whichever way it faces, so
+   side-view detail got pressed into the wheel-arch ceilings, the floor and the inside of the
+   shell — the model came out ribbed everywhere instead of only on its sides. This runs the smooth
+   body's own applyFeatures pass over the hull's vertices, gated so only the outermost skin for
+   that view is touched, then backs off any push that would turn a triangle inside-out (that tearing
+   is what opened holes in the shell). Cut-throughs are NOT stamped — a real hole is cut in the
+   field, and it already is. */
+function embossHull(p,positions,indices,crisp,wall){
+  // a cut-through is only a real hole when it goes INWARD; "through" with a positive depth is
+  // a raised bump, so it gets stamped like any other detail (same rule the field uses)
+  if(p.plainFrame) return 0;                       // "Plain frame" — press nothing into the skin
+  /* A BLOCK OF STOCK, AND EVERYTHING ELSE CUT AWAY.
+     Three kinds of shape come out of a drawing, not two:
+       depth < 0   carve it away  — now done in the DISTANCE FIELD (makeVisualHull), where a
+                   pocket is a real prism with a flat floor at the exact asked depth and the
+                   surface cannot fold, so it is no longer stamped here at all. Stamping it as
+                   well was double-cutting every pocket to twice its depth.
+       depth = 0   LEAVE IT STANDING — the mask, how a badge pops out
+       depth > 0   RAISE it proud of the skin
+     Raises and masks still live here: a raise adds material outside the surface, which the
+     field (built before the surface exists) is the wrong place for, and a mask only protects
+     what the carves around it remove. Negative carves have moved to the field. */
+  /* NOTHING IS STAMPED ON THE MESH ANY MORE — the field does all of it.
+     The carve rewrite moved negative depths into the distance field and left this filter
+     selecting `depth>0`, on the reasoning that a raise adds material outside the surface and
+     the field is built before the surface exists. But the field block DOES build raises — it
+     has a boss branch, and the grid padding is sized from the tallest raise specifically so
+     there is room for one. So every raise was being built twice: once as a real boss in the
+     field, then again as a vertex push here. Measured on a plain block: a 2mm badge stood
+     4.40mm proud and a 6mm badge stood 13.64mm. With the stamp removed the field alone gives
+     2.00mm and 3.00mm, exact.
+     Masks were never in this list (they are depth 0), and through-cuts are handled
+     separately, so this leaves nothing for the stamp to do. The call below is kept as a
+     no-op rather than torn out, because sculpt strokes still run through the same path. */
+  /* p.carveMode picks which of the two carving engines runs. Both are kept deliberately:
+       "field"  (default) — features are prisms in the distance field, meshed with the body.
+                            Exact depths, and the cavity follows a pocket so the wall under it
+                            stays the thickness asked for.
+       "stamp"            — the original: mesh the plain body, then push the vertices under
+                            each outline. Much faster on a heavily-featured model, and the
+                            only path the exact-STEP backend has ever seen.
+     The stamp path needs the vertex list here; the field path has already done the work in
+     F() and must NOT stamp on top of it, or every raise is built twice. That double-build is
+     a real bug this project shipped once: a 2mm badge stood 4.40mm proud. */
+  const stampMode = p.carveMode==="stamp";
+  const carves = stampMode
+    ? (p.features||[]).filter(f=>f.depth && !f.through && f.poly && f.poly.length>2)
+    : [];
+  const masks =(p.features||[]).filter(f=>!f.depth && f.poly && f.poly.length>2);
+  const list=carves;
+  if((!list.length && !masks.length) || crisp<=0.001) return 0;
+  const n=positions.length/3;
+  const before=new Float32Array(positions);
+  const nf=hullVertexNormals(positions,indices);
+  // The tallest raise anyone asked for on this model, so a badge can stand as proud as the
+  // slider says. Floored at the wall so behaviour never gets tighter than it used to be.
+  const OUT_LIM=Math.max((wall||2), ...list.map(f=>Math.max(0, +f.depth||0)), 0.05);
+  const skin={};                                     // view axis -> which vertices that view can see
+  // sideR is a FLANK view like side (axis 1). It used to land on axis 0 and stamp the nose.
+  const axOf=v=>(v==="side"||v==="sideR")?1:(v==="top"||v==="bottom")?2:0;
+  // With a second side traced the two flanks are genuinely different, so each drawing may
+  // only stamp its own. With one drawing the body is symmetric and it stamps both.
+  const twoSided=!!(p.sidePolyR&&p.sidePolyR.length>2);
+  for(const f of list){ const ax=axOf(f.view||"side");
+    if(!skin[ax])skin[ax]=viewSkinVerts(positions,indices,ax); }
+  const pts=new Array(n), nrm=new Array(n), spare=new Array(n);
+  for(let k=0;k<n;k++){
+    pts[k]=[positions[k*3],positions[k*3+1],positions[k*3+2]];
+    nrm[k]=[nf[k*3],nf[k*3+1],nf[k*3+2]];
+    spare[k]=[0,0,0];                                // the inner wall is built later, from this
+  }
+  let hits=0;
+  /* NESTED SHAPES SHADE, THEY DO NOT DIG.
+     Every feature used to be stamped onto the result of the one before it, so a grille drawn
+     inside a bumper panel drawn inside a wing was pressed three times over and sank into a
+     pit. Measured at -2.0mm asked on each: the badge centre came out at 2.77mm, which is not
+     2.0 — it is the total-travel ceiling, the only thing that was stopping it reaching 6. A
+     drawing is a drawing, not a stack of cuts: a point inside three outlines is one point on
+     one panel, and it should sit at the depth of whichever shape asked for most, not their
+     sum. So each feature is now worked out against the ORIGINAL surface, and the largest
+     single displacement at each vertex wins. */
+  const acc=new Float32Array(n*3);
+  const work=new Array(n);
+  for(const f of list){
+    const v=f.view||"side", ax=axOf(v), S=skin[ax];
+    // hide every vertex this view cannot see, by zeroing its normal — applyFeatures skips those
+    const keep=[];
+    for(let k=0;k<n;k++){
+      const seen = (v==="side")   ? (twoSided ? !!S.inner[k]      // its own flank only
+                                              : (S.outer[k]||S.inner[k]))  // symmetric: both
+                 : (v==="sideR")  ? !!S.outer[k]                  // the far flank, the one it draws
+                 : (v==="top")    ? !!S.outer[k]
+                 : (v==="bottom") ? !!S.inner[k]
+                 : (v==="rear")   ? !!S.inner[k] : !!S.outer[k];
+      if(!seen){ keep.push([k,nrm[k]]); nrm[k]=[0,0,0]; }
+    }
+    // an indent may never reach the inner wall, or it would open a hole into the frame
+    const lim=Math.max(0.05,(wall||2)*0.5);
+    /* RAISING IS NOT PRESSING, AND IT DOES NOT ANSWER TO THE WALL.
+       Pressing in is limited by how much frame there is behind the surface — go further and
+       you are through the panel. Raising ADDS material on the outside of the skin: there is
+       nothing there to breach, so the wall has no say in it. Both were sharing the same
+       clamp, so a badge asked to stand 6mm proud came out at 2.77mm on a 4.1mm frame, and
+       thickening the frame to get a taller badge made no sense to anyone. Outward travel is
+       now limited only by the slider, with the gradient limiter below still stopping the
+       sheet folding over itself. */
+    const dep=f.depth<0?Math.max(f.depth,-lim):Math.min(f.depth,OUT_LIM);
+    // start this one from the untouched surface, not from where the last feature left it
+    for(let k=0;k<n;k++)work[k]=[before[k*3],before[k*3+1],before[k*3+2]];
+    hits+=applyFeatures({...p,features:[{...f,depth:dep*crisp}]},work,spare,nrm);
+    for(let k=0;k<n;k++){
+      const dx=work[k][0]-before[k*3], dy=work[k][1]-before[k*3+1], dz=work[k][2]-before[k*3+2];
+      const m=dx*dx+dy*dy+dz*dz, a=acc[k*3], b=acc[k*3+1], c=acc[k*3+2];
+      if(m>a*a+b*b+c*c){ acc[k*3]=dx; acc[k*3+1]=dy; acc[k*3+2]=dz; }
+    }
+    for(const [k,v2] of keep)nrm[k]=v2;              // restore for the next feature
+  }
+  /* Now put back whatever the masks say to leave alone. Running the mask's own outline
+     through the same stamper with a unit depth gives a 0..1 strength per vertex for free —
+     full inside the shape, easing off across its soft edge — so the mask's own Soft edge
+     slider controls how sharply the carving stops at it. */
+  for(const f of masks){
+    const v=f.view||"side", ax=axOf(v), S=skin[ax]||(skin[ax]=viewSkinVerts(positions,indices,ax));
+    const keep=[];
+    for(let k=0;k<n;k++){
+      const seen = (v==="side")   ? (twoSided ? !!S.inner[k] : (S.outer[k]||S.inner[k]))
+                 : (v==="sideR")  ? !!S.outer[k]
+                 : (v==="top")    ? !!S.outer[k]
+                 : (v==="bottom") ? !!S.inner[k]
+                 : (v==="rear")   ? !!S.inner[k] : !!S.outer[k];
+      if(!seen){ keep.push([k,nrm[k]]); nrm[k]=[0,0,0]; }
+    }
+    for(let k=0;k<n;k++)work[k]=[before[k*3],before[k*3+1],before[k*3+2]];
+    applyFeatures({...p,features:[{...f,depth:-1}]},work,spare,nrm);
+    /* Normalise against this mask's OWN strongest point rather than trusting the unit stamp
+       to reach 1. A shape only a few grid cells across never plateaus — measured, a 10mm
+       pony peaked at 0.59, so it was only ever 59% protected and stood 1.18mm proud of a
+       2mm cut instead of the full 2. Dividing through by the peak makes a small badge hold
+       as firmly as a big panel, which is what "leave this alone" has to mean. */
+    let peak=0;
+    for(let k=0;k<n;k++){
+      const d=Math.hypot(work[k][0]-before[k*3],work[k][1]-before[k*3+1],work[k][2]-before[k*3+2]);
+      if(d>peak)peak=d;
+    }
+    if(peak<=1e-6){ for(const [k,v2] of keep)nrm[k]=v2; continue; }
+    for(let k=0;k<n;k++){
+      const dx=work[k][0]-before[k*3], dy=work[k][1]-before[k*3+1], dz=work[k][2]-before[k*3+2];
+      const hold=Math.min(1,Math.hypot(dx,dy,dz)/peak);   // 1 = leave it entirely alone
+      if(hold<=0.001)continue;
+      acc[k*3]*=(1-hold); acc[k*3+1]*=(1-hold); acc[k*3+2]*=(1-hold);
+    }
+    for(const [k,v2] of keep)nrm[k]=v2;
+    hits++;
+  }
+  // the winner at each vertex becomes the surface the limiter below works on
+  for(let k=0;k<n;k++){
+    pts[k][0]=before[k*3]+acc[k*3];
+    pts[k][1]=before[k*3+1]+acc[k*3+1];
+    pts[k][2]=before[k*3+2]+acc[k*3+2];
+  }
+  /* Every stamp is capped, but stamps ADD — traced detail nests (a vent inside a panel inside
+     a door), and a vertex sitting under five nested outlines was pressed five times: measured
+     12.65mm of travel from features drawn 2.5mm deep. That much travel crushes the hood, folds
+     the rocker skin up into the wheel arches (the floating planks seen through the arch), and
+     hands the underside detector a surface it can't read. Detail within detail still shows —
+     each stamp keeps its own edge ramp — but the TOTAL travel of any vertex is now held to a
+     whisker over one full stamp, so nesting can shade, never excavate. */
+  /* A FOLD IS NOT A DENT.
+     The mesher puts one vertex per grid cell, so on this car the surface is described about
+     every 2.8mm. A stamp that shoves one vertex 3.5mm while its neighbour barely moves lifts
+     the sheet clean over itself, and the trapped sliver — measured at one cell thick — is the
+     plank you see through a wheel arch. The existing back-off pass can't catch it: during a
+     lap like that every individual triangle stays correctly wound.
+
+     But the thing that folds a sheet is not how FAR it is pushed, it is how sharply the push
+     changes from one point to the next. Capping the distance alone throws away depth
+     everywhere to stop tearing in a few places — a broad, gently-sloped pocket is perfectly
+     safe at full depth. So the limit belongs on the DIFFERENCE between neighbours: no two
+     adjacent vertices may end up displaced by more than a fraction of the distance between
+     them. Relaxing that difference lets a wide feature keep its depth and only softens
+     detail finer than the grid can carry — which is detail the mesh was never able to
+     represent honestly in the first place. */
+  {
+    const edges=[]; const eSeen=new Set();
+    for(let q=0;q<indices.length;q+=3){
+      const t=[indices[q],indices[q+1],indices[q+2]];
+      for(const [a,b] of [[t[0],t[1]],[t[1],t[2]],[t[2],t[0]]]){
+        const k=a<b?a+"_"+b:b+"_"+a; if(eSeen.has(k))continue; eSeen.add(k);
+        const dx=before[a*3]-before[b*3], dy=before[a*3+1]-before[b*3+1], dz=before[a*3+2]-before[b*3+2];
+        const L=Math.hypot(dx,dy,dz); if(L>1e-9)edges.push([a,b,L]);
+      }
+    }
+    const D=new Float64Array(n*3);
+    for(let k=0;k<n;k++){D[k*3]=pts[k][0]-before[k*3];D[k*3+1]=pts[k][1]-before[k*3+1];D[k*3+2]=pts[k][2]-before[k*3+2];}
+    const SLOPE=0.25;                       /* how sharply the push may change between neighbours.
+        Swept against the origami check: 0.62 tore 18 of 340 columns, 0.35 tore 8, and from
+        0.28 down nothing tears at all — while the deepest detail stays at the full 3.51mm
+        the cap allows, at every setting. So this costs no depth whatsoever; it only stops
+        the push changing faster than the mesh can describe. 0.25 sits below the knee with
+        room to spare, since a coarser grid or a bolder drawing moves that knee. */
+    for(let pass=0;pass<24;pass++){
+      let worst=0;
+      for(const [a,b,L] of edges){
+        const dx=D[a*3]-D[b*3], dy=D[a*3+1]-D[b*3+1], dz=D[a*3+2]-D[b*3+2];
+        const m=Math.hypot(dx,dy,dz), lim=L*SLOPE;
+        if(m<=lim)continue;
+        if(m-lim>worst)worst=m-lim;
+        const s=(m-lim)/(2*m);
+        D[a*3]-=dx*s; D[a*3+1]-=dy*s; D[a*3+2]-=dz*s;
+        D[b*3]+=dx*s; D[b*3+1]+=dy*s; D[b*3+2]+=dz*s;
+      }
+      if(worst<0.01)break;
+    }
+    // and the absolute ceiling still stands: nesting may shade a panel, never excavate it.
+    // Inward is held to the frame; outward is held to what was actually asked for, because
+    // material added outside the skin cannot break through anything.
+    const capIn=Math.max(0.05,(wall||2)*0.5)*1.35;
+    for(let k=0;k<n;k++){
+      let dx=D[k*3],dy=D[k*3+1],dz=D[k*3+2];
+      const dl=Math.hypot(dx,dy,dz);
+      // which way did this vertex travel relative to the surface it sits on?
+      const nk=nrm[k]||[0,0,0];
+      const outward=(dx*nk[0]+dy*nk[1]+dz*nk[2])>0;
+      const cap=outward?OUT_LIM*1.35:capIn;
+      if(dl>cap){const f2=cap/dl; dx*=f2;dy*=f2;dz*=f2;}
+      pts[k][0]=before[k*3]+dx; pts[k][1]=before[k*3+1]+dy; pts[k][2]=before[k*3+2]+dz;
     }
   }
-  ok(clashes.length === 0, clashes.join("; "));
-});
-t("css: layout that must change on a phone isn't nailed down inline", () => {
-  // flex-wrap on a toolbar decides whether a phone gets a scrolling strip or a wall of
-  // rows, so it belongs in CSS where a media query can reach it
-  ok(!/class="trace-bar"[^>]*style="[^"]*flex-wrap/.test(html),
-     "the toolbar's flex-wrap is pinned inline; the phone layout can't override it");
-  ok(html.includes('class="trace-bar wrap"'), "use a class for wrapping so it stays overridable");
-});
-t("css: there is exactly ONE phone layout, not two fighting each other", () => {
-  // A second, older phone layout was still in this file — further down, and at a WIDER
-  // breakpoint (880px vs 860px). Later + same specificity means it won every conflict, so
-  // the new layout was overridden by a layout nobody remembered writing. It capped the
-  // stage at 46vh, which is why half the screen was dead space.
-  const css = html.slice(html.indexOf("<style>"), html.indexOf("</style>"));
-  const bps = [...css.matchAll(/@media\s*\(\s*max-width:\s*(\d+)px\s*\)/g)].map(m => +m[1]);
-  const dupes = bps.filter((v, i) => bps.indexOf(v) !== i);
-  ok(dupes.length === 0, "duplicate breakpoints: " + dupes.join(", "));
-  // they must get narrower as you read down, or a wider one overrides a narrower one
-  const sorted = [...bps].sort((a, b) => b - a);
-  ok(JSON.stringify(bps) === JSON.stringify(sorted),
-     `breakpoints must run widest-first, got ${bps.join(" then ")} — a later, wider query silently wins`);
-});
-t("css: the stage is never capped to part of the screen on a phone", () => {
-  const css = html.slice(html.indexOf("<style>"), html.indexOf("</style>"));
-  const rules = css.replace(/\/\*[\s\S]*?\*\//g, "");           // ignore comments
-  ok(!/grid-template-rows:\s*\d+vh/.test(rules.replace(/\s+/g, "")),
-     "a vh-capped row leaves dead space under the drawing; let it fill");
-});
-t("css: the mobile rules target the real toolbar", () => {
-  const css = html.slice(html.indexOf("<style>"), html.indexOf("</style>"));
-  const mq = css.slice(css.indexOf("@media (max-width: 860px)"));
-  ok(mq.includes(".trace-bar"), "the toolbars are .trace-bar — style that, not an invented name");
-  ok(!/\.(vp|imp)-bar/.test(css), "those class names have never existed in this app");
-});
-t("css: a bare .btn in the header can't stretch across the screen", () => {
-  const css = html.slice(html.indexOf("<style>"), html.indexOf("</style>"));
-  // .btn is width:100% by design (it's built for the sidebar), so anything using it
-  // outside a row container has to opt out or it takes a whole line to itself
-  ok(/\.btn\{[^}]*width:100%/.test(css.replace(/\s+/g, "")), "assumption changed: .btn is no longer full-width");
-  ok(/#railBtn\{[^}]*width:auto/.test(css.replace(/\s+/g, "")), "#railBtn must opt out of the full-width default");
-});
-
-// =====================  13. MOBILE  =====================
-// Collin drives this from a phone and his neighbour's machine barely runs it. The layout
-// has to fold, and — more importantly — every tool has to stay REACHABLE. Panning used to
-// need a right-click, which a phone does not have, so it simply could not be done.
-const CSS = html.slice(html.indexOf("<style>"), html.indexOf("</style>"));
-
-t("mobile: there's a small-screen layout at all", () => {
-  ok(/@media\s*\(max-width:\s*860px\)/.test(CSS), "no phone breakpoint");
-  ok(/@media\s*\(max-width:\s*420px\)/.test(CSS), "no narrow-phone breakpoint");
-});
-t("mobile: the sidebar stops stealing a column and becomes a drawer", () => {
-  ok(/main\{grid-template-columns:1fr\}/.test(CSS.replace(/\s+/g, "")) ||
-     /main\{grid-template-columns:1fr;/.test(CSS.replace(/\s+/g, "")),
-     "main must collapse to one column on a phone");
-  ok(IDS.has("railBtn"), "no way to open the drawer");
-  ok(IDS.has("railScrim"), "no backdrop to close it");
-  ok(script.includes("function railOpen("), "the drawer has no logic");
-});
-t("mobile: the drawer gets out of the way when you pick a tab", () => {
-  ok(script.includes("railAutoClose"), "picking a tab should close the drawer on a phone");
-  ok(script.includes('matchMedia("(max-width:860px)")'), "…and only on a phone");
-});
-t("mobile: toolbars scroll sideways instead of becoming a wall of buttons", () => {
-  const flat = CSS.replace(/\s+/g, "");
-  ok(flat.includes("overflow-x:auto"), "toolbars must scroll on a narrow screen");
-  ok(/\.btn\{min-height:3\dpx/.test(flat), "touch targets need a minimum height");
-});
-t("mobile: panning is reachable without a right-click", () => {
-  // this is the part that isn't cosmetic: a phone has no right button and no wheel
-  ok(script.includes("pts.size>=2"), "no two-finger handling — pan/zoom would be impossible");
-  ok(script.includes("pinch"), "no pinch zoom");
-  ok(script.includes("pointercancel"), "touch needs pointercancel or fingers get stuck down");
-});
-t("mobile: two-finger gestures pan and zoom independently", () => {
-  const mid = pts => ({ x:(pts[0].x+pts[1].x)/2, y:(pts[0].y+pts[1].y)/2,
-                        d:Math.hypot(pts[0].x-pts[1].x, pts[0].y-pts[1].y) });
-  // slide both fingers: pans, must not zoom
-  let a = mid([{x:100,y:200},{x:200,y:200}]);
-  let b = mid([{x:140,y:200},{x:240,y:200}]);
-  near(b.x - a.x, 40, 1e-9, "sliding should pan by the centre's movement:");
-  near(a.d / b.d, 1, 1e-9, "sliding must not change the zoom:");
-  // spread: zooms, must not pan
-  let c = mid([{x:50,y:200},{x:250,y:200}]);
-  near(c.x - a.x, 0, 1e-9, "spreading must not pan:");
-  ok(a.d / c.d < 1, "spreading should zoom in");
-});
-t("mobile: the feature panel becomes a bottom sheet a thumb can reach", () => {
-  const m = CSS.slice(CSS.indexOf("@media (max-width: 860px)"));
-  ok(/#featPanel\{[^}]*bottom:0/.test(m.replace(/\s+/g, "")), "the inspector should dock to the bottom");
-  ok(/\.ws-panel\{[^}]*bottom:0/.test(m.replace(/\s+/g, "")), "so should the workshop panel");
-});
-t("mobile: every file picker can actually be opened on a phone", () => {
-  // iOS Safari will not open the file picker for an input that is display:none, which is what
-  // the `hidden` attribute does — on an iPhone the button simply did nothing. Each picker must
-  // stay rendered and be driven by a real <label for=...>, which activates it natively.
-  const inputs = [...html.matchAll(/<input type="file"[^>]*>/g)].map(m => m[0]);
-  ok(inputs.length > 0, "there are file pickers to check");
-  for (const tag of inputs) {
-    const id = (tag.match(/id="([^"]+)"/) || [])[1];
-    ok(!/\shidden(\s|>|=)/.test(tag), `${id}: must not be hidden (iOS refuses to open it)`);
-    const label = new RegExp(`<label[^>]*for="${id}"`).test(html);
-    ok(label, `${id}: needs a <label for="${id}"> so a tap opens it natively`);
-  }
-  // and no scripted .click() on a file input, which would ask iOS for the picker twice
-  for (const id of ["sheetFile", "imgFile", "jsonFile", "wsFile"])
-    ok(!new RegExp(`${id}"?\\)?\\.click\\(\\)`).test(script), `${id}: no scripted click`);
-});
-t("mobile: a photo with no MIME type is still accepted", () => {
-  // files picked from the iPhone Files app often arrive with an empty type
-  const fn = script.slice(script.indexOf("function loadSheet("));
-  ok(/!file\.type/.test(fn.slice(0, 900)), "an empty type must not be rejected outright");
-});
-t("mobile: the viewport meta is set, or none of this applies", () => {
-  ok(/name="viewport"[^>]*width=device-width/.test(html), "without this a phone renders it at desktop width");
-});
-
-// =====================  14. FEATURE EDITING  =====================
-// A feature shouldn't be stuck as a rectangle, and the workflow shouldn't ask "are you
-// sure?" on one view and not the next.
-t("editing: taking the drawing's lines never asks a surprise question", () => {
-  // it used to confirm only past 24 shapes, so one view prompted and the next didn't —
-  // which reads as random. The count belongs on the button, not in a dialog.
-  ok(!/confirm\([^)]*lines as features/.test(script), "the threshold confirm is back");
-  ok(script.includes("Take all ${have}") || script.includes("take all ${have}"),
-     "the button should say how many it will take");
-});
-t("editing: a feature's own points can be moved, added and removed", () => {
-  ok(script.includes('className="fpt"') || script.includes('pt.className="fpt"'), "no point handles");
-  ok(script.includes('md.className="fmid"'), "no way to add a point to a line");
-  ok(script.includes("f.poly.splice(k+1,0,mp)"), "clicking a line must insert a point there");
-  ok(/f\.poly\.length<=3/.test(script), "a shape must keep at least 3 points");
-});
-t("editing: bending a point uses the same maths as tracing one", () => {
-  // these two disagreeing would put every dragged point in the wrong place
-  ok(script.includes("const canvasXY=e=>{const p=tcXY(e); return [p.x,p.y];}"),
-     "point dragging must reuse tcXY, not roll its own device-pixel maths");
-});
-t("editing: dragging doesn't rebuild every gizmo on every frame", () => {
-  ok(script.includes("featDragging"), "no drag guard — this is what made a phone crawl");
-  ok(/if\(typeof featRenderGizmos==="function" && !featDragging\)/.test(script),
-     "drawTrace must not rebuild the gizmo DOM mid-drag");
-});
-t("editing: a dragged point is held near its own view", () => {
-  ok(/Math\.max\(-0\.4,Math\.min\(1\.4/.test(script), "a point should not be draggable to infinity");
-});
-
-// =====================  15. TOY JOINS  =====================
-// A toy is parts that join. Two ways that goes wrong, and neither is a modelling opinion:
-// a socket cut to the peg's exact size seizes solid once printed, and a peg thinner than a
-// few nozzle widths snaps off in a child's hand.
-t("join: a socket is always bigger than the peg it takes", () => {
-  for (const nominal of [3, 5, 8, 12]) {
-    const peg = API.connDiameter("peg", nominal, 0.2);
-    const sock = API.connDiameter("socket", nominal, 0.2);
-    eq(peg, nominal, "a peg is cut true to its size:");
-    ok(sock > peg, `a Ø${nominal} socket (${sock}) must be wider than its peg (${peg})`);
-    near(sock - peg, 0.4, 1e-9, "the gap is clearance on each side:");
-  }
-});
-t("join: the same nominal size always mates, whatever it is", () => {
-  // this is the whole contract: an artist says "5mm" on two different parts and they fit
-  for (const nominal of [2, 4, 6, 10, 20]) {
-    const fit = API.connDiameter("socket", nominal, 0.2) - API.connDiameter("peg", nominal, 0.2);
-    ok(fit > 0 && fit < 1, `Ø${nominal} should mate with a sensible gap, got ${fit}`);
-  }
-});
-t("join: a tighter printer means a tighter fit, not a broken one", () => {
-  const loose = API.connDiameter("socket", 5, 0.35), tight = API.connDiameter("socket", 5, 0.1);
-  ok(loose > tight, "more clearance must mean a bigger hole");
-  ok(tight > API.connDiameter("peg", 5, 0.1), "even a tight fit must still leave a gap");
-});
-t("join: a peg too thin to survive is called out", () => {
-  ok(API.connWarn("peg", 1, 4, 0.4), "a 1mm peg on a 0.4mm nozzle should warn");
-  ok(!API.connWarn("peg", 5, 4, 0.4), "a 5mm peg is fine and shouldn't nag");
-  ok(API.connWarn("peg", 5, 0.5, 0.4), "half a millimetre deep is under two layers — warn");
-});
-t("join: a connector is a real circle at the size asked for", () => {
-  const B = { wMM: 100, hMM: 50 };
-  const p = API.connPoly(0.5, 0.5, 10, B, 32);       // a 10mm circle on a 100x50mm view
-  eq(p.length, 32);
-  const us = p.map(q => q[0]), vs = p.map(q => q[1]);
-  near((Math.max(...us) - Math.min(...us)) * B.wMM, 10, 0.2, "10mm across:");
-  near((Math.max(...vs) - Math.min(...vs)) * B.hMM, 10, 0.2, "…and 10mm tall, not an oval:");
-});
-t("join: a peg builds watertight, and its socket does too", () => {
-  const base = { length:190, stations:44, arcSegments:36, roofFlatness:1.3, wallThickness:3,
-    topProfile:[[0,10],[0.5,60],[1,20]], bottomProfile:[[0,2],[1,2]],
-    widthProfile:[[0,10],[0.5,40],[1,16]], mode:"loft" };
-  const B = { wMM: 190, hMM: 60 };
-  for (const [kind, depth] of [["peg", 4], ["socket", -3]]) {
-    const dia = API.connDiameter(kind, 5, 0.2);
-    const g = API.makeBody({ ...base,
-      features: [{ kind:"poly", join:kind, view:"side", depth, soft:0.02, poly:API.connPoly(0.5,0.6,dia,B,24) }] });
-    const r = manifold(g.indices);
-    ok(r.boundary === 0 && r.nonMani === 0, `${kind}: ${r.boundary} open edges`);
-  }
-});
-
-// =====================  16. IT HAS TO KEEP UP  =====================
-// "Follow my drawing" used to ask for ~100 million distance computations on every slider
-// move and took the tab down with it. The field is separable — each outline only depends
-// on two of the three coordinates — so three small 2D tables replace walking the polygon
-// on every one of ~54,000 samples.
-t("speed: the hull's field is tabled, not recomputed per sample", () => {
-  const src = (() => { const i = script.indexOf("function makeVisualHull(");
-    return script.slice(i, script.indexOf("\nfunction ", i + 10)); })();
-  ok(src.includes("mkTable"), "no distance tables — this is the crash");
-  ok(!/const F=\(x,y,z\)=>\{[^}]*sdPoly\(sideP/.test(src),
-     "F() must not walk the outlines on every sample");
-  // Pin the PROPERTY, not the spelling: the field reads prebuilt tables and never walks a
-  // polygon per sample. The earlier version looked for the literal "look(Tside", which broke
-  // the moment the side lookup was wrapped to sweep between two outlines — the code was
-  // still tabled, the test was just reading for a word.
-  ok(/look\(\s*T/.test(src), "the field should read distance tables");
-  ok(!/sdPoly\(\s*(sideP|topP|frontP|sidePR)\b/.test(
-       src.slice(src.indexOf("const F=(x,y,z)=>{"), src.indexOf("const F=(x,y,z)=>{")+4000)),
-     "and never walk an outline inside the sampled field");
-  for (const t of ["Tside", "Ttop", "Tfront"])
-    ok(new RegExp(t + "\\s*=\\s*mkTable").test(src), `${t} must still be built from a table`);
-});
-t("speed: a slider drag builds coarse, then sharpens when you let go", () => {
-  ok(script.includes("qFast"), "no coarse-while-dragging mode");
-  ok(/hullRes:\(qFast\?[A-Za-z0-9_]+:null\)/.test(script), "the drag should drop the hull's resolution");
-  ok(/if\(qFast\)\{qFast=false;requestRebuild\(\);\}/.test(script), "…and rebuild properly on release");
-});
-t("speed: the drag detail tunes itself instead of guessing a number", () => {
-  // this box, a laptop and a phone are worlds apart — a hardcoded "coarse" is a guess that
-  // is wrong for someone. Aim at a frame budget and let it settle.
-  ok(script.includes("function hullTune("), "no self-tuning");
-  ok(script.includes("HULL_BUDGET_MS"), "no frame budget to aim at");
-  ok(/hullDragRes-=4/.test(script) && /hullDragRes\+=4/.test(script), "it must go both ways");
-  ok(/hullDragRes>20/.test(script), "it must not tune itself into mush");
-  ok(/hullDragRes<60/.test(script), "…nor past the full build");
-  ok(script.includes("hullTune(buildMs)"), "it must be fed the real measured build time");
-});
-t("speed: the tuner settles on a slow machine and a fast one alike", () => {
-  // mirror of hullTune()
-  const BUDGET = 11;
-  const settle = msFor => {
-    let res = 44;
-    for (let i = 0; i < 30; i++) {
-      const ms = msFor(res);
-      if (ms > BUDGET * 1.35 && res > 20) res -= 4;
-      else if (ms < BUDGET * 0.55 && res < 60) res += 4;
+  // back off anything that would tear the surface
+  const scale=new Float32Array(n).fill(1);
+  const put=()=>{for(let k=0;k<n;k++){const s=scale[k];
+    positions[k*3]  =before[k*3]  +(pts[k][0]-before[k*3])*s;
+    positions[k*3+1]=before[k*3+1]+(pts[k][1]-before[k*3+1])*s;
+    positions[k*3+2]=before[k*3+2]+(pts[k][2]-before[k*3+2])*s;}};
+  put();
+  for(let pass=0;pass<10;pass++){
+    let bad=0;
+    for(let q=0;q<indices.length;q+=3){
+      const a=indices[q],b=indices[q+1],c=indices[q+2];
+      const nb=(P0)=>{const ux=P0[b*3]-P0[a*3],uy=P0[b*3+1]-P0[a*3+1],uz=P0[b*3+2]-P0[a*3+2];
+        const vx=P0[c*3]-P0[a*3],vy=P0[c*3+1]-P0[a*3+1],vz=P0[c*3+2]-P0[a*3+2];
+        return [uy*vz-uz*vy,uz*vx-ux*vz,ux*vy-uy*vx];};
+      const f1=nb(before), f2=nb(positions);
+      if(f1[0]*f2[0]+f1[1]*f2[1]+f1[2]*f2[2]<=0){bad++;
+        scale[a]*=0.5; scale[b]*=0.5; scale[c]*=0.5;}
     }
-    return res;
+    if(!bad)break;
+    put();
+  }
+  return hits;
+}
+/* Nothing should float loose inside the frame. A finished shell is its outer skin plus its
+   inner wall (joined by the rim when the underside is open) — anything else the field threw
+   off is a stray scrap rattling around in there. Components are compared by size, so both
+   walls survive while scraps are dropped. */
+/* Keep every component that is a real piece of the shell, drop only crumbs. Unlike
+   dropStrayShells (which keeps a fixed number of biggest pieces), this keeps ALL components
+   whose triangle count is at least `frac` of the biggest — so an outer skin and its inner
+   wall, which are separate components meeting only at the open underside, both survive, while
+   a stray grid-border sheet a hundredth their size is dropped. */
+function dropTinyShells(positions,indices,frac){
+  const nTri=indices.length/3; if(!nTri)return indices;
+  frac=frac||0.02;
+  const par=new Int32Array(positions.length/3).fill(-1);
+  const find=x=>{while(par[x]>=0)x=par[x];return x;};
+  const uni=(a,b)=>{a=find(a);b=find(b);if(a!==b)par[a]=b;};
+  for(let q=0;q<indices.length;q+=3){uni(indices[q],indices[q+1]);uni(indices[q+1],indices[q+2]);}
+  const cnt=new Map();
+  for(let q=0;q<indices.length;q+=3){const r=find(indices[q]); cnt.set(r,(cnt.get(r)||0)+1);}
+  if(cnt.size<=1)return indices;
+  let biggest=0; for(const v of cnt.values()) if(v>biggest)biggest=v;
+  const thresh=Math.max(1, biggest*frac);
+  const keep=new Set(); for(const [r,v] of cnt) if(v>=thresh)keep.add(r);
+  if(keep.size===cnt.size)return indices;
+  const out=[];
+  for(let q=0;q<indices.length;q+=3)if(keep.has(find(indices[q])))out.push(indices[q],indices[q+1],indices[q+2]);
+  return out.length?out:indices;
+}
+/* WHAT WALL DID WE ACTUALLY BUILD?
+   The wall slider is a request, not a promise. The body is meshed on a voxel grid, and a
+   dual contour puts ONE vertex in a cell — so when the wall is close to the cell size the
+   outer and inner surfaces land in the same cell and pinch each other. Measured on
+   profile_7 (2.8mm cells, 4.2mm asked): 3.8mm typical and 2.1mm at the tenth percentile.
+   It converges — 4.0mm at res 110, 4.2mm at res 160 — so it is the grid, not the field.
+
+   A toy car does not care. A bracket Curtis is going to bolt something to does, and so
+   does anyone printing a part that has to hold. So measure it instead of assuming it:
+   stand on the outer skin, walk in along that face's own normal, and see how far it is to
+   the first surface on the other side. That is the wall the printer lays down.
+
+   Normal-direction, not axis-aligned: a ray fired across a 45-degree wall reads 1.41x the
+   real thickness, which is exactly the sort of flattering number that hides a thin spot.
+   Triangles are bucketed into a coarse grid and the march is capped, so this stays cheap
+   enough to run on demand rather than being a thing you wait for. */
+function shellWallStats(positions,indices,opts){
+  const o=opts||{}, want=o.wall||0, samples=Math.max(24,o.samples||300);
+  const nTri=indices.length/3;
+  if(!nTri) return {n:0,min:0,median:0,p10:0,want:want,thin:0};
+  const P=positions;
+  // bucket every triangle by its bounding box, on a grid sized to the march we allow
+  const reach=Math.max(0.5, o.reach || (want>0?want*2.5:12));
+  let mnx=1e30,mny=1e30,mnz=1e30;
+  for(let i=0;i<P.length;i+=3){ if(P[i]<mnx)mnx=P[i]; if(P[i+1]<mny)mny=P[i+1]; if(P[i+2]<mnz)mnz=P[i+2]; }
+  const gs=reach, key=(a,b,c)=>a+","+b+","+c;
+  const bucket=new Map();
+  const tb=t=>{ const a=indices[t*3]*3,b=indices[t*3+1]*3,c=indices[t*3+2]*3;
+    return [Math.min(P[a],P[b],P[c]),Math.min(P[a+1],P[b+1],P[c+1]),Math.min(P[a+2],P[b+2],P[c+2]),
+            Math.max(P[a],P[b],P[c]),Math.max(P[a+1],P[b+1],P[c+1]),Math.max(P[a+2],P[b+2],P[c+2])]; };
+  for(let t=0;t<nTri;t++){
+    const q=tb(t);
+    for(let i=Math.floor((q[0]-mnx)/gs);i<=Math.floor((q[3]-mnx)/gs);i++)
+      for(let j=Math.floor((q[1]-mny)/gs);j<=Math.floor((q[4]-mny)/gs);j++)
+        for(let k=Math.floor((q[2]-mnz)/gs);k<=Math.floor((q[5]-mnz)/gs);k++){
+          const s=key(i,j,k); let L=bucket.get(s); if(!L){L=[];bucket.set(s,L);} L.push(t); }
+  }
+  // Möller–Trumbore, one ray against one triangle
+  const hit=(ox,oy,oz,dx,dy,dz,t)=>{
+    const a=indices[t*3]*3,b=indices[t*3+1]*3,c=indices[t*3+2]*3;
+    const e1x=P[b]-P[a],e1y=P[b+1]-P[a+1],e1z=P[b+2]-P[a+2];
+    const e2x=P[c]-P[a],e2y=P[c+1]-P[a+1],e2z=P[c+2]-P[a+2];
+    const hx=dy*e2z-dz*e2y, hy=dz*e2x-dx*e2z, hz=dx*e2y-dy*e2x;
+    const det=e1x*hx+e1y*hy+e1z*hz; if(Math.abs(det)<1e-12)return -1;
+    const inv=1/det, sx=ox-P[a], sy=oy-P[a+1], sz=oz-P[a+2];
+    const u=(sx*hx+sy*hy+sz*hz)*inv; if(u<-1e-6||u>1+1e-6)return -1;
+    const qx=sy*e1z-sz*e1y, qy=sz*e1x-sx*e1z, qz=sx*e1y-sy*e1x;
+    const v=(dx*qx+dy*qy+dz*qz)*inv; if(v<-1e-6||u+v>1+1e-6)return -1;
+    const tt=(e2x*qx+e2y*qy+e2z*qz)*inv;
+    return tt>1e-4?tt:-1;
   };
-  const fast = settle(r => r * 0.11);        // a quick machine: ~5ms at res 44
-  const slow = settle(r => r * 0.55);        // a phone: ~24ms at res 44
-  ok(fast > slow, `a quicker machine should end up sharper (${fast} vs ${slow})`);
-  ok(slow >= 20, "it must not collapse below the floor");
-  ok(fast <= 60, "nor climb past the ceiling");
-  ok(msIsUnder(fast, r => r * 0.11, BUDGET * 1.4) && msIsUnder(slow, r => r * 0.55, BUDGET * 1.4),
-     "both should land inside the budget");
-  function msIsUnder(res, f, cap) { return f(res) <= cap; }
-});
-t("speed: a heavier outline costs almost nothing extra", () => {
-  // the polygon is only walked while building the tables, so a 500-point SVG outline
-  // shouldn't cost 5x what a 90-point traced one does
-  const t0 = Date.now();
-  const car = (n, rx, ry) => Array.from({ length: n }, (_, i) => {
-    const a = i / n * 2 * Math.PI; return [0.5 + rx * Math.cos(a), 0.5 + ry * Math.sin(a)]; });
-  const mk = pts => API.makeBody({ mode:"projection", hullHollow:false, length:190, stations:40, hullCrisp:0.9,
-    sidePoly:car(pts,0.45,0.4), topPoly:car(pts,0.45,0.38), frontPoly:car(pts,0.4,0.42),
-    topProfile:[[0,60]], widthProfile:[[0,25]] });
-  mk(90); const tA = Date.now(); mk(90); const light = Date.now() - tA;
-  mk(500); const tB = Date.now(); mk(500); const heavy = Date.now() - tB;
-  ok(heavy < light * 3 + 60, `a 500-point outline took ${heavy}ms vs ${light}ms for 90 — the polygon is being walked per sample`);
-});
-t("storage: a full device drops the drawings, not the models", () => {
-  // localStorage is ~5MB and a model with four traced views is ~1MB of images, so it fills
-  // after a handful. It must degrade honestly rather than silently failing to save.
-  ok(/c\.data\.trace\[k\]\.img=null/.test(script), "no fallback that sheds the images");
-  ok(script.includes("storage is full"), "a full device should say so, not fail quietly");
-  ok(!/catch\(_\)\{\/\* memory-only fallback \*\/\}/.test(script), "the silent swallow is back");
-});
-
-// =====================  17. AUTO FEATURES MUST BE EDITABLE  =====================
-// Taking a line from the drawing used to hand back 64 evenly-spaced points — 128 handles
-// piled on each other, which is not editing, it's a smear. Keep the points that carry the
-// shape, drop the ones that don't.
-t("simplify: straight runs inside a shape collapse, and it never drops below a shape", () => {
-  // features are CLOSED outlines, so 3 points is the floor — a 2-point "shape" is nothing.
-  // A long flat side should still shed its middle points.
-  const slab = [];
-  for (let i = 0; i < 30; i++) slab.push([i / 30, 0.2]);       // a long straight bottom
-  slab.push([1, 0.8], [0, 0.8]);                                // and a lid to close it
-  const out = API.simplifyPoly(slab, 0.01);
-  ok(out.length >= 3, "it must stay a shape");
-  ok(out.length <= 6, `30 points along one flat side should collapse, kept ${out.length}`);
-  // nothing can talk it below three
-  eq(API.simplifyPoly([[0,0],[0.5,0],[1,0],[0.5,0.001]], 0.9).length >= 3, true);
-});
-t("simplify: corners survive", () => {
-  // a square traced with 10 points a side: the 4 corners are the only points that matter
-  const sq = [];
-  for (let i = 0; i < 10; i++) sq.push([i / 10, 0]);
-  for (let i = 0; i < 10; i++) sq.push([1, i / 10]);
-  for (let i = 0; i < 10; i++) sq.push([1 - i / 10, 1]);
-  for (let i = 0; i < 10; i++) sq.push([0, 1 - i / 10]);
-  const out = API.simplifyPoly(sq, 0.01);
-  ok(out.length <= 6, `a square should keep ~4 corners, kept ${out.length}`);
-  ok(out.length >= 4, "…but not fewer than its corners");
-  for (const c of [[0,0],[1,0],[1,1],[0,1]])
-    ok(out.some(p => Math.hypot(p[0]-c[0], p[1]-c[1]) < 0.06), `corner ${c} was lost`);
-});
-t("simplify: a curve keeps enough points to still be a curve", () => {
-  const circle = Array.from({ length: 120 }, (_, i) => {
-    const a = i / 120 * 2 * Math.PI; return [0.5 + 0.4 * Math.cos(a), 0.5 + 0.4 * Math.sin(a)]; });
-  const out = API.simplifyPoly(circle, 0.006);
-  ok(out.length >= 8, `a circle needs enough points to read as round, got ${out.length}`);
-  ok(out.length < 60, `…but not 120 of them, got ${out.length}`);
-  ok(API.polyArea(out.map(p => ({x:p[0], y:p[1]}))) / API.polyArea(circle.map(p => ({x:p[0], y:p[1]}))) > 0.95,
-     "the shape drifted too far");
-});
-t("simplify: the result is grabbable, not a smear", () => {
-  // a realistic window taken from a drawing
-  const win = Array.from({ length: 140 }, (_, i) => {
-    const t = i / 140 * 2 * Math.PI;
-    return [0.5 + 0.14 * Math.cos(t), 0.6 + 0.08 * Math.sin(t)]; });
-  const us = win.map(q => q[0]), vs = win.map(q => q[1]);
-  const span = Math.max(Math.max(...us) - Math.min(...us), Math.max(...vs) - Math.min(...vs));
-  const out = API.simplifyPoly(win, Math.max(0.002, span * 0.018));
-  ok(out.length >= 3, "it must stay a shape");
-  ok(out.length <= 34, `a feature you can actually grab needs a sensible point count, got ${out.length}`);
-});
-t("simplify: it never destroys a shape it can't reduce", () => {
-  const tri = [[0,0],[1,0],[0.5,1]];
-  eq(API.simplifyPoly(tri, 0.5).length, 3, "a triangle can't go below 3 points:");
-  eq(API.simplifyPoly([[0,0],[1,1]], 0.1).length, 2, "too few points should pass straight through:");
-});
-
-// =====================  18. TYPE THE REAL SIZE  =====================
-// You already know the car is 201mm long. Clicking two points and a dialog to tell the app
-// that is silly, and it's how one view ends up disagreeing with another — a 201mm car
-// reading 182mm wide because its width was inferred rather than stated.
-t("size: a typed width across a view IS its scale", () => {
-  // 402 traced pixels across something you say is 201mm -> 2 px per mm
-  const spanPx = 402, sizeW = 201;
-  near(spanPx / sizeW, 2, 1e-9, "px per mm:");
-  // and the length then reads back exactly what you typed
-  near(spanPx / (spanPx / sizeW), 201, 1e-9, "the length must be what you said it was:");
-});
-t("size: each view means something different by across and tall", () => {
-  const means = v => v === "side" ? { w: "length", h: "height" }
-                   : (v === "top" || v === "bottom") ? { w: "length", h: "width" }
-                   : { w: "width", h: "height" };
-  eq(means("side").h, "height");
-  eq(means("top").h, "width", "looking down, the vertical extent IS the object's width:");
-  eq(means("front").w, "width", "head-on, across IS the width:");
-  eq(means("bottom").w, "length");
-});
-t("size: a typed height rescales the traced profile to match", () => {
-  // traced heights come out as whatever the pixels said; typing the real one scales them
-  const traced = [[0, 10], [0.5, 42], [1, 20]];
-  const measured = 42, typed = 84;
-  const k = typed / measured;
-  const out = traced.map(q => [q[0], q[1] * k]);
-  near(Math.max(...out.map(q => q[1])), 84, 1e-9, "the peak must become the height you typed:");
-  // and the shape is untouched — only the scale
-  near(out[0][1] / out[1][1], traced[0][1] / traced[1][1], 1e-9, "the profile's shape drifted:");
-});
-t("size: a nonsense entry is ignored rather than wrecking the model", () => {
-  for (const bad of [0, -5, NaN, undefined]) {
-    const ok2 = (isFinite(bad) && bad > 0) ? bad : null;
-    eq(ok2, null, `${bad} should not be accepted as a size:`);
-  }
-});
-
-// =====================  19. THE FRAME IS A SHELL  =====================
-// A toy frame is hollow — that's the whole point of a thickness slider. "Follow my drawing"
-// used to hand back a filled lump, because carving the void out of the distance field needs
-// a grid fine enough to see a 1.8mm wall (a 1.3M-cell grid on a car). It doesn't need the
-// field: the surface is already closed, so a copy pushed inward along its own normals IS
-// the inside, and a closed surface has no rim to stitch.
-const SHELL = { mode:"projection", length:201, stations:56, hullCrisp:0.5,
-  sidePoly:[[0.06,0.06],[0.94,0.06],[0.94,0.94],[0.06,0.94]],
-  topPoly:[[0.06,0.06],[0.94,0.06],[0.94,0.94],[0.06,0.94]],
-  frontPoly:[[0.06,0.06],[0.94,0.06],[0.94,0.94],[0.06,0.94]],
-  topProfile:[[0,84]], widthProfile:[[0,45]] };
-
-t("shell: the frame is hollow, not a filled lump", () => {
-  const lump = API.makeBody({ ...SHELL, hullHollow:false });
-  const shell = API.makeBody({ ...SHELL, hullHollow:true, wallThickness:1.8 });
-  ok(shell.volume < lump.volume * 0.3,
-     `a 1.8mm shell should be a fraction of the lump, got ${(shell.volume/lump.volume*100).toFixed(0)}%`);
-  ok(shell.volume > 0, "…but it must still be made of something");
-});
-t("shell: hollow is the default for the drawing-following mode", () => {
-  const def = API.makeBody({ ...SHELL });                 // no hullHollow given
-  const lump = API.makeBody({ ...SHELL, hullHollow:false });
-  ok(def.volume < lump.volume * 0.5, "a toy frame should arrive hollow without being asked");
-});
-t("shell: it stays watertight at every wall thickness", () => {
-  for (const w of [0.6, 1.0, 1.8, 3, 5]) {
-    const g = API.makeBody({ ...SHELL, hullHollow:true, wallThickness:w });
-    const r = manifold(g.indices);
-    ok(r.boundary === 0 && r.nonMani === 0, `${w}mm: ${r.boundary} open edges, ${r.nonMani} non-manifold`);
-  }
-});
-t("shell: a thicker wall means more material, and it tracks the slider", () => {
-  const v = w => API.makeBody({ ...SHELL, hullHollow:true, wallThickness:w }).volume;
-  const a = v(1), b = v(2), c = v(4);
-  ok(b > a && c > b, `volume must rise with thickness: ${a.toFixed(0)}, ${b.toFixed(0)}, ${c.toFixed(0)}`);
-  // roughly surface area x wall, so doubling the wall roughly doubles the material
-  ok(b / a > 1.6 && b / a < 2.4, `2mm should be ~2x the material of 1mm, got ${(b/a).toFixed(2)}x`);
-});
-t("detail: nested outlines shade the panel, they never excavate it", () => {
-  // Traced detail nests — a vent inside a panel inside a door. Each stamp is capped, but
-  // stamps used to ADD: five nested outlines pressed one vertex 12mm from drawings 2.5mm
-  // deep, crushing the hood and folding rocker skin into the arches. Behaviour pinned:
-  // however deep the nesting, no vertex may travel meaningfully past one full stamp.
-  const ring = (cx, cy, r) => Array.from({length:16},(_,i)=>{
-    const a = i/16*Math.PI*2; return [cx+Math.cos(a)*r, cy+Math.sin(a)*r]; });
-  const nest = [0.30,0.24,0.18,0.12,0.06].map(r =>
-    ({ view:"side", poly:ring(0.5,0.5,r), depth:-2.5 }));
-  const wall = 4;
-  const bare = API.makeBody({ ...SHELL, hullHollow:false, hullCrisp:1 });
-  const inked = API.makeBody({ ...SHELL, hullHollow:false, hullCrisp:1,
-    wallThickness:wall, features:nest });
-  /* REWRITTEN, and the behaviour it protects is unchanged.
-     This used to require `bare.positions.length === inked.positions.length` ("features only
-     stamp") and then pair vertex k against vertex k. That was true while a feature was a push
-     applied to an already-built mesh, so the two meshes shared a vertex list. A feature is now
-     carved into the field before meshing, so the mesher legitimately returns a different
-     vertex count (4998 -> 5092 here) — and index-paired distances become meaningless the
-     moment the lists differ, comparing unrelated points.
-     What the test is actually for: five nested 2.5mm outlines must not dig five times deeper
-     than one. That is a question about the SURFACE, so ask it with a ray at each point on the
-     face and compare depths — which works whatever the topology. Measured on this build: one
-     ring 2.51mm, five nested rings 2.51mm. */
-  const single = API.makeBody({ ...SHELL, hullHollow:false, hullCrisp:1,
-    wallThickness:wall, features:[nest[0]] });
-  const flank = (g, x, z) => {                 // a side feature cuts the -y flank
-    const P = g.positions, I = g.indices;
-    let best = Infinity, found = false;
-    for (let q = 0; q < I.length; q += 3) {
-      const A = I[q]*3, B = I[q+1]*3, C = I[q+2]*3;
-      const au=P[A], av=P[A+2], bu=P[B], bv=P[B+2], cu=P[C], cv=P[C+2];
-      const den=(bv-cv)*(au-cu)+(cu-bu)*(av-cv); if (Math.abs(den) < 1e-12) continue;
-      const w0=((bv-cv)*(x-cu)+(cu-bu)*(z-cv))/den, w1=((cv-av)*(x-cu)+(au-cu)*(z-cv))/den, w2=1-w0-w1;
-      if (w0<-1e-9 || w1<-1e-9 || w2<-1e-9) continue;
-      const h = w0*P[A+1] + w1*P[B+1] + w2*P[C+1];
-      if (h < best) { best = h; found = true; }
-    }
-    return found ? best : null;
-  };
-  const deepest = g => {
-    let d = 0;
-    for (let x = 20; x < 180; x += 4) for (let z = 10; z < 75; z += 4) {
-      const a = flank(bare, x, z), b = flank(g, x, z);
-      if (a === null || b === null) continue;
-      if (b - a > d) d = b - a;
-    }
-    return d;
-  };
-  const one = deepest(single), five = deepest(inked);
-  ok(five > 0.3, `the detail must still press in (moved ${five.toFixed(2)}mm)`);
-  ok(five <= one + 0.6,
-     `five nested outlines may never dig past ~one: ${five.toFixed(2)}mm vs ${one.toFixed(2)}mm for a single`);
-  ok(five <= 2.5 + 0.6, `and never past the depth drawn: ${five.toFixed(2)}mm on a 2.5mm outline`);
-});
-t("shell: the opened underside is floor, not wall", () => {
-  // The opening's edge is decided by majority vote now, so a staircase of flickering
-  // triangles can't ride up the sides. Pinned: on a plain box nearly all removed area
-  // faces the ground — the vote must never eat wall or roof.
-  const lump = API.makeBody({ ...SHELL, hullHollow:false });
-  const shell = API.makeBody({ ...SHELL, hullHollow:true, wallThickness:2 });
-  ok(shell.openBottom, "a box with no traced bottom opens its underside");
-  // removed skin = lump tris whose centroid isn't matched in the shell's outer surface
-  const keyOf = (P,I,q) => {
-    const a=I[q],b=I[q+1],c=I[q+2];
-    return [((P[a*3]+P[b*3]+P[c*3])/3).toFixed(2),
-            ((P[a*3+1]+P[b*3+1]+P[c*3+1])/3).toFixed(2),
-            ((P[a*3+2]+P[b*3+2]+P[c*3+2])/3).toFixed(2)].join(",");
-  };
-  const kept = new Set();
-  for (let q=0;q<shell.indices.length;q+=3) kept.add(keyOf(shell.positions,shell.indices,q));
-  let remArea=0, remDownArea=0, remZmax=0;
-  for (let q=0;q<lump.indices.length;q+=3) {
-    if (kept.has(keyOf(lump.positions,lump.indices,q))) continue;
-    const a=lump.indices[q],b=lump.indices[q+1],c=lump.indices[q+2],P=lump.positions;
-    const ux=P[b*3]-P[a*3],uy=P[b*3+1]-P[a*3+1],uz=P[b*3+2]-P[a*3+2];
-    const vx=P[c*3]-P[a*3],vy=P[c*3+1]-P[a*3+1],vz=P[c*3+2]-P[a*3+2];
-    const fz=ux*vy-uy*vx, fl=Math.hypot(uy*vz-uz*vy,uz*vx-ux*vz,fz);
-    if (!fl) continue;
-    remArea += fl/2; if (fz/fl < -0.3) remDownArea += fl/2;
-    const cz=(P[a*3+2]+P[b*3+2]+P[c*3+2])/3; if(cz>remZmax)remZmax=cz;
-  }
-  ok(remArea > 0, "something must actually be removed");
-  // a soft box rounds its bottom edge, and that rounded ring belongs to the opening —
-  // so "mostly floor" plus "never above the bottom fifth" is the honest pin
-  ok(remDownArea/remArea > 0.85,
-     `the opening should be ground-facing skin: ${(remDownArea/remArea*100).toFixed(0)}% faces down`);
-  ok(remZmax < 84*0.2,
-     `nothing removed above the bottom fifth of the box: highest at z=${remZmax.toFixed(1)}`);
-});
-t("shell: hollowing doesn't change the outside", () => {
-  const bbox = g => { let x0=1e9,x1=-1e9,z0=1e9,z1=-1e9;
-    for (let i=0;i<g.positions.length;i+=3){ x0=Math.min(x0,g.positions[i]); x1=Math.max(x1,g.positions[i]);
-      z0=Math.min(z0,g.positions[i+2]); z1=Math.max(z1,g.positions[i+2]); }
-    return [x1-x0, z1-z0]; };
-  const [lw, lh] = bbox(API.makeBody({ ...SHELL, hullHollow:false }));
-  const [sw, sh] = bbox(API.makeBody({ ...SHELL, hullHollow:true, wallThickness:3 }));
-  near(sw, lw, 0.5, "the outside length must not shrink when you hollow it:");
-  near(sh, lh, 0.5, "nor the height:");
-});
-
-// =====================  20. FEATURES BY THE HANDFUL  =====================
-// Detail arrives a face at a time — 36 vents across the front, 24 across the rear — so the
-// numbers on screen have to belong to the face in front of you, and the sliders have to be
-// able to drive a whole face at once.
-const FEATS = [
-  { view:"side",  depth:-2.5, soft:0.10 }, { view:"side",  depth:-2.5, soft:0.10 },
-  { view:"front", depth:-2.5, soft:0.10 }, { view:"front", depth:-1.0, soft:0.20 },
-  { view:"front", depth:-2.5, soft:0.10 }, { view:"rear",  depth: 1.5, soft:0.10, through:true },
-];
-
-t("features: a face's own features are the ones it hands back", () => {
-  ok(JSON.stringify(API.featOnView(FEATS, "front")) === "[2,3,4]",
-     "front should be indices 2,3,4, got " + JSON.stringify(API.featOnView(FEATS, "front")));
-  ok(API.featOnView(FEATS, "side").length === 2, "side holds two");
-  ok(API.featOnView(FEATS, "top").length === 0, "a face with nothing on it holds nothing");
-  ok(API.featOnView([], "side").length === 0, "and an empty model has nothing anywhere");
-});
-t("features: numbering starts again on each face", () => {
-  // the bug: twelve features on the side made the top view's first feature "detail 13" —
-  // a number about the model's history, not about the drawing you're looking at
-  ok(API.featNextName(FEATS, "top", "detail") === "detail 1",
-     `an untouched face starts at one, got "${API.featNextName(FEATS, "top", "detail")}"`);
-  ok(API.featNextName(FEATS, "front", "detail") === "detail 4",
-     `the front already has three, so the next is four, got "${API.featNextName(FEATS, "front", "detail")}"`);
-  ok(API.featNextName(FEATS, "side", "box") === "box 3", "and the base word carries through");
-});
-t("features: a group's sliders open at the average, and say when it's mixed", () => {
-  const front = API.featOnView(FEATS, "front").map(i => FEATS[i]);
-  const s = API.featGroupStats(front);
-  ok(s.n === 3, "three features in the group");
-  near(s.depth, -2, 0.001, "the depth slider opens at the group's average:");
-  ok(s.mixedDepth, "…and reports that they disagree");
-  ok(s.mixedSoft, "same for the soft edge");
-  const same = API.featGroupStats(API.featOnView(FEATS, "side").map(i => FEATS[i]));
-  near(same.depth, -2.5, 0.001, "a group that agrees opens on that value:");
-  ok(!same.mixedDepth && !same.mixedSoft, "…and doesn't cry mixed when nothing is mixed");
-});
-t("features: a group knows how many of it are cut through", () => {
-  const all = API.featGroupStats(FEATS);
-  ok(all.through === 1 && !all.allThrough, `one of six is through, got ${all.through}`);
-  const thru = API.featGroupStats([{depth:-3,soft:0.1,through:true},{depth:-3,soft:0.1,through:true}]);
-  ok(thru.allThrough, "a group where every one is through says so, so the tick can be solid");
-  const none = API.featGroupStats([{depth:-3,soft:0.1}]);
-  ok(none.through === 0 && !none.allThrough, "and one that has none says that too");
-});
-t("features: an empty group is harmless", () => {
-  const s = API.featGroupStats([]);
-  ok(s.n === 0 && isFinite(s.depth) && isFinite(s.soft),
-     "no selection must still give usable slider numbers, not NaN");
-});
-
-t("origami: detail may dent the sheet, never cut it into extra pieces", () => {
-  // The three traced outlines define the solid: a point is material when it is inside all
-  // three at once, and nothing else gets a say. Stamped detail is allowed to move that
-  // surface, but a vertical line through the body must still pass through the SAME number
-  // of separate pieces afterwards. When it doesn't, the surface has folded through itself
-  // and the trapped sliver reads as a floating slab — the plank seen through a wheel arch.
-  // Root cause it guards: a stamp deeper than the distance between neighbouring vertices
-  // laps the sheet over, which the inside-out check can't see because each triangle stays
-  // correctly wound.
-  const L = 201, Hh = 84, Ww = 45;
-  const outline = [[0.06,0.06],[0.94,0.06],[0.94,0.94],[0.06,0.94]];
-  const ring = (cx,cy,r) => Array.from({length:14},(_,i)=>{
-    const a=i/14*Math.PI*2; return [cx+Math.cos(a)*r, cy+Math.sin(a)*r]; });
-  const feats = [];
-  for (const v of ["front","rear","side","top"])
-    for (const r of [0.30,0.22,0.14])
-      feats.push({ view:v, poly:ring(0.5,0.5,r), depth:-2.5, soft:0.08 });
-
-  const P = { mode:"projection", length:L, stations:48, hullCrisp:1, hullHollow:false,
-    wallThickness:5, sidePoly:outline, topPoly:outline, frontPoly:outline,
-    topProfile:[[0,Hh]], widthProfile:[[0,Ww/2]] };
-  const plain  = API.makeBody({ ...P });
-  const inked  = API.makeBody({ ...P, features:feats });
-
-  // how many separate runs of material a vertical line meets
-  const sections = (g,x,y) => {
-    const Q=g.positions, I=g.indices, hits=[];
-    for (let t=0;t<I.length;t+=3) {
-      const a=I[t],b=I[t+1],c=I[t+2];
-      const ax=Q[a*3],ay=Q[a*3+1],bx=Q[b*3],by=Q[b*3+1],cx=Q[c*3],cy=Q[c*3+1];
-      const den=(by-cy)*(ax-cx)+(cx-bx)*(ay-cy); if (Math.abs(den)<1e-12) continue;
-      const l1=((by-cy)*(x-cx)+(cx-bx)*(y-cy))/den;
-      const l2=((cy-ay)*(x-cx)+(ax-cx)*(y-cy))/den;
-      if (l1<0||l2<0||1-l1-l2<0) continue;
-      hits.push(l1*Q[a*3+2]+l2*Q[b*3+2]+(1-l1-l2)*Q[c*3+2]);
-    }
-    return Math.floor(hits.length/2);
-  };
-  let checked=0, extra=0;
-  for (let x=25;x<=175;x+=15) for (let y=-14;y<=14;y+=7) {
-    const base=sections(plain,x,y); if (!base) continue;
-    checked++;
-    if (sections(inked,x,y) > base) extra++;
-  }
-  ok(checked > 20, `the scan has to actually cover the body (${checked} columns)`);
-  ok(extra === 0,
-     `stamping cut ${extra} of ${checked} columns into extra pieces — the sheet folded through itself`);
-});
-t("origami: the detail is still really there", () => {
-  // The guard above is trivially satisfiable by stamping nothing at all, so pin the other
-  // side of it too: the surface must still MOVE where detail was drawn.
-  const outline = [[0.06,0.06],[0.94,0.06],[0.94,0.94],[0.06,0.94]];
-  const ring = (cx,cy,r) => Array.from({length:14},(_,i)=>{
-    const a=i/14*Math.PI*2; return [cx+Math.cos(a)*r, cy+Math.sin(a)*r]; });
-  const P = { mode:"projection", length:201, stations:48, hullCrisp:1, hullHollow:false,
-    wallThickness:5, sidePoly:outline, topPoly:outline, frontPoly:outline,
-    topProfile:[[0,84]], widthProfile:[[0,22]] };
-  const plain = API.makeBody({ ...P });
-  const inked = API.makeBody({ ...P, features:[{view:"side",poly:ring(0.5,0.5,0.3),depth:-2.5,soft:0.08}] });
-  let moved=0;
-  for (let k=0;k<plain.positions.length;k+=3) {
-    const d=Math.hypot(inked.positions[k]-plain.positions[k],
-      inked.positions[k+1]-plain.positions[k+1], inked.positions[k+2]-plain.positions[k+2]);
-    if (d>0.2) moved++;
-  }
-  ok(moved > 20, `detail must still press into the surface (${moved} vertices moved)`);
-});
-
-t("wheel wells: closed by default, and closed means no roof is opened", () => {
-  // "Nothing below me" is true of a wheel-arch roof as well as of the underside, so the
-  // depth test used to open the roof and leave a rim arcing from one wheel to the next —
-  // the plank. Closed is the default because that is the shape with no plank in it. Open
-  // is offered because it gives the material back, and a frame printed cheaply is a
-  // different job from one that has to look right.
-  const arch = [                                    // a body on two feet, arch between them
-    [0.04,0.02],[0.22,0.02],[0.22,0.42],[0.30,0.60],[0.70,0.60],[0.78,0.42],
-    [0.78,0.02],[0.96,0.02],[0.96,0.96],[0.04,0.96]
-  ];
-  const box = [[0.05,0.05],[0.95,0.05],[0.95,0.95],[0.05,0.95]];
-  const P = { mode:"projection", length:200, stations:52, hullCrisp:1, hullHollow:true,
-    wallThickness:3, sidePoly:arch, topPoly:box, frontPoly:box,
-    topProfile:[[0,80]], widthProfile:[[0,26]] };
-  const shut = API.makeBody({ ...P });                       // default
-  const open = API.makeBody({ ...P, openArches:true });
-  ok(shut.volume > 0 && open.volume > 0, "both settings have to build something");
-  ok(API.checkManifold(shut.indices).watertight, "closed wells stay watertight");
-  ok(API.checkManifold(open.indices).watertight, "open wells stay watertight");
-  ok(shut.volume > open.volume,
-     `closing the wells is the heavier shape: ${(shut.volume/1000).toFixed(1)} vs ${(open.volume/1000).toFixed(1)} cm3`);
-  // and the thing that matters: with wells closed, nothing high up is left open
-  const solid = API.makeBody({ ...P, hullHollow:false });
-  const openedHigh = (flag) => {
-    const Q = solid.positions, J = solid.indices;
-    let z0=1e30,z1=-1e30;
-    for (let k=2;k<Q.length;k+=3){ if(Q[k]<z0)z0=Q[k]; if(Q[k]>z1)z1=Q[k]; }
-    let a=0;
-    for (let q=0,t=0;q<J.length;q+=3,t++) {
-      if (!flag[t]) continue;
-      const i=J[q],j=J[q+1],k=J[q+2];
-      const cz=(Q[i*3+2]+Q[j*3+2]+Q[k*3+2])/3;
-      if ((cz-z0)/(z1-z0) <= 0.35) continue;
-      const ux=Q[j*3]-Q[i*3],uy=Q[j*3+1]-Q[i*3+1],uz=Q[j*3+2]-Q[i*3+2];
-      const vx=Q[k*3]-Q[i*3],vy=Q[k*3+1]-Q[i*3+1],vz=Q[k*3+2]-Q[i*3+2];
-      a += Math.hypot(uy*vz-uz*vy, uz*vx-ux*vz, ux*vy-uy*vx)/2;
-    }
-    return a;
-  };
-  const hiShut = openedHigh(API.bottomSkinTris(solid.positions, solid.indices, {}));
-  const hiOpen = openedHigh(API.bottomSkinTris(solid.positions, solid.indices, {openArches:true}));
-  ok(hiOpen > hiShut, `opening the wells is what puts a hole up in the arch (${hiOpen.toFixed(0)} vs ${hiShut.toFixed(0)} mm2)`);
-  ok(hiShut < hiOpen * 0.35,
-     `by default almost nothing up in the bodywork is opened: ${hiShut.toFixed(0)} mm2 against ${hiOpen.toFixed(0)}`);
-
-  // Opening the wells must open each ceiling WHOLE. A hole punched in the middle of one
-  // leaves a band of wall hanging inboard of the arch, and from the side that band is the
-  // plank. Whole regions only, and no pinholes under the panel lines: the count of separate
-  // openings has to stay in single figures.
-  const openings = (flag) => {
-    const J = solid.indices, Q = solid.positions;
-    const ec = new Map(), k = (a,b) => a<b ? a+"_"+b : b+"_"+a;
-    for (let q=0,t=0;q<J.length;q+=3,t++) {
-      if (flag[t]) continue;
-      const T=[J[q],J[q+1],J[q+2]];
-      for (const [u,v] of [[T[0],T[1]],[T[1],T[2]],[T[2],T[0]]])
-        ec.set(k(u,v), (ec.get(k(u,v))||0)+1);
-    }
-    const adj = new Map();
-    for (const [kk,c] of ec) {
-      if (c!==1) continue;
-      const i=kk.indexOf("_"), a=+kk.slice(0,i), b=+kk.slice(i+1);
-      if(!adj.has(a))adj.set(a,[]); if(!adj.has(b))adj.set(b,[]);
-      adj.get(a).push(b); adj.get(b).push(a);
-    }
-    const seen=new Set(); let n=0;
-    for (const s0 of adj.keys()) {
-      if (seen.has(s0)) continue;
-      n++; const st=[s0]; seen.add(s0);
-      while(st.length){const v=st.pop(); for(const w of adj.get(v)||[]) if(!seen.has(w)){seen.add(w);st.push(w);}}
-    }
-    return n;
-  };
-  const nOpen = openings(API.bottomSkinTris(solid.positions, solid.indices, {openArches:true}));
-  const nShut = openings(API.bottomSkinTris(solid.positions, solid.indices, {}));
-  ok(nShut <= 6, `closed wells leave few clean openings (${nShut})`);
-  ok(nOpen <= 12, `open wells stay whole rather than fragmenting into pinholes (${nOpen} openings)`);
-  ok(API.checkManifold(open.indices).watertight && API.checkManifold(shut.indices).watertight,
-     "and both settings stay watertight");
-});
-
-// =====================  21. THE NUMBERS THEMSELVES  =====================
-// Nothing here checked an ABSOLUTE dimension for a long time, and a real bug lived in that
-// gap: the outermost ring of grid samples is forced to "outside" so the surface always
-// closes, and that ring used to sit exactly on the model's own limits — so the nose of the
-// car was overwritten as empty air and every model came out one cell short at each end. A
-// 200mm car built at 193mm. Every test still passed, because they all compared the model
-// against itself. These compare it against arithmetic done outside the code.
-const FULL = [[0,0],[1,0],[1,1],[0,1]];
-const ring = (n, r, cx, cy) => Array.from({length:n},(_,i)=>{
-  const a = i/n*Math.PI*2; return [cx+Math.cos(a)*r, cy+Math.sin(a)*r]; });
-
-t("size: a model is the size you asked for, to the millimetre", () => {
-  for (const L of [50, 137, 200, 340]) {
-    const g = API.makeBody({ mode:"projection", length:L, stations:56, hullCrisp:1,
-      hullHollow:false, sidePoly:FULL, topPoly:FULL, frontPoly:FULL,
-      topProfile:[[0,80]], widthProfile:[[0,30]] });
-    let lo=1e30, hi=-1e30;
-    for (let k=0;k<g.positions.length;k+=3){ if(g.positions[k]<lo)lo=g.positions[k]; if(g.positions[k]>hi)hi=g.positions[k]; }
-    const got = hi-lo;
-    ok(Math.abs(got-L) < Math.max(0.5, L*0.005),
-       `${L}mm asked, ${got.toFixed(2)}mm built (${((got-L)/L*100).toFixed(2)}%)`);
-  }
-});
-t("size: it holds at every resolution, so it isn't the grid setting the size", () => {
-  // if the size depended on cell size, coarse and fine would disagree — that was the bug
-  const mk = st => {
-    const g = API.makeBody({ mode:"projection", length:200, stations:st, hullCrisp:1,
-      hullHollow:false, sidePoly:FULL, topPoly:FULL, frontPoly:FULL,
-      topProfile:[[0,80]], widthProfile:[[0,30]] });
-    let lo=1e30, hi=-1e30;
-    for (let k=0;k<g.positions.length;k+=3){ if(g.positions[k]<lo)lo=g.positions[k]; if(g.positions[k]>hi)hi=g.positions[k]; }
-    return hi-lo;
-  };
-  const a = mk(24), b = mk(72);
-  ok(Math.abs(a-b) < 1.0, `coarse ${a.toFixed(2)}mm and fine ${b.toFixed(2)}mm agree`);
-});
-t("volume: a cylinder measures pi r squared L", () => {
-  // side and top are full squares, the front is a circle, so the intersection is a cylinder
-  const L = 200, D = 80;
-  const g = API.makeBody({ mode:"projection", length:L, stations:64, hullCrisp:1,
-    hullHollow:false, sidePoly:FULL, topPoly:FULL, frontPoly:ring(180,0.5,0.5,0.5),
-    topProfile:[[0,D]], widthProfile:[[0,D/2]] });
-  let lo=[1e30,1e30,1e30], hi=[-1e30,-1e30,-1e30];
-  for (let k=0;k<g.positions.length;k+=3) for (let d=0;d<3;d++){
-    if(g.positions[k+d]<lo[d])lo[d]=g.positions[k+d]; if(g.positions[k+d]>hi[d])hi[d]=g.positions[k+d]; }
-  const r = ((hi[1]-lo[1])+(hi[2]-lo[2]))/4, exact = Math.PI*r*r*(hi[0]-lo[0]);
-  ok(Math.abs(g.volume-exact)/exact < 0.02,
-     `${(g.volume/1000).toFixed(2)}cm3 against pi*r^2*L = ${(exact/1000).toFixed(2)}cm3`);
-});
-t("volume: three circles make a Steinmetz solid, not a ball", () => {
-  // The intersection of three round silhouettes has an exact volume of 8(2-root2)r^3.
-  // A ball would be 4/3 pi r^3 — a fifth smaller. Landing on the first and not the second
-  // is what proves the body really is the three drawings intersected.
-  const D = 120;
-  // closedBottom so the base is NOT levelled: this test is about the intersection maths,
-  // and a round body with no bottom traced legitimately gets its base cut flat
-  const g = API.makeBody({ mode:"projection", length:D, stations:72, hullCrisp:1, hullHollow:false,
-    closedBottom:true,
-    sidePoly:ring(180,0.5,0.5,0.5), topPoly:ring(180,0.5,0.5,0.5), frontPoly:ring(180,0.5,0.5,0.5),
-    topProfile:[[0,D]], widthProfile:[[0,D/2]] });
-  let lo=[1e30,1e30,1e30], hi=[-1e30,-1e30,-1e30];
-  for (let k=0;k<g.positions.length;k+=3) for (let d=0;d<3;d++){
-    if(g.positions[k+d]<lo[d])lo[d]=g.positions[k+d]; if(g.positions[k+d]>hi[d])hi[d]=g.positions[k+d]; }
-  const r = ((hi[0]-lo[0])+(hi[1]-lo[1])+(hi[2]-lo[2]))/6;
-  const steinmetz = 8*(2-Math.SQRT2)*r*r*r, ball = 4/3*Math.PI*r*r*r;
-  ok(Math.abs(g.volume-steinmetz)/steinmetz < 0.03,
-     `${(g.volume/1000).toFixed(2)}cm3 against 8(2-root2)r^3 = ${(steinmetz/1000).toFixed(2)}cm3`);
-  ok(Math.abs(g.volume-steinmetz) < Math.abs(g.volume-ball),
-     "and it is nearer the Steinmetz solid than a ball, so the three views really do intersect");
-});
-t("surface: every edge is walked once each way", () => {
-  // checkManifold counts how often an edge is USED, which a flipped patch survives: both
-  // its edges are still used twice. Volume is a signed sum, so one flipped patch quietly
-  // subtracts instead of adding. This checks direction, which is what actually matters.
-  for (const [label, extra] of [["solid",{hullHollow:false}],["hollow",{hullHollow:true,wallThickness:3}]]) {
-    const g = API.makeBody({ mode:"projection", length:160, stations:56, hullCrisp:1,
-      sidePoly:ring(120,0.5,0.5,0.5), topPoly:FULL, frontPoly:FULL,
-      topProfile:[[0,80]], widthProfile:[[0,30]], ...extra });
-    const dir = new Map();
-    for (let k=0;k<g.indices.length;k+=3) {
-      const t3=[g.indices[k],g.indices[k+1],g.indices[k+2]];
-      for (const [u,v] of [[t3[0],t3[1]],[t3[1],t3[2]],[t3[2],t3[0]]])
-        dir.set(u+">"+v, (dir.get(u+">"+v)||0)+1);
-    }
-    let doubled=0, unpaired=0;
-    for (const [k,n] of dir) {
-      if (n>1) doubled++;
-      const [u,v]=k.split(">");
-      if (!dir.has(v+">"+u)) unpaired++;
-    }
-    ok(doubled===0 && unpaired===0,
-       `${label}: ${doubled} edges walked twice the same way, ${unpaired} with no partner`);
-    ok(g.volume>0, `${label}: the volume comes out positive, so the surface faces outward`);
-  }
-});
-
-t("base: with no bottom traced, the body ends on one flat plane", () => {
-  // The ask, in his words: make it look like it ends when the bottom face would be reached,
-  // and leave that face open. A traced side view says where that is — over a wheel its lower
-  // edge comes down to the ground, over an arch it stops in mid-air forty millimetres up.
-  // Those are two populations, and the lower one is where the body ends.
-  const arch = [
-    [0.04,0.03],[0.24,0.03],[0.26,0.34],[0.34,0.50],[0.66,0.50],[0.74,0.34],
-    [0.76,0.03],[0.96,0.03],[0.96,0.94],[0.04,0.94]
-  ];
-  const H = 90;
-  const sideMM = arch.map(q => [q[0]*200, q[1]*H]);
-  const cut = API.baseCutZ(sideMM, H);
-  ok(isFinite(cut), `a body on two feet has a base to level (cut at ${cut.toFixed(1)}mm)`);
-  ok(cut > 0 && cut < H*0.20,
-     `and it sits down at the feet, not up in the arch: ${cut.toFixed(1)}mm of ${H}mm`);
-
-  // a shape with one flat bottom has nothing to separate, so nothing is levelled
-  const flat = [[0.05,0.05],[0.95,0.05],[0.95,0.95],[0.05,0.95]].map(q=>[q[0]*200,q[1]*H]);
-  ok(!isFinite(API.baseCutZ(flat, H)), "a plain box is left alone");
-  ok(!isFinite(API.baseCutZ([], H)), "and an empty outline is handled without throwing");
-
-  // and the built body really is flat down there
-  const box = [[0.03,0.03],[0.97,0.03],[0.97,0.97],[0.03,0.97]];
-  const g = API.makeBody({ mode:"projection", length:200, stations:60, hullCrisp:1,
-    hullHollow:false, sidePoly:arch, topPoly:box, frontPoly:box,
-    topProfile:[[0,H]], widthProfile:[[0,30]] });
-  let zMin = 1e30;
-  for (let k=2;k<g.positions.length;k+=3) if (g.positions[k]<zMin) zMin=g.positions[k];
-  // count how much surface sits within a whisker of the lowest level — a levelled base is a
-  // real flat face, a rounded one has almost nothing there
-  let flatArea = 0, total = 0;
-  for (let q=0;q<g.indices.length;q+=3) {
-    const a=g.indices[q]*3,b=g.indices[q+1]*3,c=g.indices[q+2]*3,P=g.positions;
+  const out=[], spots=[];        // spots keeps each reading WITH where it was taken
+  /* Optionally sample only faces in a height band. The rim you see at an opening is the
+     band of material between the outer skin and the inner wall, and "is the rim a clean
+     band or a row of teeth" is a question about that strip specifically — so it has to be
+     askable without dragging the whole model's average into the answer. Rays are still cast
+     against the entire mesh; the band only chooses where to stand. */
+  const zLo=(o.zMin==null)?-Infinity:o.zMin, zHi=(o.zMax==null)?Infinity:o.zMax;
+  const banded=zLo>-Infinity||zHi<Infinity;
+  const step=banded?1:Math.max(1,Math.floor(nTri/samples));
+  // typical face area, so "sliver" is measured against this mesh rather than a magic number
+  let areaSum=0, areaN=0;
+  for(let t=0;t<nTri;t+=Math.max(1,Math.floor(nTri/400))){
+    const a=indices[t*3]*3,b=indices[t*3+1]*3,c=indices[t*3+2]*3;
     const ux=P[b]-P[a],uy=P[b+1]-P[a+1],uz=P[b+2]-P[a+2];
     const vx=P[c]-P[a],vy=P[c+1]-P[a+1],vz=P[c+2]-P[a+2];
-    const ar=Math.hypot(uy*vz-uz*vy,uz*vx-ux*vz,ux*vy-uy*vx)/2;
-    total += ar;
-    const cz=(P[a+2]+P[b+2]+P[c+2])/3;
-    if (cz < zMin+1.5) flatArea += ar;
+    const cxx=uy*vz-uz*vy,cyy=uz*vx-ux*vz,czz=ux*vy-uy*vx;
+    areaSum+=0.5*Math.hypot(cxx,cyy,czz); areaN++;
   }
-  ok(flatArea/total > 0.04,
-     `the base is a real flat face, not a rounded-off edge (${(flatArea/total*100).toFixed(1)}% of the surface sits on it)`);
-});
-
-t("two sides: one outline is symmetric, two are not", () => {
-  // Top/Bottom, Front/Rear — the missing pair of the standard six views is Left/Right. Trace
-  // one and the body is symmetric, which is what almost everything wants. Trace the second
-  // and the two flanks are allowed to differ, sweeping across the width rather than stepping
-  // at the centreline.
-  const BOXP = [[0.04,0.04],[0.96,0.04],[0.96,0.96],[0.04,0.96]];
-  const tall = [[0.05,0.05],[0.95,0.05],[0.95,0.95],[0.05,0.95]];
-  const step = [[0.05,0.05],[0.95,0.05],[0.95,0.40],[0.50,0.40],[0.50,0.95],[0.05,0.95]];
-  const base = { mode:"projection", length:200, stations:60, hullCrisp:1, hullHollow:false,
-    closedBottom:true, topPoly:BOXP, frontPoly:BOXP, topProfile:[[0,90]], widthProfile:[[0,40]] };
-
-  const roof = (g, sign) => {
-    const P = g.positions, N = 20, top = new Array(N).fill(-1e9);
-    for (let k = 0; k < P.length; k += 3) {
-      if (Math.sign(P[k+1]) !== sign || Math.abs(P[k+1]) < 12) continue;
-      const i = Math.max(0, Math.min(N-1, Math.floor(P[k]/200*N)));
-      if (P[k+2] > top[i]) top[i] = P[k+2];
-    }
-    return top;
-  };
-  const spread = g => {
-    const L = roof(g,-1), R = roof(g,1);
-    let w = 0;
-    for (let i = 0; i < L.length; i++)
-      if (L[i] > -1e8 && R[i] > -1e8) w = Math.max(w, Math.abs(L[i]-R[i]));
-    return w;
-  };
-
-  const one = API.makeBody({ ...base, sidePoly: tall });
-  ok(spread(one) < 1.5, `one outline gives matching flanks (${spread(one).toFixed(2)}mm apart)`);
-
-  const two = API.makeBody({ ...base, sidePoly: tall, sidePolyR: step });
-  ok(spread(two) > 12,
-     `two outlines give different flanks (${spread(two).toFixed(1)}mm apart) — the second drawing is really used`);
-  ok(API.checkManifold(two.indices).watertight, "and the asymmetric body is still watertight");
-  ok(two.volume < one.volume*0.95, "and the second outline actually removes material");
-
-  // The far side of a symmetric object is drawn on a mirrored page. Mirroring it back into
-  // the shared frame has to give the same outline again, or the body would fight itself.
-  const mir = API.makeBody({ ...base, sidePoly: tall, sidePolyR: tall.map(q => [1-q[0], q[1]]) });
-  ok(Math.abs(mir.volume-one.volume)/one.volume < 1e-9,
-     "tracing the far side of a symmetric object changes nothing");
-});
-
-t("crispness decides how the surface follows your lines, not whether a hole is a hole", () => {
-  // A window marked "cut clean through" used to be scaled by the crispness slider, so in
-  // Smooth mode the ray through the middle of it still met the full thickness of the body —
-  // as though the window had never been drawn — and it faded in as the slider came up. A
-  // dent is a matter of degree. A hole is not.
-  const BOXP = [[0.03,0.03],[0.97,0.03],[0.97,0.97],[0.03,0.97]];
-  const win  = [[0.35,0.35],[0.65,0.35],[0.65,0.65],[0.35,0.65]];
-  const base = { mode:"projection", length:200, stations:52, hullHollow:false, closedBottom:true,
-    sidePoly:BOXP, topPoly:BOXP, frontPoly:BOXP, topProfile:[[0,90]], widthProfile:[[0,45]] };
-
-  // material met by a line straight through the middle of the window, off the grid planes
-  const throughWindow = (g) => {
-    const P=g.positions, I=g.indices, x=97.7, z=44.3, hits=[];
-    for (let t=0;t<I.length;t+=3) {
-      const a=I[t],b=I[t+1],c=I[t+2];
-      const ax=P[a*3],az=P[a*3+2],bx=P[b*3],bz=P[b*3+2],cx=P[c*3],cz=P[c*3+2];
-      const den=(bz-cz)*(ax-cx)+(cx-bx)*(az-cz);
-      if (Math.abs(den)<1e-12) continue;
-      const l1=((bz-cz)*(x-cx)+(cx-bx)*(z-cz))/den;
-      const l2=((cz-az)*(x-cx)+(ax-cx)*(z-cz))/den;
-      if (l1<0||l2<0||1-l1-l2<0) continue;
-      hits.push(l1*P[a*3+1]+l2*P[b*3+1]+(1-l1-l2)*P[c*3+1]);
-    }
-    hits.sort((u,v)=>u-v);
-    let m=0; for (let i=0;i+1<hits.length;i+=2) m+=hits[i+1]-hits[i];
-    return m;
-  };
-
-  for (const c of [0, 0.5, 1]) {
-    const solid = API.makeBody({ ...base, hullCrisp:c, features:[] });
-    const cut   = API.makeBody({ ...base, hullCrisp:c,
-      features:[{view:"side", poly:win, depth:-40, through:true, name:"window"}] });
-    const before = throughWindow(solid), after = throughWindow(cut);
-    ok(before > 10, `crisp ${c}: the plain body has material there to cut (${before.toFixed(1)}mm)`);
-    ok(after < before*0.1,
-       `crisp ${c}: the window is cut clean through (${after.toFixed(1)}mm left of ${before.toFixed(1)}mm)`);
-    ok(API.checkManifold(cut.indices).watertight, `crisp ${c}: and it stays watertight`);
-  }
-});
-t("crispness leaves the inside of the shell alone", () => {
-  // His point, and it is the right one: the slider is about how closely the OUTSIDE follows
-  // the drawing. The inner wall is offset from the shape before any detail is stamped, so
-  // turning crispness up must not start putting ribs and valleys inside the frame.
-  const BOXP = [[0.05,0.05],[0.95,0.05],[0.95,0.95],[0.05,0.95]];
-  const ring = (cx,cy,r) => Array.from({length:16},(_,i)=>{
-    const a=i/16*Math.PI*2; return [cx+Math.cos(a)*r, cy+Math.sin(a)*r]; });
-  const feats = [];
-  for (const v of ["side","top","front"])
-    for (const o of [0.3,0.5,0.7]) feats.push({ view:v, poly:ring(o,0.5,0.09), depth:-3, soft:0.1 });
-  const base = { mode:"projection", length:200, stations:48, hullHollow:true, wallThickness:5,
-    closedBottom:true, sidePoly:BOXP, topPoly:BOXP, frontPoly:BOXP,
-    topProfile:[[0,90]], widthProfile:[[0,45]], features:feats };
-
-  // how far each inner vertex sits from the average of its neighbours: a smooth wall is flat
-  const innerRoughness = (g) => {
-    const P=g.positions, I=g.indices, n=P.length/3, vc=Math.floor(n/2);
-    const nb=Array.from({length:n},()=>new Set());
-    for (let q=0;q<I.length;q+=3) {
-      const a=I[q],b=I[q+1],c=I[q+2];
-      nb[a].add(b); nb[a].add(c); nb[b].add(a); nb[b].add(c); nb[c].add(a); nb[c].add(b);
-    }
-    let sum=0, cnt=0;
-    for (let k=vc;k<n;k++) {
-      const s=nb[k]; if (!s||s.size<3) continue;
-      let cx=0,cy=0,cz=0,el=0;
-      for (const j of s) { cx+=P[j*3]; cy+=P[j*3+1]; cz+=P[j*3+2];
-        el+=Math.hypot(P[j*3]-P[k*3],P[j*3+1]-P[k*3+1],P[j*3+2]-P[k*3+2]); }
-      cx/=s.size; cy/=s.size; cz/=s.size; el/=s.size;
-      sum += Math.hypot(P[k*3]-cx,P[k*3+1]-cy,P[k*3+2]-cz)/(el||1); cnt++;
-    }
-    return cnt ? sum/cnt : 0;
-  };
-  const smooth = innerRoughness(API.makeBody({ ...base, hullCrisp:0 }));
-  const sharp  = innerRoughness(API.makeBody({ ...base, hullCrisp:1 }));
-  ok(smooth > 0 && sharp > 0, "both settings build a shell with an inside");
-  ok(sharp < smooth*1.35,
-     `turning crispness up doesn't roughen the inside: ${smooth.toFixed(4)} -> ${sharp.toFixed(4)}`);
-});
-
-t("a second real model, not just the one everything was tuned on", () => {
-  // Every geometry check above runs on shapes built in the test, or on one car. A tuning
-  // that happens to suit that car passes all of them. This is a different traced model —
-  // different outline, different detail, 228 features, a 4.9mm wall and the slider at 0.2 —
-  // loaded from the file the studio actually saved.
-  let prof;
-  try { prof = JSON.parse(fs.readFileSync(new URL("./fixture-charger.json", import.meta.url), "utf8")); }
-  catch (e) { ok(false, "the second model's fixture must be present: " + e.message); return; }
-
-  ok(prof.features.length > 200, `${prof.features.length} traced features came with it`);
-
-  // Both builders. "Smooth" and "Follow my drawing" are not two looks of one builder — they
-  // are two different ones, and a fix landing in only one is how they came to disagree about
-  // where the object ends.
-  for (const [label, over] of [
-    ["smooth, as saved",    { mode:"loft" }],
-    ["exact, as saved",     { mode:"projection" }],
-    ["exact, underside open", { mode:"projection", openUnderside:true }],
-    ["exact, crisp 1",      { mode:"projection", hullCrisp:1 }],
-    ["exact, thin wall",    { mode:"projection", wallThickness:1.8, wallTop:1.8, wallSide:1.8, wallBottom:1.8 }],
-    ["exact, thick wall",   { mode:"projection", wallThickness:7,   wallTop:7,   wallSide:7,   wallBottom:7 }],
-  ]) {
-    const g = API.makeBody({ ...prof, ...over });
-    const m = API.checkManifold(g.indices);
-    ok(m.watertight, `${label}: watertight (boundary ${m.boundary}, non-manifold ${m.nonman})`);
-    ok(g.volume > 0 && isFinite(g.volume), `${label}: has a real volume (${(g.volume/1000).toFixed(1)} cm3)`);
-
-    // no vertex may stand off from its own neighbours by more than an edge length —
-    // that is what a spike is
-    const P=g.positions, I=g.indices, n=P.length/3;
-    const nb=Array.from({length:n},()=>new Set());
-    for (let q=0;q<I.length;q+=3) {
-      const a=I[q],b=I[q+1],c=I[q+2];
-      nb[a].add(b); nb[a].add(c); nb[b].add(a); nb[b].add(c); nb[c].add(a); nb[c].add(b);
-    }
-    let worst=0;
-    for (let k=0;k<n;k++) {
-      const st=nb[k]; if (!st||st.size<3) continue;
-      let cx=0,cy=0,cz=0,el=0;
-      for (const j of st) { cx+=P[j*3]; cy+=P[j*3+1]; cz+=P[j*3+2];
-        el+=Math.hypot(P[j*3]-P[k*3],P[j*3+1]-P[k*3+1],P[j*3+2]-P[k*3+2]); }
-      cx/=st.size; cy/=st.size; cz/=st.size; el/=st.size;
-      const r=Math.hypot(P[k*3]-cx,P[k*3+1]-cy,P[k*3+2]-cz)/(el||1);
-      if (r>worst) worst=r;
-    }
-    ok(worst < 1.2, `${label}: no spikes (worst vertex stands off ${worst.toFixed(2)} edge lengths)`);
-  }
-
-  // Neither builder may finish below the ground the drawing sits on. The smooth one used to,
-  // by 1.5mm on this very model, because the levelled base had only been built into the
-  // other one.
-  for (const mode of ["loft","projection"]) {
-    const b2 = API.makeBody({ ...prof, mode });
-    let zMin = 1e30;
-    for (let k=2;k<b2.positions.length;k+=3) if (b2.positions[k]<zMin) zMin=b2.positions[k];
-    ok(zMin > -0.5, `${mode}: the body ends on or above the ground (lowest point ${zMin.toFixed(1)}mm)`);
-  }
-
-  // the length asked for is the length built, on a real traced outline too
-  const g = API.makeBody({ ...prof, mode:"projection" });
-  let lo=1e30, hi=-1e30;
-  for (let k=0;k<g.positions.length;k+=3) { if (g.positions[k]<lo) lo=g.positions[k];
-    if (g.positions[k]>hi) hi=g.positions[k]; }
-  ok(Math.abs((hi-lo)-prof.length) < 1.5,
-     `${prof.length}mm asked, ${(hi-lo).toFixed(1)}mm built`);
-});
-
-t("the rim you see at an opening is a clean band, one wall thick", () => {
-  /* REWRITTEN. The old version read the mesh as two stacked copies of one vertex list —
-     `vc = P.length/6`, outer vertex v paired with inner vertex v+vc — which is how the
-     vertex-offset hollow happens to lay its output out. The field path dual-contours a
-     single surface and has no such pairing, so that arithmetic picked unrelated vertices
-     and reported a 4.2mm rim as 111mm. It was pinning the shape of the data structure, not
-     the shape of the model, which is the exact trap this project has been bitten by before.
-
-     What it was really trying to protect: look into an opening and you should see a clean
-     band of material one wall thick, not a ragged edge. That is measurable straight off the
-     geometry — stand on the faces in the bottom of the model and measure across to the far
-     side — and it means the same thing whichever way the shell was built.
-
-     COVERAGE NOTE, honestly: the old test also measured how much the rim WANDERED in z,
-     which needed the rim vertices identified as a ring. That half is not reproduced here.
-     Both shells are watertight and closed, so there is no boundary ring to walk, and the
-     rim legitimately follows the curve of an arch. Re-pinning it needs a real rim-finder;
-     until then this is thinner cover than it was, and it is better to say so than to leave
-     a green tick standing in for a check nobody is doing. */
-  let prof;
-  try { prof = JSON.parse(fs.readFileSync(new URL("./fixture-traced.json", import.meta.url), "utf8")); }
-  catch (e) { ok(false, "the traced fixture must be present: " + e.message); return; }
-
-  const wall = 4.2;
-  for (const closedBottom of [true, false]) {
-    for (const extra of [{}, { fieldHollow:false }]) {
-      const g = API.makeVisualHull({ ...prof, features:null, hullHollow:true,
-                                     wallThickness:wall, closedBottom, ...extra });
-      let mn = 1e9, mx = -1e9;
-      for (let i = 2; i < g.positions.length; i += 3) {
-        if (g.positions[i] < mn) mn = g.positions[i];
-        if (g.positions[i] > mx) mx = g.positions[i];
+  const minArea=areaN?(areaSum/areaN)*0.05:0;
+  for(let t=0;t<nTri;t+=step){
+    const a=indices[t*3]*3,b=indices[t*3+1]*3,c=indices[t*3+2]*3;
+    const ux=P[b]-P[a],uy=P[b+1]-P[a+1],uz=P[b+2]-P[a+2];
+    const vx=P[c]-P[a],vy=P[c+1]-P[a+1],vz=P[c+2]-P[a+2];
+    let nx=uy*vz-uz*vy, ny=uz*vx-ux*vz, nz=ux*vy-uy*vx;
+    const ln=Math.hypot(nx,ny,nz); if(ln<1e-12)continue;
+    /* A sliver's centroid sits within a hair of its own long edge, so the march leaves and
+       re-enters the surface almost immediately and reads a wall of nearly zero. That is a
+       property of the triangulation, not of the part. Anything far below the typical face
+       area is not a place you can stand and take a measurement. */
+    if(ln*0.5 < minArea) continue;
+    nx/=ln; ny/=ln; nz/=ln;
+    const cx=(P[a]+P[b]+P[c])/3, cy=(P[a+1]+P[b+1]+P[c+1])/3, cz=(P[a+2]+P[b+2]+P[c+2])/3;
+    if(cz<zLo||cz>zHi)continue;
+    // winding is not guaranteed to point outward here, so try both and keep the near side
+    let best=-1;
+    for(let s=-1;s<=1;s+=2){
+      const dx=nx*s, dy=ny*s, dz=nz*s;
+      /* A face that shares a corner with this one is its neighbour across a fold, not the
+         far side of a wall. It sits a hair off the ray and reads as a 0.02mm "wall", which
+         would make every model look catastrophically thin. Skip anything touching this
+         triangle's own vertices. */
+      const v0=indices[t*3],v1=indices[t*3+1],v2=indices[t*3+2];
+      const seen=new Set(); let near=-1;
+      for(let m=0;m<=reach;m+=gs){
+        const i=Math.floor((cx+dx*m-mnx)/gs), j=Math.floor((cy+dy*m-mny)/gs), k=Math.floor((cz+dz*m-mnz)/gs);
+        for(let di=-1;di<=1;di++)for(let dj=-1;dj<=1;dj++)for(let dk=-1;dk<=1;dk++){
+          const L=bucket.get(key(i+di,j+dj,k+dk)); if(!L)continue;
+          for(let z=0;z<L.length;z++){ const tt=L[z]; if(tt===t||seen.has(tt))continue; seen.add(tt);
+            const w0=indices[tt*3],w1=indices[tt*3+1],w2=indices[tt*3+2];
+            if(w0===v0||w0===v1||w0===v2||w1===v0||w1===v1||w1===v2||w2===v0||w2===v1||w2===v2)continue;
+            const d=hit(cx,cy,cz,dx,dy,dz,tt); if(d>0&&d<=reach&&(near<0||d<near))near=d; }
+        }
+        if(near>=0&&near<=m+gs)break;
       }
-      const rim = API.shellWallStats(g.positions, g.indices,
-                    { wall, zMin: mn, zMax: mn + (mx - mn) * 0.06 });
-      const how = `${extra.fieldHollow === false ? "offset" : "field"} path, ` +
-                  `${closedBottom ? "closed" : "open"} underside`;
-      ok(rim.n > 200, `${how}: enough of the rim to measure (got ${rim.n})`);
-      near(rim.median, wall, 0.6, `${how}: the rim is the thickness asked for`);
+      if(near>0&&(best<0||near<best))best=near;
+    }
+    if(best>0){ out.push(best); spots.push(cx,cy,cz,best); }
+  }
+  if(!out.length) return {n:0,min:0,median:0,p10:0,want:want,thin:0};
+  out.sort((x,y)=>x-y);
+  const at=f=>out[Math.min(out.length-1,Math.max(0,Math.round(f*(out.length-1))))];
+  const thinBar=want>0?want*0.75:0;
+  let thin=0; for(let i=0;i<out.length;i++) if(out[i]<thinBar) thin++;
+  /* A PERCENTILE CANNOT SEE A LOCAL THIN PATCH, and that is the whole problem for a part
+     that has to hold. Measured on a 5mm-wall box with one 3mm pocket: the vertex-push path
+     leaves 2.5mm of wall under the pocket, and the median still reads 5.00mm because the thin
+     patch is a small share of a big surface. `min` is no better — it is one reading, so it
+     swings with the sample count (4.91mm at 300 samples, 3.76mm at 2000 on a shell that is
+     genuinely fine).
+     What a safety gate needs is a REGION: several thin readings close enough together to be
+     the same piece of wall. Cluster the under-spec readings by proximity and report the worst
+     cluster with its position, so the answer is "there is a 2.5mm patch here", not a number
+     with no address. */
+  const bar = want>0 ? want*0.75 : 0;
+  let worst=null;
+  if(want>0){
+    const under=[];
+    for(let i=0;i<spots.length;i+=4) if(spots[i+3]<bar) under.push([spots[i],spots[i+1],spots[i+2],spots[i+3]]);
+    const reachSq = Math.pow(Math.max(0.5,(o.clusterReach||want*2)),2);
+    const used=new Uint8Array(under.length);
+    for(let i=0;i<under.length;i++){
+      if(used[i])continue;
+      const grp=[under[i]]; used[i]=1;
+      for(let q=0;q<grp.length;q++){
+        const g0=grp[q];
+        for(let j=0;j<under.length;j++){
+          if(used[j])continue;
+          const dx=under[j][0]-g0[0], dy=under[j][1]-g0[1], dz=under[j][2]-g0[2];
+          if(dx*dx+dy*dy+dz*dz<=reachSq){ used[j]=1; grp.push(under[j]); }
+        }
+      }
+      /* One stray reading is noise — a ray grazing a fold, or a sliver. A patch of wall is
+         several of them together, which is also what a printer actually experiences. */
+      if(grp.length<3)continue;
+      let mn=Infinity, sx=0, sy=0, sz=0;
+      for(const g2 of grp){ if(g2[3]<mn)mn=g2[3]; sx+=g2[0]; sy+=g2[1]; sz+=g2[2]; }
+      if(!worst || mn<worst.min || (mn===worst.min && grp.length>worst.n))
+        worst={ min:mn, n:grp.length, at:[sx/grp.length, sy/grp.length, sz/grp.length] };
     }
   }
-});
+  return { n:out.length, min:out[0], median:at(0.5), p10:at(0.10), want:want,
+           thin: want>0?thin/out.length:0, worstPatch:worst };
+}
+function dropStrayShells(positions,indices,expect){
+  const nTri=indices.length/3; if(!nTri)return indices;
+  expect=Math.max(1,expect||1);
+  const par=new Int32Array(positions.length/3).fill(-1);
+  const find=x=>{while(par[x]>=0)x=par[x];return x;};
+  const uni=(a,b)=>{a=find(a);b=find(b);if(a!==b)par[a]=b;};
+  for(let q=0;q<indices.length;q+=3){uni(indices[q],indices[q+1]);uni(indices[q+1],indices[q+2]);}
+  const cnt=new Map();
+  for(let q=0;q<indices.length;q+=3){const r=find(indices[q]); cnt.set(r,(cnt.get(r)||0)+1);}
+  if(cnt.size<=expect)return indices;
+  // A frame is a known number of pieces: one when the underside is open (skin, wall and the rim
+  // that joins them are all one surface), two when it is sealed (skin and wall separately).
+  // Keep exactly those, biggest first. Anything else is scenery, however big it grew.
+  const order=[...cnt.entries()].sort((a,b)=>b[1]-a[1]).slice(0,expect);
+  const keep=new Set(order.map(e=>e[0]));
+  if(keep.size===cnt.size)return indices;
+  const out=[];
+  for(let q=0;q<indices.length;q+=3)if(keep.has(find(indices[q])))out.push(indices[q],indices[q+1],indices[q+2]);
+  return out.length?out:indices;
+}
+/* THE UNDERSIDE — which triangles an open-bottom shell should drop.
+   Not "faces downward and sits low": on a real car body that also catches wheel-arch ceilings,
+   window-indent faces and the roof seen from inside, punching holes through the middle of the
+   model. The underside is what you'd see looking straight up from the floor — a triangle with
+   NOTHING else of the body below it. That's found with a depth buffer: drop the body onto an
+   x/y grid keeping the lowest surface height in each column, then a downward-facing triangle
+   belongs to the underside only where it IS that lowest surface. Everything with material
+   beneath it — arch ceilings, indents, roof — is left alone, so no stray holes. */
+function bottomSkinTris(positions,indices,opts){
+  opts=opts||{};
+  const nTri=indices.length/3, flag=new Uint8Array(nTri);
+  /* WHEN THE BASE HAS BEEN LEVELLED, THE UNDERSIDE IS NOT A GUESS.
+     Everything below in this function exists to work out which skin is the underside of a
+     rounded body: a depth buffer, a vote to settle its flicker, filters for specks and for
+     tabs stranded in the hole, and a rule to keep wheel-arch roofs shut. Every one of those
+     is an approximation, and each left its own signature on the edge — that is where the
+     nibbled, jigsaw look around the arches came from.
+     If the body was levelled onto a flat plane there is nothing to approximate. The bottom
+     face IS that plane. Open exactly the triangles lying on it, and the edge of the opening
+     is the body's own cross-section there: one fair curve, arrived at by construction rather
+     than by voting. Nothing above the plane is touched, so an arch roof cannot be opened and
+     no rim can appear across an arch. */
+  if(opts.baseCut != null && opts.baseCut > -1e29){
+    const tol=Math.max(0.05,(opts.cell||1)*0.75);
+    /* OPEN WELLS MEANS THE WHOLE CEILING, NOT A HOLE IN IT.
+       Any hole cut in a shell carries a band of wall around its edge. Punch that hole in the
+       middle of a wheel-arch ceiling and the band is left hanging inboard of the arch, and
+       seen through the arch from the side it reads as a slab spanning between the wheels —
+       the plank. It is not stray material: the arch void measures completely empty, and the
+       body matches the drawing. It is the rim of a badly placed hole.
+       So do not place the hole in the middle. Open every face that looks at the ground, all
+       the way out to where the surface turns and starts facing sideways. Then the edge of the
+       opening lands on the arch's own silhouette — the line where a fender visibly ends —
+       instead of floating in the middle of the ceiling, and the wheel well is genuinely open
+       the way the underside of a real body shell is. */
+    const down=new Uint8Array(nTri), tarea=new Float64Array(nTri), tz=new Float64Array(nTri);
+    for(let q=0,t=0;q<indices.length;q+=3,t++){
+      const a=indices[q],b=indices[q+1],c=indices[q+2];
+      const ax=positions[a*3],ay=positions[a*3+1],az=positions[a*3+2];
+      const ux=positions[b*3]-ax,uy=positions[b*3+1]-ay,uz=positions[b*3+2]-az;
+      const vx=positions[c*3]-ax,vy=positions[c*3+1]-ay,vz=positions[c*3+2]-az;
+      const fz=ux*vy-uy*vx, fl=Math.hypot(uy*vz-uz*vy,uz*vx-ux*vz,fz);
+      tarea[t]=fl/2; tz[t]=Math.min(az,positions[b*3+2],positions[c*3+2]);
+      /* WHAT COUNTS AS LOOKING AT THE GROUND. This was `< -0.5`, i.e. a surface had to be
+         within 60 degrees of horizontal before the underside trim would open it.
 
+         On a traced car whose underbody SLOPES, that cutoff lands in the middle of the
+         ceiling. Measured on Collin's profile_8 at the station above a wheel arch (x=80,
+         |y|<20, z 29-36): 126 triangles with a normal-z of about -0.5, sitting exactly on the
+         boundary, and roughly half of them failed by a hair. The surviving half stayed as a
+         2.4mm floor at z=31.2 — precisely where his drawing puts the body's underside — and
+         seen through the open arch from the side that floor IS the plank. He reported it for
+         months as "the underbody never hollows".
 
-// =====================  WHERE DETAIL LANDS  =====================
-// These pin the PLACE, not merely that something happened. Every bug in this block shipped
-// past a green suite because the old tests asked "did the model change?" and the answer was
-// yes — on the wrong face. A traced right-hand window was measured denting the NOSE at the
-// exact coordinates a front-view window lands, and bottom-view detail was measured moving
-// nothing at all, 0.00mm on all six faces. Both are silent: nothing throws, the shell stays
-// watertight, the volume moves a little, and the detail is simply somewhere else.
-{
-  const BOX = [[0,0],[1,0],[1,1],[0,1]];
-  const blockProfile = extra => ({
-    length:100, topProfile:[[0,40],[1,40]], widthProfile:[[0,30],[1,30]],
-    sidePoly:BOX, topPoly:BOX, frontPoly:BOX, hullCrisp:1, wallThickness:2,
-    hullHollow:false, closedBottom:true, hullRes:70, mode:"projection", features:null, ...extra });
-  // a patch in a corner of the view frame, so u and v can each be told apart from their mirror
-  const PATCH = [[0.10,0.60],[0.30,0.60],[0.30,0.80],[0.10,0.80]];
+         -0.35 opens it. Verified on his car (the slab at x=80 disappears, leaving only the
+         roof at 70.9-72.7) and on the same car with its features stripped, both watertight at
+         0 boundary edges and 0 non-manifold.
 
-  /* WHERE IS THE SURFACE — asked with a ray, not with a vertex bin.
-     faceGrid used to bucket MESH VERTICES by cell and keep the extreme one. That cannot see
-     a pocket: the pocket's own rim and walls put vertices in the same cell as the uncut face,
-     so the extreme is unchanged and a perfectly good 4mm pocket reads 0.00mm. It also cannot
-     tell a pocket from the whole face moving — both look like "the extreme shifted" — which
-     is how a 4mm pocket on a 30mm block once read as a 60mm through-cut.
-     Casting a ray answers the actual question: at this (u,v), how far in is the first
-     surface? Ray/triangle parity is also immune to the grazing-ray error that fooled the
-     earlier probes. */
-  const firstHit = (pos, idx, ax, sgn, u, v) => {
-    const o1 = (ax+1)%3, o2 = (ax+2)%3;
-    let best = sgn > 0 ? -Infinity : Infinity, found = false;
-    for (let q = 0; q < idx.length; q += 3) {
-      const A = idx[q]*3, B = idx[q+1]*3, C = idx[q+2]*3;
-      const au = pos[A+o1], av = pos[A+o2], bu = pos[B+o1], bv = pos[B+o2], cu = pos[C+o1], cv = pos[C+o2];
-      const den = (bv-cv)*(au-cu) + (cu-bu)*(av-cv);
-      if (Math.abs(den) < 1e-12) continue;
-      const w0 = ((bv-cv)*(u-cu) + (cu-bu)*(v-cv)) / den;
-      const w1 = ((cv-av)*(u-cu) + (au-cu)*(v-cv)) / den;
-      const w2 = 1 - w0 - w1;
-      if (w0 < -1e-9 || w1 < -1e-9 || w2 < -1e-9) continue;
-      const h = w0*pos[A+ax] + w1*pos[B+ax] + w2*pos[C+ax];
-      if (sgn > 0 ? h > best : h < best) { best = h; found = true; }
+         It does NOT risk the pinholes the area gate below exists to stop: specks are excluded
+         by AREA, not by this test, so loosening the angle grows the real ceilings without
+         promoting a single speck. -0.25 also works and is not taken — the extra margin buys
+         nothing measured and this is nearer the "starts facing sideways" line the opening was
+         designed around. */
+      if(fl && fz/fl < -0.35) down[t]=1;                       // genuinely faces the ground
     }
-    return found ? best : null;
-  };
-
-  /* How much material a feature actually removed. Volume cannot be faked by a rim vertex
-     landing in the right cell, and it is the number that says whether a carve carved. */
-  const volOf = g => { let V = 0; const P = g.positions, I = g.indices;
-    for (let q = 0; q < I.length; q += 3) {
-      const a = I[q]*3, b = I[q+1]*3, c = I[q+2]*3;
-      V += (P[a]*(P[b+1]*P[c+2]-P[c+1]*P[b+2]) - P[a+1]*(P[b]*P[c+2]-P[c]*P[b+2])
-          + P[a+2]*(P[b]*P[c+1]-P[c]*P[b+1]))/6;
+    if(!opts.openArches){
+      for(let t=0;t<nTri;t++)
+        if(down[t] && tz[t] <= opts.baseCut + tol) flag[t]=1; // just the levelled base
+      return flag;
     }
-    return Math.abs(V); };
-
-  const bboxOf = pos => { const mn=[1e18,1e18,1e18], mx=[-1e18,-1e18,-1e18];
-    for (let i=0;i<pos.length;i+=3) for (let k=0;k<3;k++){ if(pos[i+k]<mn[k])mn[k]=pos[i+k]; if(pos[i+k]>mx[k])mx[k]=pos[i+k]; }
-    return { min:mn, max:mx }; };
-
-  /* Sweep the named face with rays and report the deepest place the surface moved inward,
-     where it sits, and how much material went. `depth` is a real millimetre measurement of
-     the pocket floor, not a difference of binned extremes. */
-  const dent = (view, ax, sgn, extra) => {
-    const prof = blockProfile(extra || {});
-    const g0 = API.makeVisualHull(prof);
-    const g1 = API.makeVisualHull({ ...prof,
-      features:[{ kind:"poly", view, poly:PATCH, depth:-4, soft:0.02, name:"pit" }] });
-    const bb = bboxOf(g0.positions);
-    const o1 = (ax+1)%3, o2 = (ax+2)%3;
-    const G = 40, pad = 0.02;
-    let deep = 0, along = 0, across = 0;
-    for (let i = 0; i < G; i++) for (let j = 0; j < G; j++) {
-      const u = bb.min[o1] + (bb.max[o1]-bb.min[o1]) * (pad + (1-2*pad)*(i+0.5)/G);
-      const v = bb.min[o2] + (bb.max[o2]-bb.min[o2]) * (pad + (1-2*pad)*(j+0.5)/G);
-      const h0 = firstHit(g0.positions, g0.indices, ax, sgn, u, v);
-      const h1 = firstHit(g1.positions, g1.indices, ax, sgn, u, v);
-      /* A ray that misses the body on either build tells us nothing — and on a face whose
-         own two axes are shorter than the bounding box (a flank of a 100x30x40 block is
-         100x40 inside a box that is also 30 wide) most of the sweep is off the part. */
-      if (h0 === null || h1 === null) continue;
-      const d = sgn > 0 ? (h0 - h1) : (h1 - h0);      // positive = surface moved inward
-      if (d > deep) { deep = d; along = u; across = v; }
+    /* Open wells: the whole ceiling of each well, not a hole in the middle of it.
+       Down-facing skin comes in a handful of real regions and a scatter of specks. Measured
+       on this car: two wheel-arch ceilings at 34% and 31% of the down-facing area, three
+       pieces of levelled base at 9-13%, and then twenty-nine specks of half a percent or
+       less — the little dips under each stamped panel line. Opening the specks puts thirty
+       pinholes in the bodywork; opening only part of a ceiling leaves a band of wall hanging
+       inboard of the arch, which seen from the side is the plank. So take the real regions
+       whole and leave the specks alone. The gap between the smallest region kept and the
+       largest speck is nineteenfold, so this is not a close call. */
+    const em=new Map(), ek=(a,b)=>a<b?a+"_"+b:b+"_"+a;
+    for(let q=0,t=0;q<indices.length;q+=3,t++){
+      if(!down[t])continue;
+      const T=[indices[q],indices[q+1],indices[q+2]];
+      for(const[u,v]of[[T[0],T[1]],[T[1],T[2]],[T[2],T[0]]]){
+        const kk=ek(u,v); let ar=em.get(kk); if(!ar){ar=[];em.set(kk,ar);} ar.push(t);
+      }
     }
-    /* Name the axes by what they ARE, not by the order (ax+1, ax+2) happens to put them in.
-       For a flank (ax=y) that order gives z then x, so the "first" axis is the height and the
-       length is second — reading them as along/across the length silently transposed the
-       answer and a pocket correctly sitting at x=75..85 was reported as x=27. */
-    return { depth: deep, removed: volOf(g0) - volOf(g1),
-             x: ax===0 ? null : (o1===0 ? along : across),
-             y: ax===1 ? null : (o1===1 ? along : across),
-             z: ax===2 ? null : (o1===2 ? along : across),
-             along, across };
-  };
-
-  t("detail: every one of the six views presses something, somewhere", () => {
-    // bottom pressed NOTHING before this — its facing test read the nose-facing component of
-    // a normal that points at the floor, so every vertex failed the gate and was dropped.
-    /* Each view is probed on the face it actually cuts. "side" was probed on +1 — the RIGHT
-       flank — while a left-view feature cuts the left one, so it was reading a face the
-       feature never touches. Every other entry here already names its own face: sideR the
-       right flank, top +z, bottom -z, front the nose, rear the tail. */
-    for (const [view, ax, sgn] of [["side",1,-1], ["sideR",1,+1], ["top",2,+1],
-                                   ["bottom",2,-1], ["front",0,+1], ["rear",0,-1]])
+    const nbT=new Map();
+    for(const ts of em.values())
+      for(let i=0;i<ts.length;i++)for(let j=i+1;j<ts.length;j++){
+        if(!nbT.has(ts[i]))nbT.set(ts[i],[]); if(!nbT.has(ts[j]))nbT.set(ts[j],[]);
+        nbT.get(ts[i]).push(ts[j]); nbT.get(ts[j]).push(ts[i]);
+      }
+    const seenD=new Uint8Array(nTri), regions=[]; let totD=0;
+    for(let t=0;t<nTri;t++){
+      if(!down[t]||seenD[t])continue;
+      seenD[t]=1; const st=[t], comp=[t]; let ar=0;
+      while(st.length){ const u=st.pop();
+        for(const v of nbT.get(u)||[]) if(down[v]&&!seenD[v]){seenD[v]=1;st.push(v);comp.push(v);} }
+      for(const u of comp)ar+=tarea[u];
+      totD+=ar; regions.push({comp,ar});
+    }
+    for(const r of regions)
+      if(r.ar >= totD*0.02) for(const t of r.comp) flag[t]=1;
+    /* And close the tabs left stranded inside those openings. A stamped panel line can leave
+       a scrap of skin in the middle of an arch ceiling that isn't itself facing the ground,
+       so it survives the pass above and hangs in the hole. Every one carries its own rim, so
+       each is a small plank of its own and each adds a loop to the edge. A scrap completely
+       ringed by the opening belongs to the opening. The largest un-opened region is the body
+       and is never touched, so this can only tidy an edge — it cannot eat the model. */
     {
-      const d = dent(view, ax, sgn);
-      ok(d.depth > 0.3, `${view} pressed nothing (${d.depth.toFixed(2)}mm)`);
-      /* And it must have taken real material, not just nudged a surface. The patch is
-         20% x 20% of a face, 4mm deep — of order 1cm3 on this block. Volume cannot be
-         faked by a rim vertex landing in a convenient cell, which is exactly how the old
-         metric let a carve that removed almost nothing pass for years. */
-      ok(d.removed > 300, `${view} removed almost no material (${(d.removed/1000).toFixed(2)}cm3)`);
-    }
-  });
-
-  t("detail: the right-side view presses the flank, not the nose", () => {
-    ok(dent("sideR", 1, +1).depth > 0.3, "right-side detail never reached a flank");
-    // the exact face and coordinates a FRONT feature lands on. It used to land here.
-    ok(dent("sideR", 0, +1).depth < 0.1, "right-side detail is being pressed into the nose");
-  });
-
-  t("detail: a right-side feature lands mirrored along the length, like its outline", () => {
-    // the right drawing is traced standing on the far side, so u runs the other way —
-    // the same flip sidePolyR gets. u 0.10..0.30 must come out at x 70..90 on a 100mm body.
-    const d = dent("sideR", 1, +1);
-    // the ray sweep reports position along the face's own two axes: for a flank (ax=y) the
-    // first is x. `across` is the other one, which for this face is z, not the length.
-    ok(d.x > 65 && d.x < 95, `expected x 70..90, got ${d.x.toFixed(1)}`);
-    /* The LEFT drawing cuts the LEFT flank, which is -y. This probed +y — the far side — and
-       so measured a face the feature never touches. It passed only while the old vertex-bin
-       metric was reporting the whole face's extreme, which moves for reasons unrelated to
-       where the pocket is. */
-    const left = dent("side", 1, -1);
-    ok(left.depth > 0.3, `left view pressed nothing (${left.depth.toFixed(2)}mm)`);
-    ok(left.x > 5 && left.x < 35, `left view should stay at x 10..30, got ${left.x.toFixed(1)}`);
-  });
-
-  t("detail: a plan-view feature lands on the side of the body it was drawn on", () => {
-    // features store v screen-up; topPoly stores v screen-down. Read one in the other's
-    // frame and the detail appears on the opposite flank, which looks plausible and isn't.
-    // top face is ax=z, so its two axes are x then y: the flank we care about is `across`
-    const d = dent("top", 2, +1);          // v 0.60..0.80 -> y (1-v)*W -> 12..24 -> centred -18..-6
-    ok(d.depth > 0.3, `top view pressed nothing (${d.depth.toFixed(2)}mm)`);
-    ok(d.y < 0, `top-view detail is on the wrong flank: y=${d.y.toFixed(1)}, expected negative`);
-    const b = dent("bottom", 2, -1);
-    ok(b.depth > 0.3, `bottom view pressed nothing (${b.depth.toFixed(2)}mm)`);
-    ok(b.y < 0, `bottom-view detail is on the wrong flank: y=${b.y.toFixed(1)}`);
-  });
-
-  t("detail: with two side drawings each one presses only its own flank", () => {
-    const half = [[0,0],[1,0],[1,0.5],[0,0.5]];
-    ok(dent("sideR", 1, +1, { sidePolyR: half }).depth > 0.3, "right drawing lost its own flank");
-    ok(dent("side",  1, -1, { sidePolyR: half }).depth > 0.3, "left drawing lost its own flank");
-  });
-
-  t("detail: all six views at once still leaves one watertight shell", () => {
-    const feats = ["side","sideR","top","bottom","front","rear"].map((view,i) =>
-      ({ kind:"poly", view, poly:PATCH, depth:-4, soft:0.02, name:"f"+i }));
-    for (const hollow of [false, true]) {
-      const g = API.makeVisualHull({ ...blockProfile({}), hullHollow:hollow, features:feats });
-      watertight(g, `six views, hollow=${hollow}`);
-    }
-  });
-}
-
-// =====================  THE SECOND SIDE ACTUALLY GOVERNS ITS FLANK  =====================
-t("two sides: each flank matches the outline drawn for it, not an average of both", () => {
-  // The existing symmetric/asymmetric test only asks whether the two flanks DIFFER, and they
-  // did — so this went unseen. The blend weight was built for a y centred on zero while the
-  // field's y runs 0..W, so it only ever spanned 0.5..1: the right drawing governed its own
-  // half AND the centreline, and the left flank came out a 50/50 average that never once
-  // matched the outline traced for it. Measured at 30.0mm where its drawing said 40.0mm.
-  const BOX = [[0,0],[1,0],[1,1],[0,1]];
-  const HALF = [[0,0],[1,0],[1,0.5],[0,0.5]];       // right drawing: half the height
-  const g = API.makeVisualHull({
-    length:100, topProfile:[[0,40],[1,40]], widthProfile:[[0,30],[1,30]],
-    sidePoly:BOX, sidePolyR:HALF, topPoly:BOX, frontPoly:BOX,
-    hullCrisp:1, wallThickness:2, hullHollow:false, closedBottom:true,
-    hullRes:70, mode:"projection", features:null });
-  const P = g.positions;
-  let yLo = 1e18, yHi = -1e18;
-  for (let i = 0; i < P.length; i += 3) { if (P[i+1] < yLo) yLo = P[i+1]; if (P[i+1] > yHi) yHi = P[i+1]; }
-  const tallest = (y0, y1) => { let h = -1e18;
-    for (let i = 0; i < P.length; i += 3)
-      if (P[i+1] >= y0 && P[i+1] <= y1 && P[i] > 15 && P[i] < 85 && P[i+2] > h) h = P[i+2];
-    return h; };
-  const band = (yHi - yLo) * 0.12;
-  const leftFlank  = tallest(yLo, yLo + band);
-  const rightFlank = tallest(yHi - band, yHi);
-  near(leftFlank, 40, 1.5,  "the flank the full-height drawing was traced for");
-  near(rightFlank, 20, 1.5, "the flank the half-height drawing was traced for");
-  // and one drawing on its own must be untouched by any of this
-  const sym = API.makeVisualHull({
-    length:100, topProfile:[[0,40],[1,40]], widthProfile:[[0,30],[1,30]],
-    sidePoly:BOX, topPoly:BOX, frontPoly:BOX, hullCrisp:1, wallThickness:2,
-    hullHollow:false, closedBottom:true, hullRes:70, mode:"projection", features:null });
-  let h = -1e18; for (let i = 0; i < sym.positions.length; i += 3) if (sym.positions[i+2] > h) h = sym.positions[i+2];
-  near(h, 40, 0.2, "a body with one side drawing is unchanged");
-});
-
-
-// =====================  TAKING A SHAPE TWICE  =====================
-// "Take all" had no memory of what it had already taken, so pressing it again added every
-// shape in the drawing a second time, exactly on top of itself. On a real model that turned
-// 60 shapes into 667, and it is the single cause of three separate complaints:
-//   * the detail smears — stacked stamps all want depth at once and the gradient limiter
-//     spreads the excess sideways. Measured on nested panels: the dent holds at its 2.77mm
-//     cap while the area that moves grows from 312 cells to 1,077, so crisp panel lines
-//     bleed into one soft mound.
-//   * deleting appears to do nothing — you removed one of six identical copies.
-//   * the small shape can't be picked — five copies of the big panel sit over it.
-t("a shape taken twice is one feature, not two", () => {
-  const panel  = [[0.15,0.30],[0.85,0.30],[0.85,0.70],[0.15,0.70]];
-  const grille = [[0.30,0.40],[0.70,0.40],[0.70,0.60],[0.30,0.60]];
-  const horse  = [[0.47,0.47],[0.53,0.47],[0.53,0.53],[0.47,0.53]];
-  const mk = (n,poly,view="front") => ({ kind:"poly", view, poly, depth:-2.5, soft:0.08, name:n });
-  const feats = [];
-  for (let press = 0; press < 6; press++)
-    [["panel",panel],["grille",grille],["horse",horse]].forEach(([n,p]) => feats.push(mk(n+press, p)));
-  ok(feats.length === 18, "six presses of a three-shape drawing");
-  // a signature has to be stable for the same shape and different for a different one
-  eq(API.featSig(feats[0]), API.featSig(feats[3]), "the same shape signs the same both times");
-  ok(API.featSig(feats[0]) !== API.featSig(feats[1]), "two different shapes sign differently");
-  ok(API.featSig(mk("x", panel, "side")) !== API.featSig(mk("x", panel, "front")),
-     "the same outline on two different faces is two different features");
-  const live = API.setFeatures(feats);
-  const dup = API.featDupIdx(null);
-  eq(dup.length, 15, "fifteen of the eighteen are copies of one already there");
-  dup.slice().sort((a,b) => b-a).forEach(i => live.splice(i, 1));
-  eq(live.length, 3, "one of each shape survives");
-  eq(API.featDupIdx(null).length, 0, "and tidying again finds nothing left to do");
-  // taking a genuinely new shape is still adding, not deduping
-  live.push(mk("scoop", [[0.05,0.05],[0.11,0.05],[0.11,0.11],[0.05,0.11]]));
-  eq(API.featDupIdx(null).length, 0, "a shape that isn't there yet is not a duplicate");
-});
-
-t("the small shape under the big one can still be reached", () => {
-  // A badge sits inside a grille sits inside a bumper panel. The gizmo boxes are rectangles,
-  // so the panel's box covers the badge completely — there was no way to tap it, and past a
-  // few hundred features the boxes aren't drawn at all so there was nothing to tap either.
-  const panel  = [[0.15,0.30],[0.85,0.30],[0.85,0.70],[0.15,0.70]];
-  const grille = [[0.30,0.40],[0.70,0.40],[0.70,0.60],[0.30,0.60]];
-  const horse  = [[0.47,0.47],[0.53,0.47],[0.53,0.53],[0.47,0.53]];
-  const feats = [["panel",panel],["grille",grille],["horse",horse]]
-    .map(([n,poly]) => ({ kind:"poly", view:"front", poly, depth:-2.5, soft:0.08, name:n }));
-  API.setFeatures(feats); API.setView("front");
-  const hit = API.featPickAt("front", 0.5, 0.5);       // dead centre: all three overlap
-  eq(hit.length, 3, "every shape under the finger is a candidate");
-  eq(feats[hit[0]].name, "horse", "the smallest wins — you pointed at the badge, not the panel");
-  eq(feats[hit[1]].name, "grille", "tapping again steps out one layer");
-  eq(feats[hit[2]].name, "panel", "and again to the outermost");
-  const mid = API.featPickAt("front", 0.35, 0.50);     // inside the grille, outside the badge
-  eq(mid.length, 2, "only the shapes actually containing the point");
-  eq(feats[mid[0]].name, "grille", "smallest of those two");
-  eq(API.featPickAt("front", 0.02, 0.02).length, 0, "bare bodywork picks nothing");
-  // a shape on another face must never be offered
-  API.setFeatures([...feats, { kind:"poly", view:"side", poly:panel, depth:-2, soft:0.08, name:"flank" }]);
-  eq(API.featPickAt("front", 0.5, 0.5).length, 3, "a shape on another view is not a candidate");
-});
-
-// =====================  RAISED DETAIL  =====================
-t("a badge stands proud of the panel, and the frame has no say in it", () => {
-  // Pressing IN is limited by how much frame sits behind the surface — go further and you
-  // are through the panel. Raising ADDS material outside the skin, where there is nothing to
-  // breach, but both were sharing one clamp: a badge asked for 6mm came out at 2.77 on a
-  // 4.1mm frame, and thickening the frame to get a taller badge made sense to nobody.
-  const BOX = [[0,0],[1,0],[1,1],[0,1]];
-  const badge = [[0.35,0.35],[0.65,0.35],[0.65,0.65],[0.35,0.65]];
-  const build = (depth, wall) => {
-    const p = { length:200, topProfile:[[0,80],[1,80]], widthProfile:[[0,50],[1,50]],
-      sidePoly:BOX, topPoly:BOX, frontPoly:BOX, hullCrisp:1, wallThickness:wall,
-      hullHollow:true, closedBottom:true, hullRes:70, mode:"projection",
-      features: depth === null ? null
-        : [{ kind:"poly", view:"front", poly:badge, depth, soft:0.03, name:"horse" }] };
-    const g = API.makeVisualHull(p), b = API.makeVisualHull({ ...p, features:null });
-    let m = -1e9, n = -1e9;
-    for (let i = 0; i < g.positions.length; i += 3) if (g.positions[i] > m) m = g.positions[i];
-    for (let i = 0; i < b.positions.length; i += 3) if (b.positions[i] > n) n = b.positions[i];
-    return { proud: m - n, g };
-  };
-  const thick = build(2, 4.1), thin = build(2, 1.8);
-  near(thick.proud, 2, 0.25, "a 2mm raise stands 2mm proud");
-  near(thin.proud, thick.proud, 0.05,
-       "the frame thickness makes no difference to a raise — it used to clamp it");
-  // and it must still close: adding material outside the skin can't be allowed to tear it
-  for (const [label, d] of [["+2mm", 2], ["+6mm", 6], ["+12mm", 12]])
-    watertight(build(d, 4.1).g, `raised ${label}`);
-  // pressing in is still held to the frame, which is the whole point of the distinction
-  ok(build(-2.5, 4.1).proud < 0.15, "pressing in doesn't push anything outward");
-});
-
-t("a badge reaches the height asked for, whatever its width", () => {
-  // RENAMED. It was "a raise too steep for its own width is limited, not folded", describing
-  // the surface-stamp era: a push spread over the vertices under an outline, so a small
-  // outline had too few to push and the badge came out short (40mm -> 6.0, 15mm -> 3.4,
-  // 8mm -> 1.7, all asked for 6). A field boss is a real prism and has no such limit.
-  const BOX = [[0,0],[1,0],[1,1],[0,1]];
-  const sq = s => [[0.5-s/2,0.5-s/2],[0.5+s/2,0.5-s/2],[0.5+s/2,0.5+s/2],[0.5-s/2,0.5+s/2]];
-  const proud = span => {
-    const p = { length:200, topProfile:[[0,80],[1,80]], widthProfile:[[0,50],[1,50]],
-      sidePoly:BOX, topPoly:BOX, frontPoly:BOX, hullCrisp:1, wallThickness:4.1,
-      hullHollow:true, closedBottom:true, hullRes:70, mode:"projection",
-      features:[{ kind:"poly", view:"front", poly:sq(span), depth:6, soft:0.03, name:"b" }] };
-    const g = API.makeVisualHull(p), b = API.makeVisualHull({ ...p, features:null });
-    let m = -1e9, n = -1e9;
-    for (let i = 0; i < g.positions.length; i += 3) if (g.positions[i] > m) m = g.positions[i];
-    for (let i = 0; i < b.positions.length; i += 3) if (b.positions[i] > n) n = b.positions[i];
-    watertight(g, `raised badge ${(span*100).toFixed(0)}mm wide`);
-    return m - n;
-  };
-  /* THIS CONTRACT CHANGED, DELIBERATELY, AND THE CHANGE IS THE POINT OF THE CARVE REWRITE.
-     The old surface-stamp could not raise a narrow badge to full height — a push is spread
-     over the vertices under the outline, so a small outline had few vertices to push and the
-     badge came out short. Measured on the old build: 20mm wide -> 6.00mm, 10mm -> 3.93mm,
-     4mm -> 1.67mm, all asked for 6mm. That was never a designed limit; it was the stamp
-     running out of mesh, and the old test pinned it as though it were intended.
-     A field boss is a real prism, so it reaches the height asked for whatever its width, and
-     it stays watertight doing it (checked below at three widths, boundary 0 non-manifold 0,
-     with a flat top face). Asking for 6mm and getting 6mm is the correct behaviour and the
-     reason this work was done.
-     What still needs pinning is that a badge is a BADGE and not a spike: full height, flat
-     top, sound geometry, and no wider than drawn plus its own soft margin. */
-  for (const span of [0.40, 0.20, 0.08]) {
-    const h = proud(span);                      // proud() already asserts watertight
-    near(h, 6, 0.5, `a ${(span*50).toFixed(0)}mm badge must reach the 6mm asked for`);
-  }
-  /* SUB-CELL FEATURES ARE A REAL LIMIT, recorded rather than papered over. A footprint
-     narrower than a voxel has no grid point inside it, so the mesher has nothing to place a
-     surface from and extrapolates: a 2mm badge on this 2.86mm grid built 9.29mm proud, and
-     converged to 5.78mm once the cell was 1.43mm. Nothing in the field can fix that — it is
-     the grid. Pinned here so the day someone makes the mesher adaptive, this tightens. */
-  const tiny = proud(0.04);                     // 2mm on a 2.86mm grid
-  ok(tiny > 4, `a sub-cell badge is coarse but must not vanish (${tiny.toFixed(2)}mm)`);
-  ok(tiny < 11, `and must not run away entirely (${tiny.toFixed(2)}mm for a 6mm ask)`);
-});
-
-
-t("a shape drawn inside another shape shades it, it doesn't dig a pit", () => {
-  // A front view is nested all the way down: a badge inside a grille inside a bumper panel.
-  // Each feature used to be stamped onto the RESULT of the one before, so a point under three
-  // outlines was pressed three times. Measured with each asking -2.0mm: the badge centre came
-  // out at 2.77mm — which is not 2.0, it is the total-travel ceiling, the only thing standing
-  // between that drawing and a 6mm crater. A drawing is a drawing, not a stack of cuts.
-  const BOX    = [[0,0],[1,0],[1,1],[0,1]];
-  const panel  = [[0.15,0.25],[0.85,0.25],[0.85,0.75],[0.15,0.75]];
-  const grille = [[0.30,0.38],[0.70,0.38],[0.70,0.62],[0.30,0.62]];
-  const badge  = [[0.44,0.44],[0.56,0.44],[0.56,0.56],[0.44,0.56]];
-  const mk = poly => ({ kind:"poly", view:"front", poly, depth:-2, soft:0.03, name:"f" });
-  const depthAt = (feats, u, v) => {
-    const p = { length:200, topProfile:[[0,80],[1,80]], widthProfile:[[0,50],[1,50]],
-      sidePoly:BOX, topPoly:BOX, frontPoly:BOX, hullCrisp:1, wallThickness:4.1,
-      hullHollow:true, closedBottom:true, hullRes:90, mode:"projection", features:feats };
-    const g = API.makeVisualHull(p), b = API.makeVisualHull({ ...p, features:null });
-    watertight(g, "nested detail");
-    const ty = (u-0.5)*100, tz = v*80;
-    const peak = pos => { let best = -1e9;
-      for (let i = 0; i < pos.length; i += 3)
-        if (Math.abs(pos[i+1]-ty) < 3 && Math.abs(pos[i+2]-tz) < 3 && pos[i] > best) best = pos[i];
-      return best; };
-    return peak(b.positions) - peak(g.positions);
-  };
-  const alone = depthAt([mk(panel)], 0.50, 0.5);
-  near(alone, 2, 0.2, "one shape asking for 2mm gives 2mm");
-  near(depthAt([mk(panel), mk(grille)], 0.50, 0.5), alone, 0.2,
-       "a second outline over the same point doesn't deepen it");
-  near(depthAt([mk(panel), mk(grille), mk(badge)], 0.50, 0.5), alone, 0.2,
-       "nor does a third — the deepest single request wins, they never sum");
-  // and the shapes stay individually readable, not flattened into one plateau. Both depths
-  // have to sit inside what the frame allows inward (half the wall, 2.05mm here) or the
-  // clamp — not the shading — is what you end up measuring.
-  const shallow = depthAt([{ ...mk(panel), depth:-0.8 }], 0.50, 0.5);
-  const stepped = depthAt([{ ...mk(panel), depth:-0.8 }, { ...mk(grille), depth:-2.0 }], 0.50, 0.5);
-  near(shallow, 0.8, 0.2, "a shallow panel on its own");
-  ok(stepped > shallow + 0.6,
-     `a deeper inner shape still reads deeper than the panel around it (${stepped.toFixed(2)} vs ${shallow.toFixed(2)})`);
-  // ...and the panel around it is untouched by its neighbour going deeper
-  near(depthAt([{ ...mk(panel), depth:-0.8 }, { ...mk(grille), depth:-2.0 }], 0.20, 0.5),
-       depthAt([{ ...mk(panel), depth:-0.8 }], 0.20, 0.5), 0.2,
-       "the outer panel keeps its own depth");
-});
-
-
-// =====================  STOCK, AND THE PARTS YOU DON'T CUT  =====================
-t("a shape left at zero depth is material you keep, not a feature that does nothing", () => {
-  // The model is a block of stock the size of the drawing, with everything else cut away.
-  // Under that reading a drawing gives three kinds of shape, not two: carve it, leave it, or
-  // (the odd one out) push it outward. "Leave it" is how a badge pops: cut the grille down
-  // and the pony is what remains. Nothing is added and the part never grows past the box it
-  // was measured in — which matters, because it has to fit the chassis it was measured for.
-  const BOX    = [[0,0],[1,0],[1,1],[0,1]];
-  const grille = [[0.20,0.30],[0.80,0.30],[0.80,0.70],[0.20,0.70]];
-  const pony   = [[0.38,0.38],[0.62,0.38],[0.62,0.62],[0.38,0.62]];
-  const mk = (poly, d, n) => ({ kind:"poly", view:"front", poly, depth:d, soft:0.03, name:n });
-  const run = feats => {
-    const p = { length:200, topProfile:[[0,80],[1,80]], widthProfile:[[0,50],[1,50]],
-      sidePoly:BOX, topPoly:BOX, frontPoly:BOX, hullCrisp:1, wallThickness:4.1,
-      hullHollow:true, closedBottom:true, hullRes:90, mode:"projection", features:feats };
-    const g = API.makeVisualHull(p);
-    watertight(g, "carved front");
-    const at = (u,v) => { const ty=(u-0.5)*100, tz=v*80; let best=-1e9;
-      for (let i = 0; i < g.positions.length; i += 3)
-        if (Math.abs(g.positions[i+1]-ty) < 2 && Math.abs(g.positions[i+2]-tz) < 2 && g.positions[i] > best)
-          best = g.positions[i];
-      return best; };
-    let lo = 1e18, hi = -1e18;
-    for (let i = 0; i < g.positions.length; i += 3) { if (g.positions[i] < lo) lo = g.positions[i]; if (g.positions[i] > hi) hi = g.positions[i]; }
-    return { face: at(0.30,0.5), pony: at(0.50,0.5), length: hi-lo };
-  };
-  const plain = run(null);
-  const cut   = run([mk(grille,-2,"grille")]);
-  const left  = run([mk(grille,-2,"grille"), mk(pony,0,"pony")]);
-  near(plain.length, 200, 0.5, "the block is the size it was traced at");
-  near(cut.face, plain.face - 2, 0.3, "the grille is cut 2mm into it");
-  near(cut.pony, cut.face, 0.3, "with no shape left standing, the middle goes with it");
-  ok(left.pony > left.face + 1.5,
-     `the pony is left standing proud of the grille around it (${(left.pony-left.face).toFixed(2)}mm)`);
-  near(left.pony, plain.face, 0.3, "and it is still at the original face — nothing was added to it");
-  near(left.length, 200, 0.5,
-       "the part is still exactly the size it was traced at; leaving material never grows it");
-});
-
-t("pushing a shape outward is what actually grows the part past its own box", () => {
-  // Kept working, because someone may want it — but it is the one operation that breaks the
-  // block-of-stock reading, and it must be measurable so the panel can warn about it.
-  const BOX = [[0,0],[1,0],[1,1],[0,1]];
-  const badge = [[0.42,0.42],[0.58,0.42],[0.58,0.58],[0.42,0.58]];
-  const len = depth => {
-    const p = { length:200, topProfile:[[0,80],[1,80]], widthProfile:[[0,50],[1,50]],
-      sidePoly:BOX, topPoly:BOX, frontPoly:BOX, hullCrisp:1, wallThickness:4.1,
-      hullHollow:true, closedBottom:true, hullRes:80, mode:"projection",
-      features: depth === null ? null : [{ kind:"poly", view:"front", poly:badge, depth, soft:0.03, name:"b" }] };
-    const g = API.makeVisualHull(p);
-    let lo = 1e18, hi = -1e18;
-    for (let i = 0; i < g.positions.length; i += 3) { if (g.positions[i] < lo) lo = g.positions[i]; if (g.positions[i] > hi) hi = g.positions[i]; }
-    return hi - lo;
-  };
-  near(len(null), 200, 0.5, "traced at 200mm");
-  near(len(-3), 200, 0.5, "carving never changes the outside size");
-  ok(len(3) > 201, `pushing outward does (${len(3).toFixed(2)}mm) — the panel says so now`);
-});
-
-
-// =====================  THE BLOCK, FILLING IN  =====================
-t("the import block draws six real faces that never land on top of each other", () => {
-  // Six panels in an isometric projection is all sign conventions and nothing else. Get one
-  // normal backwards and two faces explode to the same spot, or a face collapses to a line —
-  // and it still renders, just as something that isn't a box. Worth pinning, because it is
-  // the one place in the app where a silent wrong answer looks like a design choice.
-  const faces = script.match(/const IB_FACES=\[[\s\S]*?\n\];/)[0];
-  const body = [script.match(/^const IB_S=.*$/m)[0],
-                script.match(/^const ibProj=.*$/m)[0], faces].join("\n");
-  const { ibProj, IB_FACES } = new Function(body + "\nreturn {ibProj,IB_FACES};")();
-  eq(IB_FACES.length, 6, "one panel per view");
-  eq(new Set(IB_FACES.map(f => f.v)).size, 6, "and they are six different views");
-  // every face is a proper rhombus of the same area — a collapsed one means a bad normal
-  const areas = IB_FACES.map(f => {
-    const P = f.c.map(c => ibProj(c[0], c[1], c[2]));
-    let A = 0;
-    for (let i = 0; i < 4; i++) { const [x1,y1] = P[i], [x2,y2] = P[(i+1)%4]; A += x1*y2 - x2*y1; }
-    return Math.abs(A) / 2;
-  });
-  areas.forEach((a, i) => ok(a > 50, `${IB_FACES[i].v} is a real quad, not a sliver (${a.toFixed(0)})`));
-  areas.forEach(a => near(a, areas[0], 0.01, "every face of a cube projects to the same area"));
-  // three visible, three hidden — a solid box only ever shows you half its faces
-  const depth = f => f.n[0] - f.n[1] + f.n[2];
-  eq(IB_FACES.filter(f => depth(f) > 0).length, 3, "three faces turned toward you");
-  eq(IB_FACES.filter(f => depth(f) < 0).length, 3, "three turned away");
-  // the left side is one you can SEE — it's the drawing nearly every model starts from
-  ok(IB_FACES.filter(f => depth(f) > 0).map(f => f.v).includes("side"),
-     "the left side faces the viewer");
-  // exploded, no two panels may drift to the same place
-  const spots = new Set(IB_FACES.map(f => ibProj(f.n[0]*0.5, f.n[1]*0.5, f.n[2]*0.5)
-    .map(v => v.toFixed(2)).join(",")));
-  eq(spots.size, 6, "each panel separates in its own direction");
-  // and the whole thing has to stay inside the viewBox it's drawn in (-46..46, -48..48)
-  let mnx = 1e9, mxx = -1e9, mny = 1e9, mxy = -1e9;
-  for (const f of IB_FACES) {
-    const [ox, oy] = ibProj(f.n[0]*0.6, f.n[1]*0.6, f.n[2]*0.6);
-    for (const c of f.c) { const [x, y] = ibProj(c[0], c[1], c[2]);
-      mnx = Math.min(mnx, x+ox); mxx = Math.max(mxx, x+ox);
-      mny = Math.min(mny, y+oy); mxy = Math.max(mxy, y+oy); }
-  }
-  ok(mnx >= -46 && mxx <= 46 && mny >= -48 && mxy <= 48,
-     `fits its viewBox even fully exploded (${mnx.toFixed(0)}..${mxx.toFixed(0)}, ${mny.toFixed(0)}..${mxy.toFixed(0)})`);
-});
-
-
-// =====================  A FILE THAT STATES ITS OWN DIMENSIONS  =====================
-t("a DXF's declared units are read, not re-measured by eye", () => {
-  // Lee's drawings carry real coordinates. The reader used to skip the HEADER section
-  // outright — the old comment said "DXF is unitless in general", which isn't true —  so a
-  // file that states it is 4,700mm across was rasterised to 1000px and the person was sent
-  // to Set scale to re-measure a number the file already stated exactly. Anything they typed
-  // could only contradict it, and nothing would have said so.
-  const dxf = insunits => `0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1021\n`
-    + (insunits === null ? "" : `9\n$INSUNITS\n70\n${insunits}\n`)
-    + `9\n$EXTMIN\n10\n0.0\n20\n0.0\n30\n0.0\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n`
-    + `0\nLINE\n10\n0.0\n20\n0.0\n11\n4700.0\n21\n1400.0\n0\nENDSEC\n0\nEOF`;
-  const span = 4700;                                    // drawing units across
-  const mmFor = code => { const u = API.dxfUnitMM(API.dxfParse(dxf(code)).header); return u ? span*u.mm : null; };
-  near(mmFor(4), 4700, 0.5, "millimetres");
-  near(mmFor(5), 47000, 5, "centimetres");
-  near(mmFor(6), 4700000, 500, "metres");
-  near(mmFor(1), 4700*25.4, 5, "inches");
-  near(mmFor(2), 4700*304.8, 50, "feet");
-  // and when the file genuinely says nothing, it must NOT guess — being wrong by 25.4x here
-  // is worse than asking, and $MEASUREMENT only picks a hatch-pattern file, not the units
-  eq(mmFor(0), null, "$INSUNITS 0 declares no units, so nothing is claimed");
-  eq(mmFor(null), null, "nor does an absent $INSUNITS");
-  // reading the header must not disturb the geometry it sits in front of
-  eq(API.dxfParse(dxf(4)).model.length, 1, "entities still parse with a header present");
-  ok(API.dxfParse(dxf(4)).header["$ACADVER"] === "AC1021", "other header vars come through too");
-});
-
-t("every absolute unit an SVG can state is understood", () => {
-  // It used to accept mm, cm and in only — and the units it was missing are the ones real
-  // exporters write. Illustrator and older Inkscape default to pt; a bare number beside a
-  // viewBox is CSS px, which is 1/96 inch BY SPEC, not an unknown. All of these are 120mm.
-  for (const w of ["120mm", "12cm", "1.2e2mm"])
-    near(API.svgLengthMM(w), 120, 0.05, `width="${w}"`);
-  near(API.svgLengthMM("4.7244in"), 120, 0.05, 'width="4.7244in"');
-  near(API.svgLengthMM("340.16pt"), 120, 0.1, 'width="340pt" — Illustrator\'s default');
-  near(API.svgLengthMM("28.346pc"), 120, 0.1, 'width="28pc"');
-  // relative and meaningless values must stay unknown rather than becoming a wrong number
-  for (const w of ["100%", "3em", "2ex", "0mm", "-5mm", "", "auto"])
-    eq(API.svgLengthMM(w), null, `width="${w}" is not a physical size`);
-  // px and a bare number are a DEFAULT, not a statement. The spec would let us call them
-  // 1/96 inch; almost nobody writing them means that, so turning them into millimetres
-  // would invent a measurement — the same mistake as guessing DXF units from $MEASUREMENT.
-  for (const w of ["453.54", "453.54px", "1000"])
-    eq(API.svgLengthMM(w), null, `width="${w}" states units, not a size`);
-});
-
-
-// =====================  THE OUTLINE IS THE FILE'S OWN  =====================
-// A DXF holds the exact curve of every line and no statement about which lines enclose the
-// body, so the silhouette used to be recovered by drawing the strokes onto a canvas and
-// reading the pixels back. That works, and it throws away the precision that was the reason
-// to accept a CAD file at all — Lee's drawings carry real geometry and got a pixel trace of
-// it. The lines DO enclose the shape; they just do it as hundreds of separate strokes that
-// share endpoints. Weld the endpoints and the strokes become a graph whose outermost face
-// is the silhouette, to the file's own coordinates.
-{
-  const TRUE = [[0,0],[400,0],[600,180],[1200,260],[1680,260],[1860,100],[2000,80],[2000,0]];
-  const area = p => { let a = 0;
-    for (let i = 0, j = p.length-1; i < p.length; j = i++) a += p[j][0]*p[i][1] - p[i][0]*p[j][1];
-    return Math.abs(a)/2; };
-  // chop the outline into separate strokes and nudge the endpoints, the way an exporter
-  // rounds and a flattened arc lands a hair off the line meeting it
-  const shatter = (loop, gap, seed) => {
-    let s = seed; const rnd = () => ((s = (s*1103515245 + 12345) & 0x7fffffff)/0x7fffffff - 0.5)*2;
-    const out = [], ring = loop.concat([loop[0]]);
-    for (let i = 0; i < ring.length-1; i++) {
-      const a = ring[i], b = ring[i+1], m = [(a[0]+b[0])/2, (a[1]+b[1])/2];
-      out.push([[a[0]+rnd()*gap, a[1]+rnd()*gap], m]);
-      out.push([[m[0]+rnd()*gap, m[1]+rnd()*gap], b]);
-    }
-    return out;
-  };
-  // what every real drawing also carries: panel lines, a dimension leader, a stray stub
-  const JUNK = [[[600,90],[1600,90]], [[700,40],[700,200]],
-                [[1000,400],[1000,460]], [[950,460],[1050,460]],
-                [[100,-140],[1900,-140]], [[1500,150],[1500,150.001]]];
-  const bounds = { wU:2000, hU:260 };
-
-  t("dxf: the silhouette is stitched from the strokes, not read off pixels", () => {
-    for (const gap of [0, 0.01, 0.5, 2]) {
-      const r = API.dxfSilhouette(shatter(TRUE, gap, 7).concat(JUNK), bounds);
-      ok(r, `a ${gap} unit endpoint gap still closes`);
-      near(area(r.loop), area(TRUE), area(TRUE)*0.01,
-           `and encloses the drawn shape (gap ${gap})`);
-    }
-  });
-
-  t("dxf: every corner the file drew survives, to the file's own numbers", () => {
-    // the point of all this. A pixel trace rounds corners to whatever the raster could hold;
-    // stitching keeps the coordinates that were in the file.
-    const r = API.dxfSilhouette(shatter(TRUE, 0.01, 7).concat(JUNK), bounds);
-    let worst = 0;
-    for (const c of TRUE) {
-      let d = 1e18;
-      for (const p of r.loop) d = Math.min(d, Math.hypot(p[0]-c[0], p[1]-c[1]));
-      worst = Math.max(worst, d);
-    }
-    ok(worst < 0.05, `worst corner miss ${worst.toFixed(6)} drawing units`);
-  });
-
-  t("dxf: it won't invent a shape, and won't fall for a border frame", () => {
-    // nothing enclosed must stay nothing enclosed — auto-trace is the fallback, and a wrong
-    // outline is worse than no outline
-    eq(API.dxfSilhouette([[[0,0],[10,0]], [[20,0],[30,0]]], { wU:30, hU:1 }), null,
-       "open strokes enclose nothing");
-    eq(API.dxfSilhouette([], { wU:10, hU:10 }), null, "nor does an empty drawing");
-    // a drawing frame is bigger than the part and must not be mistaken for it
-    const framed = shatter(TRUE, 0.01, 7).concat(JUNK,
-      [[[-200,-300],[2200,-300]], [[2200,-300],[2200,500]],
-       [[2200,500],[-200,500]], [[-200,500],[-200,-300]]]);
-    const r = API.dxfSilhouette(framed, { wU:2400, hU:800 });
-    ok(r, "still finds something");
-    near(area(r.loop), area(TRUE), area(TRUE)*0.01, "and it is the part, not the frame");
-  });
-
-  t("dxf: a drawing that states its size measures that size, with nobody clicking", () => {
-    // the whole chain: header units -> stitched outline -> raster frame -> measured length.
-    // The scale uses the DRAWN extent, not the canvas width: strokes are inset 2px a side so
-    // a fat pen doesn't clip, so scaling by the full 1000 made every DXF 0.4% short — 2000mm
-    // measured as 1992, small enough to pass for rounding and exactly the quiet disagreement
-    // with a stated dimension that reading the file was supposed to end.
-    let dxf = "0\nSECTION\n2\nHEADER\n9\n$INSUNITS\n70\n4\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n";
-    const ring = TRUE.concat([TRUE[0]]);
-    for (let i = 0; i < ring.length-1; i++)
-      dxf += `0\nLINE\n10\n${ring[i][0]}\n20\n${ring[i][1]}\n11\n${ring[i+1][0]}\n21\n${ring[i+1][1]}\n`;
-    dxf += "0\nLINE\n10\n600\n20\n90\n11\n1600\n21\n90\n0\nENDSEC\n0\nEOF";
-    const { blocks, model, header } = API.dxfParse(dxf);
-    let polys = [];
-    for (const e of model) polys = polys.concat(API.dxfPolys(e, blocks));
-    polys = polys.filter(q => q.length > 1);
-    const unit = API.dxfUnitMM(header);
-    ok(unit && unit.mm === 1, "the header says millimetres");
-    let x0 = 1e18, x1 = -1e18, y0 = 1e18, y1 = -1e18;
-    for (const q of polys) for (const p of q) {
-      x0 = Math.min(x0,p[0]); x1 = Math.max(x1,p[0]); y0 = Math.min(y0,p[1]); y1 = Math.max(y1,p[1]); }
-    const wU = x1-x0, hU = y1-y0;
-    const sil = API.dxfSilhouette(polys, { wU, hU });
-    ok(sil, "the outline closed");
-    const RW = 1000, RH = Math.round(RW*hU/wU);
-    const PX = q => (q[0]-x0)/wU*(RW-4) + 2, PY = q => RH-2 - (q[1]-y0)/hU*(RH-4);
-    const outline = sil.loop.map(p => ({ x:PX(p), y:PY(p) }));
-    const srcMM = wU*unit.mm, scale = (RW-4)/srcMM;
-    const measured = API.outlineEnvelope(outline).span/scale;
-    near(measured, 2000, 0.5,
-         `the file says 2000mm and the model measures ${measured.toFixed(2)}mm`);
-  });
-}
-
-
-// =====================  THICKNESS EATS INWARD, THE OUTSIDE NEVER MOVES  =====================
-// For weeks the hollow shell grew OUTWARD when the wall was thickened, and a flat slab
-// floated across the cavity. Root cause: opening the underside removed every triangle on the
-// base and the arch ceilings, which left ~3,600 of their vertices touched by no remaining
-// triangle. innerOffsets pushes each vertex inward along the average normal of its faces —
-// with no faces, the normal is zero, so those vertices never moved: they stayed on the OUTER
-// surface and were then welded into the INNER shell, dragging its bounding box out to meet
-// the outer one (measured: 129mm wide and floor at -2.9mm at 12mm wall, vs a fixed 115/+5.6
-// outer). The floating slab was the inner shell's own floor, one wall-thickness up from an
-// opening the inner sheet didn't share. Fix: offset against the closed shell so every vertex
-// has a real inward normal, then clamp any stray inner vertex back inside the outer skin.
-{
-  // the REAL model Collin sent, the one that actually orphans arch-ceiling vertices when the
-  // underside opens. A synthetic box doesn't reproduce it — the arches have to be deep enough
-  // that opening them strands a whole band of vertices with no faces left to give a normal.
-  let HOLLOW_FIX = null;
-  try { HOLLOW_FIX = JSON.parse(fs.readFileSync(new URL("./fixture-hollow.json", import.meta.url), "utf8")); }
-  catch {}
-  const prof = extra => ({ ...HOLLOW_FIX, hullRes:80, features:null, ...extra });
-  const box = g => { const m=[1e9,1e9,1e9],M=[-1e9,-1e9,-1e9];
-    for(let i=0;i<g.positions.length;i+=3) for(let k=0;k<3;k++){
-      if(g.positions[i+k]<m[k])m[k]=g.positions[i+k]; if(g.positions[i+k]>M[k])M[k]=g.positions[i+k]; }
-    return { w:M[1]-m[1], h:M[2]-m[2], floor:m[2], len:M[0]-m[0] }; };
-
-  t("hollow: the outside is identical at every wall thickness", () => {
-    ok(HOLLOW_FIX, "fixture-hollow.json present"); if(!HOLLOW_FIX) return;
-    /* REWRITTEN, not relaxed. This used to compare every wall against the 1.8mm build and
-       demand 0.05mm. That worked while one code path did all the hollowing. There are now
-       two: the field path, which needs about one and a half voxels across the wall, and the
-       vertex-offset path, which takes over below that. They fair an OPEN edge differently —
-       measured on this fixture, the field path lands exactly on the solid body's width and
-       the offset path pulls in 0.42mm — so comparing a 12mm wall against a 1.8mm one is now
-       comparing two different algorithms and 0.05mm was never going to hold.
-       So compare each build against the SOLID body, which is the ground truth the original
-       test was reaching for anyway, and keep the strict tolerance within a path. Height,
-       floor and length stay exact: those never move on either path. */
-    const walls = [1.8, 4.2, 8, 12];
-    const built = walls.map(wt => {
-      const g = API.makeVisualHull(prof({ hullHollow:true, wallThickness:wt }));
-      return { wt, b: box(g), field: !!g.fieldHollow };
-    });
-    const solid = box(API.makeVisualHull(prof({ hullHollow:false, wallThickness:4.2 })));
-
-    for (const { wt, b } of built) {
-      near(b.h, solid.h, 0.05, `height must equal the solid body (wall ${wt})`);
-      near(b.floor, solid.floor, 0.05, `floor must not drop (wall ${wt})`);
-      near(b.len, solid.len, 0.05, `length must equal the solid body (wall ${wt})`);
-      ok(b.w <= solid.w + 0.05, `width may never exceed the solid body (wall ${wt})`);
-      ok(b.w > solid.w - 0.7, `width may be faired inward, but only at the open edge (wall ${wt}: ${b.w.toFixed(2)} vs ${solid.w.toFixed(2)})`);
-    }
-    // and within one path it must be exact — changing the wall must not move the outside
-    for (const path of [true, false]) {
-      const g = built.filter(x => x.field === path);
-      if (g.length < 2) continue;
-      for (const x of g)
-        near(x.b.w, g[0].b.w, 0.15,
-             `${path ? "field" : "offset"} path: width must not move with the wall (wall ${x.wt})`);
-    }
-    // the field path is the one that gets the outside exactly right; say so out loud
-    /* The field path is the one that gets the outside right, and it gets righter as the wall
-       grows relative to the voxel: measured here, a 12mm wall lands on the solid width to
-       0.000mm and a 4.2mm wall — which is close to the resolution limit this fixture allows —
-       to 0.062mm. A tenth of a millimetre is an order of magnitude below anything a printer
-       resolves, so that is the bar rather than bit-equality. */
-    const f = built.filter(x => x.field);
-    for (const x of f)
-      near(x.b.w, solid.w, 0.15, `field hollow must match the solid width (wall ${x.wt})`);
-  });
-
-  t("hollow: thickening the wall consumes the cavity, so material grows", () => {
-    ok(HOLLOW_FIX, "fixture-hollow.json present"); if(!HOLLOW_FIX) return;
-    const vol = g => { let V=0; const P=g.positions,I=g.indices;
-      for(let q=0;q<I.length;q+=3){const a=I[q]*3,b=I[q+1]*3,c=I[q+2]*3;
-        V+=(P[a]*(P[b+1]*P[c+2]-P[c+1]*P[b+2])-P[a+1]*(P[b]*P[c+2]-P[c]*P[b+2])+P[a+2]*(P[b]*P[c+1]-P[c]*P[b+1]))/6;}
-      return Math.abs(V); };
-    const thin = vol(API.makeVisualHull(prof({ hullHollow:true, wallThickness:1.8 })));
-    const thick = vol(API.makeVisualHull(prof({ hullHollow:true, wallThickness:12 })));
-    ok(thick > thin * 1.5, `a 12mm wall uses far more material than 1.8mm (${(thin/1000).toFixed(0)} -> ${(thick/1000).toFixed(0)} cm3)`);
-  });
-
-  t("hollow: no vertex of the inner shell lies outside the outer skin", () => {
-    ok(HOLLOW_FIX, "fixture-hollow.json present"); if(!HOLLOW_FIX) return;
-    // the invariant the whole fix rests on: inside = outside eroded inward, so nothing inner
-    // can poke out. If this holds, the outside cannot grow no matter what the wall is.
-    const g = API.makeVisualHull(prof({ hullHollow:true, wallThickness:12 }));
-    const m=[1e9,1e9,1e9],M=[-1e9,-1e9,-1e9];
-    for(let i=0;i<g.positions.length;i+=3) for(let k=0;k<3;k++){
-      if(g.positions[i+k]<m[k])m[k]=g.positions[i+k]; if(g.positions[i+k]>M[k])M[k]=g.positions[i+k]; }
-    // the outer skin alone defines the box; assert every vertex sits within it (tautological
-    // for the whole mesh, so instead assert the box equals the SOLID box — inner adds nothing)
-    const solid=[1e9,1e9,1e9],SolidM=[-1e9,-1e9,-1e9];
-    const gs=API.makeVisualHull(prof({ hullHollow:false, wallThickness:12 }));
-    for(let i=0;i<gs.positions.length;i+=3) for(let k=0;k<3;k++){
-      if(gs.positions[i+k]<solid[k])solid[k]=gs.positions[i+k]; if(gs.positions[i+k]>SolidM[k])SolidM[k]=gs.positions[i+k]; }
-    // height (axis 2) is exact both ways; width/length edges may be faired inward slightly,
-    // but the hollow box may NEVER exceed the solid one — that is the invariant that matters.
-    for(let k=0;k<3;k++){
-      ok(m[k] >= solid[k] - 0.05, `hollow min axis ${k} not outside solid (${m[k].toFixed(2)} >= ${solid[k].toFixed(2)})`);
-      ok(M[k] <= SolidM[k] + 0.05, `hollow max axis ${k} not outside solid (${M[k].toFixed(2)} <= ${SolidM[k].toFixed(2)})`);
-    }
-    near(M[2]-m[2], SolidM[2]-solid[2], 0.05, "height is exact");
-  });
-
-  t("hollow: stays watertight as the wall thickens", () => {
-    ok(HOLLOW_FIX, "fixture-hollow.json present"); if(!HOLLOW_FIX) return;
-    for (const wt of [1.8, 4.2, 8, 12])
-      watertight(API.makeVisualHull(prof({ hullHollow:true, wallThickness:wt })), `wall ${wt}`);
-  });
-}
-
-// =====================================================================================
-// FIELD HOLLOW — the cavity is a second isosurface of the same field, not a mesh push.
-//
-// These tests exist because of the "plank": on a thin section the old vertex-offset
-// hollow pushed the two surfaces at each other until they welded, and the deck came out
-// as a bare plate with its underside deleted. Seen through the open wheel arch that
-// reads as a shelf across the car, which is how Collin found it.
-//
-// They deliberately pin BEHAVIOUR — is there a cavity, is the outside the same size —
-// and not the spelling of the implementation. Tests that matched literal source strings
-// are what let earlier refactors sail through green while the geometry broke.
-// =====================================================================================
-{
-  let HF = null;
-  try { HF = JSON.parse(fs.readFileSync(new URL("./fixture-hollow.json", import.meta.url), "utf8")); }
-  catch {}
-  const prof = extra => ({ ...HF, features: null, ...extra });
-
-  // every z where a straight-down ray at (x,y) enters or leaves material
-  const crossZ = (g, x, y) => {
-    const P = g.positions, I = g.indices, hits = [];
-    for (let q = 0; q < I.length; q += 3) {
-      const a = I[q]*3, b = I[q+1]*3, c = I[q+2]*3;
-      const ax=P[a],ay=P[a+1], bx=P[b],by=P[b+1], cx=P[c],cy=P[c+1];
-      const d = (by-cy)*(ax-cx) + (cx-bx)*(ay-cy);
-      if (Math.abs(d) < 1e-12) continue;
-      const u = ((by-cy)*(x-cx) + (cx-bx)*(y-cy)) / d;
-      const v = ((cy-ay)*(x-cx) + (ax-cx)*(y-cy)) / d;
-      const w = 1 - u - v;
-      if (u < -1e-9 || v < -1e-9 || w < -1e-9) continue;
-      hits.push(u*P[a+2] + v*P[b+2] + w*P[c+2]);
-    }
-    hits.sort((m,n) => m-n);
-    const keep = [];
-    for (const h of hits) if (!keep.length || h - keep[keep.length-1] > 1e-3) keep.push(h);
-    return keep;
-  };
-  const span = g => { const m=[1e9,1e9,1e9], M=[-1e9,-1e9,-1e9];
-    for (let i=0;i<g.positions.length;i+=3) for (let k=0;k<3;k++) {
-      if (g.positions[i+k]<m[k]) m[k]=g.positions[i+k];
-      if (g.positions[i+k]>M[k]) M[k]=g.positions[i+k]; }
-    return { m, M, size:[M[0]-m[0],M[1]-m[1],M[2]-m[2]] }; };
-
-  t("field hollow: it is the default, and it can still be turned off", () => {
-    ok(HF, "fixture-hollow.json present"); if (!HF) return;
-    const on  = API.makeVisualHull(prof({ hullHollow:true, wallThickness:4.2 }));
-    const off = API.makeVisualHull(prof({ hullHollow:true, wallThickness:4.2, fieldHollow:false }));
-    // not asserting HOW they differ, only that the default is the field path and the
-    // old path is still reachable — the escape hatch the backend and old saves rely on.
-    ok(on.indices.length !== off.indices.length,
-       "default build differs from the explicit legacy build, so the default is the field path");
-    const explicit = API.makeVisualHull(prof({ hullHollow:true, wallThickness:4.2, fieldHollow:true }));
-    ok(explicit.indices.length === on.indices.length, "fieldHollow:true and the default agree");
-  });
-
-  t("field hollow: a thin section keeps a cavity instead of welding into a plate", () => {
-    ok(HF, "fieldHollow needs the fixture"); if (!HF) return;
-    const wall = 3.0;
-    const solid  = API.makeVisualHull(prof({ hullHollow:false, wallThickness:wall }));
-    const hollow = API.makeVisualHull(prof({ hullHollow:true,  wallThickness:wall, closedBottom:true }));
-    const S = span(solid);
-    // walk along the length and find stations that are thin but still have room for
-    // two walls and a gap; those are exactly where the plank used to appear.
-    let checked = 0, welded = [];
-    for (let f = 0.12; f <= 0.88; f += 0.04) {
-      const x = S.m[0] + S.size[0]*f, y = (S.m[1] + S.M[1]) / 2;
-      const sc = crossZ(solid, x, y);
-      if (sc.length < 2) continue;
-      const thick = sc[sc.length-1] - sc[0];
-      if (thick < wall*2 + 1.5 || thick > wall*8) continue;   // thin, but not impossibly thin
-      checked++;
-      const hc = crossZ(hollow, x, y);
-      if (hc.length < 4) welded.push(`x=${(100*f).toFixed(0)}% thick=${thick.toFixed(1)}mm crossings=${hc.length}`);
-    }
-    ok(checked > 0, "the fixture has at least one thin station to test");
-    ok(welded.length === 0,
-       `every thin station must read 4 crossings (skin, cavity, skin); welded: ${welded.join(" | ")}`);
-  });
-
-  t("field hollow: hollowing never changes the size of the outside", () => {
-    ok(HF, "fixture-hollow.json present"); if (!HF) return;
-    const solid = span(API.makeVisualHull(prof({ hullHollow:false, wallThickness:4.2 })));
-    for (const wt of [1.8, 4.2, 8]) {
-      const h = span(API.makeVisualHull(prof({ hullHollow:true, wallThickness:wt })));
-      for (let k = 0; k < 3; k++) {
-        ok(h.m[k] >= solid.m[k] - 0.06, `axis ${k} min must not grow outward (wall ${wt})`);
-        ok(h.M[k] <= solid.M[k] + 0.06, `axis ${k} max must not grow outward (wall ${wt})`);
-        // and it must not shrink either: the open edge is faired inward at most ~0.6mm
-        ok(solid.size[k] - h.size[k] < 0.9,
-           `axis ${k} must not shrink (wall ${wt}: ${h.size[k].toFixed(2)} vs solid ${solid.size[k].toFixed(2)})`);
+      const emA=new Map(), ak=(a,b)=>a<b?a+"_"+b:b+"_"+a;
+      for(let q=0,t=0;q<indices.length;q+=3,t++){
+        const T=[indices[q],indices[q+1],indices[q+2]];
+        for(const[u,v]of[[T[0],T[1]],[T[1],T[2]],[T[2],T[0]]]){
+          const kk=ak(u,v); let ar=emA.get(kk); if(!ar){ar=[];emA.set(kk,ar);} ar.push(t);
+        }
+      }
+      const nbA=new Map();
+      for(const ts of emA.values())
+        for(let i=0;i<ts.length;i++)for(let j=i+1;j<ts.length;j++){
+          if(!nbA.has(ts[i]))nbA.set(ts[i],[]); if(!nbA.has(ts[j]))nbA.set(ts[j],[]);
+          nbA.get(ts[i]).push(ts[j]); nbA.get(ts[j]).push(ts[i]);
+        }
+      const seenK=new Uint8Array(nTri), kept=[];
+      for(let t=0;t<nTri;t++){
+        if(flag[t]||seenK[t])continue;
+        seenK[t]=1; const st=[t], comp=[t]; let ar=0;
+        while(st.length){ const u=st.pop();
+          for(const v of nbA.get(u)||[]) if(!flag[v]&&!seenK[v]){seenK[v]=1;st.push(v);comp.push(v);} }
+        for(const u of comp)ar+=tarea[u];
+        kept.push({comp,ar});
+      }
+      if(kept.length>1){
+        kept.sort((a,b)=>b.ar-a.ar);
+        const body=kept[0].ar;
+        for(let i=1;i<kept.length;i++){
+          const r=kept[i];
+          if(r.ar >= body*0.02) continue;                 // big enough to be real skin
+          const inside=new Set(r.comp);
+          let border=0, ringed=0;
+          for(const t of r.comp) for(const v of nbA.get(t)||[]){
+            if(inside.has(v))continue; border++; if(flag[v])ringed++; }
+          if(border>0 && ringed===border) for(const t of r.comp) flag[t]=1;
+        }
       }
     }
-  });
-
-  t("field hollow: both walls survive, so the shell is not a solid lump", () => {
-    ok(HF, "fixture-hollow.json present"); if (!HF) return;
-    // the inner wall is its own connected component; a shell-dropper that keeps a fixed
-    // count of the biggest components throws it away and leaves a solid body. Volume is
-    // the honest witness: a shell holds far less material than the same body filled in.
-    const vol = g => { let V=0; const P=g.positions,I=g.indices;
-      for (let q=0;q<I.length;q+=3){ const a=I[q]*3,b=I[q+1]*3,c=I[q+2]*3;
-        V += (P[a]*(P[b+1]*P[c+2]-P[c+1]*P[b+2]) - P[a+1]*(P[b]*P[c+2]-P[c]*P[b+2])
-            + P[a+2]*(P[b]*P[c+1]-P[c]*P[b+1]))/6; }
-      return Math.abs(V); };
-    const solid  = vol(API.makeVisualHull(prof({ hullHollow:false, wallThickness:4.2 })));
-    const hollow = vol(API.makeVisualHull(prof({ hullHollow:true,  wallThickness:4.2 })));
-    ok(hollow < solid * 0.7,
-       `a shell must be far lighter than the filled body (${(hollow/1000).toFixed(0)} vs ${(solid/1000).toFixed(0)} cm3)`);
-    ok(hollow > solid * 0.03, "but it must not vanish either");
-  });
-
-  t("field hollow: the shell stays watertight at every wall thickness", () => {
-    ok(HF, "fixture-hollow.json present"); if (!HF) return;
-    for (const wt of [1.8, 4.2, 8, 12])
-      watertight(API.makeVisualHull(prof({ hullHollow:true, wallThickness:wt })), `wall ${wt}`);
-  });
-}
-
-// =====================================================================================
-// WHAT WALL DID WE ACTUALLY BUILD?
-// The slider is a request. On a voxel grid a dual contour puts one vertex per cell, so a
-// wall near the cell size gets pinched between its own two surfaces. That is fine for a
-// toy and not fine for a part that has to hold, so the number is measured, not assumed.
-// =====================================================================================
-{
-  // a hollow box of known wall: two nested cubes, inner one wound inward
-  const nested = (outer, wall) => {
-    const P = [], I = [];
-    const addBox = (r, flip) => {
-      const base = P.length/3;
-      for (let i = 0; i < 8; i++)
-        P.push((i&1?r:-r), (i&2?r:-r), (i&4?r:-r));
-      const q = [[0,1,3,2],[4,6,7,5],[0,4,5,1],[2,3,7,6],[0,2,6,4],[1,5,7,3]];
-      for (const f of q) {
-        const [a,b,c,d] = f.map(v => v + base);
-        if (flip) I.push(a,c,b, a,d,c); else I.push(a,b,c, a,c,d);
-      }
-    };
-    addBox(outer, false);
-    addBox(outer - wall, true);
-    return { positions: new Float32Array(P), indices: I };
-  };
-
-  t("wall report: it measures a known wall, not a guess", () => {
-    const g = nested(30, 4);
-    const s = API.shellWallStats(g.positions, g.indices, { wall:4, samples:120 });
-    ok(s.n > 20, `enough readings to be meaningful (got ${s.n})`);
-    near(s.median, 4, 0.35, "median wall of a 4mm nested box");
-    ok(s.thin < 0.05, `a box built to spec must not report thin spots (got ${(100*s.thin).toFixed(0)}%)`);
-  });
-
-  t("wall report: a thin wall is reported as thin rather than flattered", () => {
-    const g = nested(30, 1.2);
-    const s = API.shellWallStats(g.positions, g.indices, { wall:4, samples:120 });
-    near(s.median, 1.2, 0.3, "it reads the wall that is there");
-    ok(s.thin > 0.8, "and flags it against a 4mm request");
-  });
-
-  t("wall report: a face's neighbour across a fold is not mistaken for the far wall", () => {
-    // adjacent triangles sit a hair off the ray and read as a ~0.02mm wall, which would
-    // make every model look catastrophically thin. They share a corner, so they're skipped.
-    const g = nested(30, 4);
-    const s = API.shellWallStats(g.positions, g.indices, { wall:4, samples:120 });
-    ok(s.min > 1.0, `smallest reading must be a real wall, not a fold (got ${s.min.toFixed(3)}mm)`);
-  });
-}
-
-
-// =====================================================================================
-// POINT CLOUDS — in and out.
-// A scan comes in as points and a model can go back out as points, so both directions
-// have to be exact: a cloud that drifts by a hair on a round trip is a cloud you cannot
-// trace against. Export is Blob-based and therefore async, which is why the runner had to
-// learn to await — before that these tests "passed" before they had run.
-// =====================================================================================
-{
-  const pts = new Float32Array([0,0,0, 10,0,0, 10,20,0, 0,20,0, 5,10,7.5, -3.25,4.5,-6.125]);
-  const cols = new Uint8Array([255,0,0, 0,255,0, 0,0,255, 255,255,0, 10,20,30, 1,2,3]);
-  const close = (a, b, tol, m) => {
-    ok(a.length === b.length, (m||"") + ` length ${a.length} vs ${b.length}`);
-    for (let i = 0; i < a.length; i++)
-      if (Math.abs(a[i]-b[i]) > tol) throw new Error(`${m||""} [${i}] ${a[i]} vs ${b[i]}`);
-  };
-
-  t("point cloud: a binary PLY round trip moves nothing at all", async () => {
-    const blob = API.toPLY(pts, null, true);
-    const back = API.parsePLY(await blob.arrayBuffer());
-    close(Array.from(back.pts), Array.from(pts), 1e-6, "binary PLY");
-  });
-
-  t("point cloud: a text PLY round trip moves nothing at all", async () => {
-    const blob = API.toPLY(pts, null, false);
-    const back = API.parsePLY(await blob.arrayBuffer());
-    close(Array.from(back.pts), Array.from(pts), 1e-6, "ascii PLY");
-  });
-
-  t("point cloud: colour survives the round trip", async () => {
-    const back = API.parsePLY(await API.toPLY(pts, cols, true).arrayBuffer());
-    ok(back.colors, "colours came back");
-    close(Array.from(back.colors), Array.from(cols), 0, "PLY colours");
-  });
-
-  t("point cloud: binary is the compact one", async () => {
-    // on six points the header is the whole file and ascii looks smaller, which says
-    // nothing. Compare on a cloud the size people actually export.
-    const many = new Float32Array(3000);
-    for (let i = 0; i < many.length; i++) many[i] = Math.sin(i * 0.7) * 37.529;
-    const b = await API.toPLY(many, null, true).arrayBuffer();
-    const a = await API.toPLY(many, null, false).arrayBuffer();
-    ok(b.byteLength < a.byteLength, `binary ${b.byteLength} < ascii ${a.byteLength}`);
-    // and it still has to be exact, which is the only reason to prefer it
-    const back = API.parsePLY(b);
-    for (let i = 0; i < many.length; i++)
-      if (Math.abs(back.pts[i] - many[i]) > 1e-5) throw new Error(`binary drifted at ${i}`);
-  });
-
-  t("point cloud: XYZ round trips to its printed precision", async () => {
-    const back = API.parseXYZ(await API.toXYZ(pts, null).text());
-    close(Array.from(back.pts), Array.from(pts), 1e-4, "XYZ");
-  });
-
-  t("point cloud: PCD round trips", async () => {
-    const back = API.parsePCD(await API.toPCD(pts, null).text());
-    close(Array.from(back.pts), Array.from(pts), 1e-4, "PCD");
-  });
-
-  t("point cloud: the format is read from the file, not trusted from the name", async () => {
-    // a PLY saved as .xyz still has to load — people rename files
-    const buf = await API.toPLY(pts, null, false).arrayBuffer();
-    const back = API.parsePointCloud("scan.xyz", buf);
-    close(Array.from(back.pts), Array.from(pts), 1e-4, "sniffed PLY");
-  });
-
-  t("point cloud: exporting a mesh keeps its own corners, exactly", () => {
-    // a mesh's corners are the honest sample of it; they must come out unmoved, and
-    // asking for more points must add to them rather than replace them.
-    const positions = new Float32Array([0,0,0, 10,0,0, 0,10,0, 0,0,10]);
-    const indices = [0,1,2, 0,1,3, 0,2,3, 1,2,3];
-    const base = API.dedupeVerts(positions);
-    ok(base.n === 4, `four distinct corners, got ${base.n}`);
-    const dense = API.samplePointCloud(positions, indices, 400);
-    ok(dense.n >= 400, `asked for 400, got ${dense.n}`);
-    // every original corner still present
-    for (let i = 0; i < 4; i++) {
-      let found = false;
-      for (let j = 0; j < dense.n && !found; j++)
-        found = Math.abs(dense.pts[j*3]-positions[i*3]) < 1e-5
-             && Math.abs(dense.pts[j*3+1]-positions[i*3+1]) < 1e-5
-             && Math.abs(dense.pts[j*3+2]-positions[i*3+2]) < 1e-5;
-      ok(found, `corner ${i} survived densification`);
+    return flag;
+  }
+  let x0=1e30,x1=-1e30,y0=1e30,y1=-1e30;
+  for(let i=0;i<positions.length;i+=3){
+    if(positions[i]<x0)x0=positions[i]; if(positions[i]>x1)x1=positions[i];
+    if(positions[i+1]<y0)y0=positions[i+1]; if(positions[i+1]>y1)y1=positions[i+1];
+  }
+  const spanX=Math.max(1e-6,x1-x0), spanY=Math.max(1e-6,y1-y0);
+  const cell=opts.cell||Math.max(spanX,spanY)/160;
+  const GX=Math.max(16,Math.min(320,Math.round(spanX/cell))), GY=Math.max(16,Math.min(320,Math.round(spanY/cell)));
+  const sx=GX/spanX, sy=GY/spanY;
+  const minZ=new Float64Array(GX*GY).fill(Infinity);
+  const px=k=>(positions[k*3]-x0)*sx, py=k=>(positions[k*3+1]-y0)*sy;
+  // depth buffer: lowest surface in each column, from EVERY triangle (not just downward ones)
+  for(let q=0;q<indices.length;q+=3){
+    const a=indices[q],b=indices[q+1],c=indices[q+2];
+    const ax=px(a),ay=py(a),az=positions[a*3+2], bx=px(b),by=py(b),bz=positions[b*3+2], cx=px(c),cy=py(c),cz=positions[c*3+2];
+    const den=(by-cy)*(ax-cx)+(cx-bx)*(ay-cy); if(Math.abs(den)<1e-12)continue;
+    const i0=Math.max(0,Math.floor(Math.min(ax,bx,cx))), i1=Math.min(GX-1,Math.ceil(Math.max(ax,bx,cx)));
+    const j0=Math.max(0,Math.floor(Math.min(ay,by,cy))), j1=Math.min(GY-1,Math.ceil(Math.max(ay,by,cy)));
+    for(let j=j0;j<=j1;j++)for(let i=i0;i<=i1;i++){
+      const X=i+0.5,Y=j+0.5;
+      const l1=((by-cy)*(X-cx)+(cx-bx)*(Y-cy))/den, l2=((cy-ay)*(X-cx)+(ax-cx)*(Y-cy))/den, l3=1-l1-l2;
+      if(l1<-0.001||l2<-0.001||l3<-0.001)continue;
+      const z=l1*az+l2*bz+l3*cz, o=j*GX+i; if(z<minZ[o])minZ[o]=z;
     }
-  });
+  }
+  const tol=opts.tol||Math.max(1e-4,cell*2.5);   // generous, so a raised underbody opens cleanly instead of raggedly
+  for(let q=0,t=0;q<indices.length;q+=3,t++){
+    const a=indices[q],b=indices[q+1],c=indices[q+2];
+    const ax=positions[a*3],ay=positions[a*3+1],az=positions[a*3+2];
+    const ux=positions[b*3]-ax,uy=positions[b*3+1]-ay,uz=positions[b*3+2]-az;
+    const vx=positions[c*3]-ax,vy=positions[c*3+1]-ay,vz=positions[c*3+2]-az;
+    const fz=ux*vy-uy*vx, fl=Math.hypot(uy*vz-uz*vy,uz*vx-ux*vz,fz)||1;
+    if(fz/fl>=-0.15)continue;                                   // must face the floor (a sloped underbody counts)
+    const cz=(az+positions[b*3+2]+positions[c*3+2])/3;
+    const gx=Math.max(0,Math.min(GX-1,Math.floor(((positions[a*3]+positions[b*3]+positions[c*3])/3-x0)*sx)));
+    const gy=Math.max(0,Math.min(GY-1,Math.floor(((ay+positions[b*3+1]+positions[c*3+1])/3-y0)*sy)));
+    const low=minZ[gy*GX+gx];
+    if(low===Infinity || cz<=low+tol) flag[t]=1;                // nothing below it -> underside
+  }
+  /* SMOOTH THE DECISION, NOT JUST THE SURFACE. The depth test votes one triangle at a time,
+     and on a steep arch wall or a curvy sill neighbouring triangles land on opposite sides of
+     the tolerance — flag, keep, flag, keep — so the opening's edge comes out as a staircase.
+     That staircase is what the eye reads as a sawtooth around the wheel arches, and the rim
+     stitched along it (measured: 3,534mm of boundary where a fair curve needs ~800mm) is the
+     zig-zag curtain that shows through the arch as a plank. Majority vote over each triangle's
+     edge-neighbours settles the flicker: a flagged triangle boxed in by kept ones is kept, a
+     kept one boxed in by flagged ones opens — but an up-facing triangle is NEVER pulled into
+     the opening, so visible top skin cannot be eaten. Votes are counted per pass on a frozen
+     copy, so the boundary settles instead of marching. */
+  {
+    const em2=new Map(), k2=(a,b)=>a<b?a+"_"+b:b+"_"+a;
+    for(let q=0,t=0;q<indices.length;q+=3,t++){
+      const a=indices[q],b=indices[q+1],c=indices[q+2];
+      for(const[u,v]of[[a,b],[b,c],[c,a]]){const kk=k2(u,v);let arr=em2.get(kk);if(!arr){arr=[];em2.set(kk,arr);}arr.push(t);}
+    }
+    const adj=Array.from({length:nTri},()=>[]);
+    for(const ts of em2.values())for(let i=0;i<ts.length;i++)for(let j=i+1;j<ts.length;j++){adj[ts[i]].push(ts[j]);adj[ts[j]].push(ts[i]);}
+    const up=new Uint8Array(nTri);                       // never open a face the sky can see
+    for(let q=0,t=0;q<indices.length;q+=3,t++){
+      const a=indices[q],b=indices[q+1],c=indices[q+2];
+      const ax=positions[a*3],ay=positions[a*3+1],az=positions[a*3+2];
+      const ux=positions[b*3]-ax,uy=positions[b*3+1]-ay,uz=positions[b*3+2]-az;
+      const vx=positions[c*3]-ax,vy=positions[c*3+1]-ay,vz=positions[c*3+2]-az;
+      const fz=ux*vy-uy*vx, fl=Math.hypot(uy*vz-uz*vy,uz*vx-ux*vz,fz)||1;
+      if(fz/fl>0.05)up[t]=1;
+    }
+    for(let pass=0;pass<3;pass++){
+      const prev=flag.slice(); let changed=0;
+      for(let t=0;t<nTri;t++){
+        let on=0,off=0;
+        for(const n of adj[t]){ if(prev[n])on++; else off++; }
+        if(prev[t] && off>=2 && on<off){ flag[t]=0; changed++; }
+        else if(!prev[t] && on>=2 && off<on && !up[t]){ flag[t]=1; changed++; }
+      }
+      if(!changed)break;
+    }
+  }
+  /* Keep only substantial openings. A stray triangle here and there also satisfies "nothing
+     below me" — on a ribbed surface a single speck can qualify — and removing one isolated
+     triangle punches a pinprick hole through the side of the shell. So group the flagged
+     triangles into connected patches and keep the ones that cover a real share of the opening.
+     Measured by AREA, not triangle count: a coarse floor can be two big triangles while a speck
+     on a dense ribbed surface is one tiny one. */
+  const emap=new Map(), key=(a,b)=>a<b?a+"_"+b:b+"_"+a;
+  for(let q=0,t=0;q<indices.length;q+=3,t++){ if(!flag[t])continue;
+    const tri=[indices[q],indices[q+1],indices[q+2]];
+    for(const[a,b]of[[tri[0],tri[1]],[tri[1],tri[2]],[tri[2],tri[0]]]){
+      const k=key(a,b); let arr=emap.get(k); if(!arr){arr=[];emap.set(k,arr);} arr.push(t);}}
+  const nb=new Map();
+  for(const ts of emap.values()) for(let i=0;i<ts.length;i++) for(let j=i+1;j<ts.length;j++){
+    let A=nb.get(ts[i]); if(!A){A=[];nb.set(ts[i],A);} A.push(ts[j]);
+    let B=nb.get(ts[j]); if(!B){B=[];nb.set(ts[j],B);} B.push(ts[i]);}
+  const triArea=t=>{const a=indices[t*3],b=indices[t*3+1],c=indices[t*3+2];
+    const ux=positions[b*3]-positions[a*3],uy=positions[b*3+1]-positions[a*3+1],uz=positions[b*3+2]-positions[a*3+2];
+    const vx=positions[c*3]-positions[a*3],vy=positions[c*3+1]-positions[a*3+1],vz=positions[c*3+2]-positions[a*3+2];
+    return Math.hypot(uy*vz-uz*vy,uz*vx-ux*vz,ux*vy-uy*vx)*0.5;};
+  let totArea=0; for(let t=0;t<nTri;t++) if(flag[t])totArea+=triArea(t);
+  const seen=new Uint8Array(nTri), comps=[];
+  for(let t=0;t<nTri;t++){
+    if(!flag[t]||seen[t])continue;
+    const comp=[t]; seen[t]=1; let area=triArea(t);
+    for(let i=0;i<comp.length;i++){ for(const y of nb.get(comp[i])||[]) if(!seen[y]){seen[y]=1;comp.push(y);area+=triArea(y);} }
+    comps.push({comp,area});
+  }
+  comps.sort((a,b)=>b.area-a.area);
+  /* AN OPENING HAS TO REACH THE FLOOR.
+     "Nothing below me" is true of a wheel-arch ceiling as well as of the underside — inside
+     an arch there is nothing between the fender and the ground, so the depth test opens it
+     and punches a hole up inside the fender. Measured on this car: only 28% of everything
+     being opened sat in the bottom tenth of the model, and the biggest single band was at
+     40-50% of the height, which is exactly the sill line. The rim around those holes is what
+     arcs from one wheel to the next and reads as a plank spanning the arch.
+     A real underside touches the ground somewhere. A patch that lives entirely up in the
+     bodywork does not, so it is a ceiling and stays shut. Measured effect: the area opened
+     high drops 41%, the boundary shortens by 30%, and one whole loop disappears. */
+  let zLo=1e30,zHi=-1e30;
+  for(let k=2;k<positions.length;k+=3){ if(positions[k]<zLo)zLo=positions[k]; if(positions[k]>zHi)zHi=positions[k]; }
+  const reach=zLo+Math.max(1e-6,zHi-zLo)*0.10;
+  for(let i=1;i<comps.length;i++){                           // the biggest patch is always the opening
+    let lo=1e30;
+    for(const t of comps[i].comp)
+      for(const v of [indices[t*3],indices[t*3+1],indices[t*3+2]])
+        if(positions[v*3+2]<lo)lo=positions[v*3+2];
+    if(comps[i].area < totArea*0.02 || lo > reach)           // a speck, or a ceiling — not an opening
+      for(const x of comps[i].comp) flag[x]=0;
+  }
+  /* NOW THE OTHER HALF OF THE SAME PROBLEM — the tabs left behind INSIDE the opening.
+     The filter above throws away specks of opening stranded in the skin. The reverse happens
+     just as often and looks far worse: specks of SKIN stranded in the opening, where the
+     depth test kept a triangle here and there in the middle of a region that is otherwise
+     entirely open. Measured on this car: ten of them, from 2mm² to 208mm², against a real
+     skin of 45,677mm². Each is a little flap left dangling in the hole, and because every
+     one carries its own boundary loop, the rim gets stitched all the way around each — which
+     is the nibbled, jigsaw edge round the wheel arches, and the count of loops (13 where the
+     shape needs about 4) is exactly the count of those tabs plus the genuine openings.
+     A tab completely ringed by the opening belongs to the opening. Fill it in. The largest
+     unflagged region is the real skin and is never touched, so this can only ever tidy an
+     edge — it cannot eat the body. */
+  {
+    const seen2=new Uint8Array(nTri), regions=[];
+    for(let t=0;t<nTri;t++){
+      if(flag[t]||seen2[t])continue;
+      const comp=[t]; seen2[t]=1; let ar=triArea(t);
+      for(let i=0;i<comp.length;i++) for(const y of nb.get(comp[i])||[])
+        if(!flag[y] && !seen2[y]){seen2[y]=1;comp.push(y);ar+=triArea(y);}
+      regions.push({comp,area:ar});
+    }
+    if(regions.length>1){
+      regions.sort((a,b)=>b.area-a.area);
+      const skin=regions[0].area;                       // the body itself — never fill this
+      for(let i=1;i<regions.length;i++){
+        const r=regions[i];
+        if(r.area >= skin*0.02) continue;               // big enough to be real skin, leave it
+        const inside=new Set(r.comp);
+        let border=0, ringed=0;
+        for(const t of r.comp) for(const y of nb.get(t)||[]){
+          if(inside.has(y))continue; border++; if(flag[y])ringed++; }
+        if(border>0 && ringed===border) for(const t of r.comp) flag[t]=1;   // fully surrounded -> it's a tab
+      }
+    }
+  }
+  /* AND THE PART A PATCH RULE CANNOT REACH.
+     The floor test above throws out patches that float entirely up in the bodywork, but it
+     could only ever get part of the way: measured, 59% of the skin being opened high up
+     belonged to ONE patch that runs continuously from the floor at the wheels up over each
+     arch, so no rule about whole patches can separate the two ends of it. It has to be
+     decided triangle by triangle.
+     What separates them is what the drawing says about that station along the length. Where
+     the car comes down and touches the ground — the wheels, the bumpers — the skin facing
+     down there is the underside, and opening it is the whole point: that is where the chassis
+     goes. Over a wheel arch the body never comes down at all; it stops in mid-air, and the
+     down-facing skin there is the ROOF of the arch. Opening a roof is what left a rim arcing
+     from one wheel to the next, which is the plank.
+     So slice the model along its length and ask each slice one question: does anything here
+     reach the ground? If yes, its down-facing skin is underside. If it stops in mid-air, that
+     skin is arch roof and stays closed. Measured: the area opened high goes to ZERO, the
+     boundary shortens from 2553mm to 1338mm, and a whole loop disappears. It costs material —
+     a closed fender bottom is more plastic than an open one — and that is the honest price of
+     a fender that reads as a fender. */
+  if(!opts.openArches){
+    let zLo=1e30,zHi=-1e30,xLo=1e30,xHi=-1e30;
+    for(let k=0;k<positions.length;k+=3){
+      if(positions[k+2]<zLo)zLo=positions[k+2]; if(positions[k+2]>zHi)zHi=positions[k+2];
+      if(positions[k]<xLo)xLo=positions[k];     if(positions[k]>xHi)xHi=positions[k]; }
+    const NS=64, xSpan=Math.max(1e-6,xHi-xLo);
+    const sliceLow=new Float32Array(NS).fill(Infinity);
+    for(let k=0;k<positions.length;k+=3){
+      let s=Math.floor((positions[k]-xLo)/xSpan*NS); if(s<0)s=0; if(s>=NS)s=NS-1;
+      if(positions[k+2]<sliceLow[s])sliceLow[s]=positions[k+2]; }
+    /* A slice with no vertices in it knows nothing, and must not be allowed to vote. Slicing
+       finer than the mesh leaves gaps — on a plain box, 14 of these 64 came back empty — and
+       reading "no vertices" as "never touches the ground" closed the underside of a shape
+       that has no arches at all. Carry the nearest real answer into the gaps instead. */
+    for(let s=0;s<NS;s++) if(!isFinite(sliceLow[s])){
+      let a=Infinity,b=Infinity;
+      for(let i=s-1;i>=0;i--) if(isFinite(sliceLow[i])){a=sliceLow[i];break;}
+      for(let i=s+1;i<NS;i++) if(isFinite(sliceLow[i])){b=sliceLow[i];break;}
+      sliceLow[s]=Math.min(a,b);                     // unknown: trust the nearest that is known
+    }
+    const grounded=zLo+Math.max(1e-6,zHi-zLo)*0.12;   // "reaches the ground" — plateau at 0.10-0.15
+    for(let q=0,t=0;q<indices.length;q+=3,t++){
+      if(!flag[t])continue;
+      const cx=(positions[indices[q]*3]+positions[indices[q+1]*3]+positions[indices[q+2]*3])/3;
+      let s=Math.floor((cx-xLo)/xSpan*NS); if(s<0)s=0; if(s>=NS)s=NS-1;
+      if(sliceLow[s] > grounded) flag[t]=0;           // stops in mid-air: this is arch roof
+    }
+  }
+  return flag;
 }
-
-
-// =====================================================================================
-// ADAPTIVE WALL (p.adaptiveWall, default OFF)
-//
-// Thin the wall where the SECTION is thin, so a cavity survives instead of the section
-// going solid. The first attempt at this shipped a probe that took the nearest outside
-// sample in any of 26 directions as the local thickness — but for a point at depth d the
-// nearest outside sample IS d, so it measured depth and collapsed the wall everywhere
-// (0.52mm at the tenth percentile, body 4mm undersized). These tests pin the property that
-// distinguishes the correct version: thickness is BILATERAL. Both sides must be close.
-// =====================================================================================
-{
-  const boxy = extra => ({
-    mode:"projection", length:200, stations:52, hullCrisp:1, features:null,
-    sidePoly:[[0.05,0.05],[0.95,0.05],[0.95,0.95],[0.05,0.95]],
-    topPoly:[[0.05,0.05],[0.95,0.05],[0.95,0.95],[0.05,0.95]],
-    frontPoly:[[0.05,0.05],[0.95,0.05],[0.95,0.95],[0.05,0.95]],
-    topProfile:[[0,90]], widthProfile:[[0,50]], closedBottom:true,
-    hullHollow:true, wallThickness:8, ...extra });
-  const vol = g => { let V=0; const P=g.positions,I=g.indices;
-    for (let q=0;q<I.length;q+=3){ const a=I[q]*3,b=I[q+1]*3,c=I[q+2]*3;
-      V += (P[a]*(P[b+1]*P[c+2]-P[c+1]*P[b+2]) - P[a+1]*(P[b]*P[c+2]-P[c]*P[b+2])
-          + P[a+2]*(P[b]*P[c+1]-P[c]*P[b+1]))/6; }
-    return Math.abs(V); };
-
-  t("adaptive wall: off by default, and off changes nothing", () => {
-    const a = API.makeVisualHull(boxy({}));
-    const b = API.makeVisualHull(boxy({ adaptiveWall:false }));
-    ok(a.indices.length === b.indices.length, "the default must be the un-thinned build");
-    near(vol(a), vol(b), 1, "and identical material");
-  });
-
-  t("adaptive wall: a corner is not a thin section", () => {
-    /* THE TEST THAT WOULD HAVE CAUGHT THE OLD PROBE. A chunky box is thick everywhere, but
-       it has eight corners, and near a corner there is always a face close by in SOME
-       direction. A probe that asks "how far to the nearest surface" fires there and thins
-       the wall; a probe that asks "how far to the surface BOTH ways" does not, because the
-       other way is the whole width of the body. Nothing here is thin, so nothing may
-       change. */
-    const off = API.makeVisualHull(boxy({}));
-    const on  = API.makeVisualHull(boxy({ adaptiveWall:true }));
-    const vo = vol(off), vn = vol(on);
-    ok(vn > vo * 0.95,
-       `a body with no thin sections must not be thinned (${(vn/1000).toFixed(0)} vs ${(vo/1000).toFixed(0)} cm3)`);
-  });
-
-  t("adaptive wall: a thin slab is left SOLID, which is the right answer", () => {
-    /* REWRITTEN, and the old assertion was the wrong requirement.
-       It demanded that a slab too thin for two walls plus a cavity must be thinned so that
-       something hollow survives. Measured across ten geometries, that is not a trade worth
-       making: at an 8mm wall it saves 1.6-4.3% of material and opens a thin patch every time,
-       down to 0.00mm, and at a 4mm wall it does nothing whatsoever.
-       Field hollow already answers this case correctly by leaving such a section SOLID — a rib
-       too thin to hold a cavity should be a rib, not a shell with a hole in it. So what needs
-       protecting is that the plain build stays clean, not that the flag keeps acting. */
-    const slab = extra => boxy({ topProfile:[[0,22]], widthProfile:[[0,50]],
-                                 wallThickness:8, ...extra });
-    const off = API.makeVisualHull(slab({}));
-    watertight(off, "thin slab, plain build");
-    /* FIXED — this used to assert the opposite, and the note is kept because the shape of the
-       bug is worth remembering. A cavity too narrow for the grid did NOT simply fail to
-       appear: it collapsed into slivers of air a fraction of a millimetre wide hugging the
-       inside of the wall, leaving an 82.8mm solid core that still reported itself hollow. The
-       safety gate then measured across a sliver and called it a 0.28mm wall — a false alarm
-       on what was really a solid block.
-       Now an air cell with material on BOTH sides along any axis is filled, so a cavity that
-       cannot open becomes properly solid and one that can, opens. */
-    /* The bar is a sliver, not a thin spot. Half a millimetre of air pretending to be a
-       cavity is the defect; a genuinely thinner-than-asked wall at an end cap is a different
-       matter and is what the safety gate is for. Measured on this fixture: the middle now
-       carries two clean 7.1mm walls with a proper gap, and the worst remaining reading is
-       1.38mm at x=10 — the end of the body, not the cavity. */
-    const s = API.shellWallStats(off.positions, off.indices, { wall:8, samples:900 });
-    ok(!s.worstPatch || s.worstPatch.min > 0.5,
-       `the cavity must not fragment into slivers ` +
-       `(worst ${s.worstPatch ? s.worstPatch.min.toFixed(2)+"mm" : "none"})`);
-    /* KNOWN, NOT FIXED: this fixture still shows a 0.64mm layer inside its END CAP, where the
-       cavity fragments along the length rather than across it. The one-cell bilateral fill
-       does not reach it. Widening to two cells does reach it — and closes a 6mm cavity that
-       was building correctly, and opens a 2mm gap in a 10mm one that was clean. Measured, and
-       reverted: the end-cap artefact is smaller than the damage the wider rule does. */
-    ok(s.median > 8*0.85,
-       `and the wall itself must still be sound (median ${s.median.toFixed(2)}mm of 8mm)`);
-  });
-
-  t("adaptive wall: it never thins past what can be meshed or printed", () => {
-    const g = API.makeVisualHull(boxy({ topProfile:[[0,26]], adaptiveWall:true }));
-    const s = API.shellWallStats(g.positions, g.indices, { wall:8, samples:250 });
-    /* The floor is deliberately above the point where a shell starts eating itself. The
-       BUILT wall reads a few tenths under the field wall because of the voxel grid, so the
-       bar here is the floor less that known shortfall — not the floor itself. */
-    ok(s.median > 3.5, `thinned wall must still be a wall (median ${s.median.toFixed(2)}mm)`);
-    watertight(g, "adaptive wall");
-  });
-
-  t("adaptive wall: thinning does not move the outside", () => {
-    const span = g => { const m=[1e9,1e9,1e9],M=[-1e9,-1e9,-1e9];
-      for (let i=0;i<g.positions.length;i+=3) for (let k=0;k<3;k++){
-        if (g.positions[i+k]<m[k]) m[k]=g.positions[i+k];
-        if (g.positions[i+k]>M[k]) M[k]=g.positions[i+k]; }
-      return [M[0]-m[0],M[1]-m[1],M[2]-m[2]]; };
-    const off = span(API.makeVisualHull(boxy({ topProfile:[[0,26]] })));
-    const on  = span(API.makeVisualHull(boxy({ topProfile:[[0,26]], adaptiveWall:true })));
-    for (let k=0;k<3;k++)
-      near(on[k], off[k], 0.35, `axis ${k}: thinning the wall must not resize the body`);
-  });
+/* The inner wall: the outer skin pushed in by one wall thickness. Where the body turns a corner
+   tighter than the wall is thick, a straight push would fold the inner surface through itself and
+   spit out the spikes and ribbons you see as artefacts — so any vertex whose triangles turn
+   inside-out gets its push shortened until they don't. */
+function innerOffsets(positions,indices,wall,vc){
+  const nrm=new Float32Array(vc*3);
+  for(let q=0;q<indices.length;q+=3){
+    const a=indices[q],b=indices[q+1],c=indices[q+2];
+    const ax=positions[a*3],ay=positions[a*3+1],az=positions[a*3+2];
+    const ux=positions[b*3]-ax,uy=positions[b*3+1]-ay,uz=positions[b*3+2]-az;
+    const vx=positions[c*3]-ax,vy=positions[c*3+1]-ay,vz=positions[c*3+2]-az;
+    const fx=uy*vz-uz*vy,fy=uz*vx-ux*vz,fz=ux*vy-uy*vx;
+    for(const k of [a,b,c]){nrm[k*3]+=fx;nrm[k*3+1]+=fy;nrm[k*3+2]+=fz;}
+  }
+  for(let k=0;k<vc;k++){const l=Math.hypot(nrm[k*3],nrm[k*3+1],nrm[k*3+2])||1;
+    nrm[k*3]/=l;nrm[k*3+1]/=l;nrm[k*3+2]/=l;}
+  const scale=new Float32Array(vc).fill(1), inner=new Float32Array(vc*3);
+  const build=()=>{for(let k=0;k<vc;k++){const s=wall*scale[k];
+    inner[k*3]=positions[k*3]-nrm[k*3]*s; inner[k*3+1]=positions[k*3+1]-nrm[k*3+1]*s; inner[k*3+2]=positions[k*3+2]-nrm[k*3+2]*s;}};
+  build();
+  for(let pass=0;pass<16;pass++){
+    let bad=0;
+    for(let q=0;q<indices.length;q+=3){
+      const a=indices[q],b=indices[q+1],c=indices[q+2];
+      const ax=positions[a*3],ay=positions[a*3+1],az=positions[a*3+2];
+      const ux=positions[b*3]-ax,uy=positions[b*3+1]-ay,uz=positions[b*3+2]-az;
+      const vx=positions[c*3]-ax,vy=positions[c*3+1]-ay,vz=positions[c*3+2]-az;
+      const fx=uy*vz-uz*vy,fy=uz*vx-ux*vz,fz=ux*vy-uy*vx;
+      const Ax=inner[a*3],Ay=inner[a*3+1],Az=inner[a*3+2];
+      const Ux=inner[b*3]-Ax,Uy=inner[b*3+1]-Ay,Uz=inner[b*3+2]-Az;
+      const Vx=inner[c*3]-Ax,Vy=inner[c*3+1]-Ay,Vz=inner[c*3+2]-Az;
+      const Gx=Uy*Vz-Uz*Vy,Gy=Uz*Vx-Ux*Vz,Gz=Ux*Vy-Uy*Vx;
+      if(fx*Gx+fy*Gy+fz*Gz<0){bad++;   // strictly inside-out (a pinch to zero is fine)
+        scale[a]*=0.6; scale[b]*=0.6; scale[c]*=0.6;}
+    }
+    if(!bad)break;
+    build();
+  }
+  /* The cavity must be a clean hollow, the way the smooth body's is. Pushing every outer vertex
+     straight inward copies the skin exactly — so a wheel arch, which is a recess in the skin,
+     comes back as a lump sticking INTO the cavity, and a row of them reads as boxes and slabs
+     rattling about inside the shell. The skin keeps its recesses; the wall behind it is relaxed
+     until the inside is smooth, then pulled back wherever that would leave less than the asked
+     for thickness, so nothing ever breaks through. */
+  {
+    const n=vc, adj=Array.from({length:n},()=>[]);
+    for(let q=0;q<indices.length;q+=3){const a=indices[q],b=indices[q+1],c=indices[q+2];
+      if(a<n&&b<n){adj[a].push(b);adj[b].push(a);} if(b<n&&c<n){adj[b].push(c);adj[c].push(b);}
+      if(c<n&&a<n){adj[c].push(a);adj[a].push(c);}}
+    const tmp=new Float32Array(inner.length);
+    for(let pass=0;pass<12;pass++){
+      tmp.set(inner);
+      for(let k=0;k<n;k++){
+        const nb=adj[k]; if(!nb.length)continue;
+        let sx=0,sy=0,sz=0;
+        for(const j of nb){sx+=tmp[j*3];sy+=tmp[j*3+1];sz+=tmp[j*3+2];}
+        const m=nb.length, ax=sx/m, ay=sy/m, az=sz/m;
+        // relax toward the neighbours, but never let the wall get thinner than asked
+        let px=tmp[k*3]+(ax-tmp[k*3])*0.6, py=tmp[k*3+1]+(ay-tmp[k*3+1])*0.6, pz=tmp[k*3+2]+(az-tmp[k*3+2])*0.6;
+        const ox=positions[k*3],oy=positions[k*3+1],oz=positions[k*3+2];
+        // must still sit INSIDE the skin: measure along the inward normal, not just distance
+        const inx=-nrm[k*3],iny=-nrm[k*3+1],inz=-nrm[k*3+2];
+        const along=(px-ox)*inx+(py-oy)*iny+(pz-oz)*inz;
+        if(along<wall*0.75){const add=wall*0.75-along; px+=inx*add; py+=iny*add; pz+=inz*add;}
+        inner[k*3]=px; inner[k*3+1]=py; inner[k*3+2]=pz;
+      }
+    }
+  }
+  return inner;
 }
+/* VISUAL HULL — the volume inside every traced outline at once.
+   Dual contouring rather than plain surface nets: each cell's vertex is solved from where
+   the surface actually crosses its edges AND which way it faces there, so a corner lands
+   ON the corner. Averaging those crossings (the old way) always rounds an edge off, which
+   is exactly what made angular objects come out mushy. */
+/* WHERE THE BODY ENDS WHEN NOBODY DREW A BOTTOM.
+   A traced side view says two things about its lower edge. Over a wheel it comes down and
+   touches the ground; over a wheel arch it stops in mid-air, forty or fifty millimetres up.
+   Those are two different populations of height, not one range, and telling them apart is
+   what says where the underside of the body actually is.
+   Sampled across the length and split into two groups by their own means, this car gives a
+   ground-touching group averaging 5.4mm and an arch group averaging 43mm. So the body ends
+   at about 5mm: level the base there, and the shell finishes on one flat plane the way a
+   body shell does, instead of trailing off down a rounded underside that the trim then has
+   to guess at. That flat plane is the "bottom face" — it is where the model stops, and it
+   is left open so you can see up inside.
+   Returns -Infinity when there is nothing to level, so the caller cuts nothing. */
+function baseCutZ(sidePolyMM, H){
+  if(!sidePolyMM || sidePolyMM.length<3) return -Infinity;
+  let zLo=Infinity, zHi=-Infinity, xLo=Infinity, xHi=-Infinity;
+  for(const q of sidePolyMM){
+    if(q[1]<zLo)zLo=q[1]; if(q[1]>zHi)zHi=q[1];
+    if(q[0]<xLo)xLo=q[0]; if(q[0]>xHi)xHi=q[0];
+  }
+  if(!(xHi>xLo) || !(zHi>zLo)) return -Infinity;
+  const inside=(x,z)=>{ let c=false;
+    for(let i=0,j=sidePolyMM.length-1;i<sidePolyMM.length;j=i++){
+      const xi=sidePolyMM[i][0],zi=sidePolyMM[i][1],xj=sidePolyMM[j][0],zj=sidePolyMM[j][1];
+      if(((zi>z)!==(zj>z)) && (x < (xj-xi)*(z-zi)/((zj-zi)||1e-12)+xi)) c=!c;
+    }
+    return c; };
+  const NS=120, NZ=160, lows=[];
+  for(let i=0;i<NS;i++){
+    const x=xLo+(i+0.5)/NS*(xHi-xLo);
+    for(let j=0;j<NZ;j++){
+      const z=zLo+j/NZ*(zHi-zLo);
+      if(inside(x,z)){ lows.push(z); break; }
+    }
+  }
+  if(lows.length<4) return -Infinity;
+  // two means, seeded at the extremes: "reaches the ground" against "hangs in the air"
+  let a=Math.min(...lows), b=Math.max(...lows);
+  for(let it=0;it<40;it++){
+    let sa=0,na=0,sb=0,nb=0;
+    for(const v of lows){ if(Math.abs(v-a)<=Math.abs(v-b)){sa+=v;na++;} else {sb+=v;nb++;} }
+    if(!na||!nb) return -Infinity;               // one population only: nothing to separate
+    const a2=sa/na, b2=sb/nb;
+    if(Math.abs(a2-a)<1e-6 && Math.abs(b2-b)<1e-6){ a=a2; b=b2; break; }
+    a=a2; b=b2;
+  }
+  if(!(b-a > (zHi-zLo)*0.08)) return -Infinity;  // the two groups aren't really distinct
+  return a;                                      // the level the ground-touching parts sit at
+}
+/* HOW MUCH GRID A WALL NEEDS.
+   One number, used in two places that must never disagree: the rule that decides how fine
+   to make the grid, and the gate that decides whether field hollow can run on it. If those
+   two drift apart the gate quietly rejects a wall the grid was just refined to hold, and
+   the plank comes back with nothing in the log to say why.
+   Measured on the hollow fixture: wall/cell 3.2 -> outside exact to 0.00mm, 1.68 -> 0.07mm,
+   1.5 -> 0.5mm faired at the open edge, 0.72 -> 3.19mm SHORT with skin missing. Somewhere
+   around 1.5 is where a shell stops eating itself, and the vertex-offset path fairs an open
+   edge by about 0.42mm anyway, so half a millimetre here is in keeping rather than a
+   regression. Set just under 1.5 because the three cell sizes are not equal — profile_7
+   lands on 4.2 vs 4.2000001 and a hair of floating point either way must not be what decides
+   whether the plank comes back. */
+const HOLLOW_WALL_CELLS=1.45;
+/* HOW THIN THE ADAPTIVE WALL MAY GO.
+   Deliberately MORE headroom than HOLLOW_WALL_CELLS. That constant is the point at which a
+   shell stops eating itself outright; sitting exactly on it costs about half a millimetre of
+   fairing at the open edge, which is tolerable once for the whole model but not something to
+   invite locally all over a body. Measured on profile_7 at an 8mm wall: thinning down to
+   1.45 cells saved 5.9% of the material and pulled the width in 0.6mm; at 2.0 cells the
+   outside holds. Material is cheaper than a body that is the wrong size. */
+const HOLLOW_THIN_CELLS=2.0;
+function makeVisualHull(p){
+  const BOX=[[0,0],[1,0],[1,1],[0,1]];
+  const sideN=(p.sidePoly&&p.sidePoly.length>2)?p.sidePoly:BOX;
+  const topN =(p.topPoly &&p.topPoly.length>2)?p.topPoly :BOX;
+  const frontN=(p.frontPoly&&p.frontPoly.length>2)?p.frontPoly:BOX;
+  const L=p.length||150;
+  const H=Math.max(8, p.topProfile&&p.topProfile.length?Math.max(...p.topProfile.map(q=>q[1])):60);
+  const W=Math.max(8, p.widthProfile&&p.widthProfile.length?2*Math.max(...p.widthProfile.map(q=>q[1])):60);
+  // every outline into real mm, so the three of them can be compared honestly
+  const sideP =sideN.map(q=>[q[0]*L,q[1]*H]);      // (x , z)
+  /* With no bottom traced, level the base: the shell ends on one flat plane and that plane
+     is left open. With a bottom traced the drawing already says where the underside is, so
+     nothing is levelled. */
+  const baseCut = p.closedBottom ? -Infinity : baseCutZ(sideP,H);
+  /* "Leave the underside open". The vertex-offset hollow honours it by trimming ground-facing
+     triangles; the FIELD hollow never read it at all, and the field hollow is the one that
+     runs at any normal wall thickness. Measured on Collin's own car, his exact settings:
+         wall 2.1  field OFF  material up the middle 85.5-86.9          open
+         wall 2.5  field ON   material up the middle 5.0-7.5, 85.2-86.8 FLOOR
+         wall 6.0  field ON   material up the middle 5.0-16.8           FLOOR
+     The floor starts at z=5.0, which is his baseCutZ of 5.017 — it is the wall band grown
+     against the levelling plane. That is why turning the thickness up closed the underside. */
+  const openUnder = !p.closedBottom && !!(p.openUnderside || p.openArches);
+  /* THE OTHER SIDE, IF THERE IS ONE.
+     Trace one side and the body is symmetric — that outline is what you see from either
+     hand, which is what almost everything wants. Trace the second and the two are allowed
+     to differ.
+     The second is stored mirrored along the length, for the same reason the rear view is:
+     you stand on the opposite side to draw it, so the nose is on the other end of the page.
+     Flipping it puts both drawings in one frame, and then left and right mean the same x. */
+  const sideRN = (p.sidePolyR && p.sidePolyR.length>2)
+    ? resamplePoly(p.sidePolyR.map(q=>[1-q[0],q[1]]), Math.max(64,p.sidePolyR.length))
+    : null;
+  const sidePR = sideRN ? sideRN.map(q=>[q[0]*L,q[1]*H]) : null;
+  const topP  =topN.map(q=>[q[0]*L,q[1]*W]);       // (x , y)
+  const frontP=frontN.map(q=>[q[0]*W,q[1]*H]);     // (y , z)
+  const crisp=Math.max(0,Math.min(1,p.hullCrisp==null?0.9:p.hullCrisp));
 
+  // Features, on their own plane, in mm. Because the body is a distance field here rather
+  // than a fixed surface, a feature is just more arithmetic on that field — which means a
+  // window can genuinely be REMOVED, not merely dented. That's the one thing the lofted
+  // shell can never do, and it needs no server.
+  const soft0=Math.max(L,W,H)*0.5;
+  /* In stamp mode the field builds a PLAIN body and embossHull does the features afterwards,
+     so this list stays empty — otherwise both engines run and every feature lands twice. */
+  const feats=(p.carveMode==="stamp"?[]:(p.features||[])).map(f=>{
+    if(!f||!f.poly||f.poly.length<3||!f.depth)return null;      // text/mask stay surface-only
+    const view=f.view||"side";
+    /* WHICH PLANE A FEATURE BELONGS TO — the whole list, not "side, top, and everything else".
+       sideR used to fall through the else and be built on the yz plane, so detail traced on
+       the RIGHT view was pressed into the nose: measured on a plain block, a right-side
+       pocket dented +x at y=-20.2 z=27.2, the identical spot a front-view pocket lands, and
+       the flank it was drawn on moved 0.00mm. The right drawing is traced from the opposite
+       hand, so its length axis mirrors exactly the way sidePolyR is mirrored above.
+       top/bottom carry a second correction: featNormalize stores v screen-UP for every view,
+       while normPoly stores topPoly/bottomPoly v screen-DOWN. Reading one in the other's
+       frame put plan-view detail on the opposite flank from the one it was drawn on. */
+    let pts,kind;
+    if(view==="side"||view==="sideR"){pts=f.poly.map(q=>[(view==="sideR"?1-q[0]:q[0])*L,q[1]*H]); kind="xz";}
+    else if(view==="top"||view==="bottom"){pts=f.poly.map(q=>[q[0]*L,(1-q[1])*W]); kind="xy";}
+    else {pts=f.poly.map(q=>[(view==="rear"?1-q[0]:q[0])*W,q[1]*H]); kind="yz";}
+    /* THE CUT AXIS AND WHICH WAY IT GOES IN.
+       A carve is a prism: the feature footprint on one face, swept straight in along the
+       axis that face looks down, stopping at a flat floor `depth` mm below the surface. So
+       each feature needs the axis it cuts along ('x'|'y'|'z'), which face of that axis it
+       enters from (the near face at the max coordinate, or the far face at 0), and how deep.
+       side/sideR look down y (the flank); top/bottom look down z; front/rear look down x.
+       A carve at depth<0 removes material; depth>0 is handled as a raised boss, still by the
+       field, so both are real geometry rather than a surface push. */
+    const axis = (view==="side"||view==="sideR") ? "y" : (view==="top"||view==="bottom") ? "z" : "x";
+    // which face it enters from: the flank a side view sees, the top for a plan view, etc.
+    const nearMax = (view==="side")   ? false     // left flank is -y (the min side)
+                  : (view==="sideR")  ? true      // right flank is +y
+                  : (view==="top")    ? true      // top is +z
+                  : (view==="bottom") ? false     // underside is -z
+                  : (view==="rear")   ? false     // tail is -x
+                  :                     true;      // front/nose is +x
+    /* The footprint's own extent, so a grid point outside it can be rejected with four
+       comparisons instead of a table lookup. Most features cover a small patch of one face,
+       and a model like profile_7 carries 153 of them — without this every sample pays for
+       every feature, which is what turned the feature pass from 2.1s into 18.1s. */
+    let u0=Infinity,u1=-Infinity,v0=Infinity,v1=-Infinity;
+    for(const q of pts){ if(q[0]<u0)u0=q[0]; if(q[0]>u1)u1=q[0];
+                         if(q[1]<v0)v0=q[1]; if(q[1]>v1)v1=q[1]; }
+    const pad=Math.max(0.35,(f.soft==null?0.1:f.soft)*soft0);
+    /* Keep the footprint's true size and its name, so the build can say afterwards which
+       features were too small for the grid to resolve. A feature narrower than a voxel has no
+       grid point inside it, so the mesher has nothing to place a surface from and
+       extrapolates: measured, a 2mm badge on a 2.86mm grid built 9.29mm proud of a 6mm ask,
+       and converged to 5.78mm only once the cell was 1.43mm. That is inherent to voxel
+       meshing, so the honest answer is to SAY SO rather than silently hand back a wrong shape. */
+    return {pts,kind,depth:f.depth,through:!!f.through&&f.depth<0,axis,nearMax,
+            span:Math.min(u1-u0,v1-v0), name:f.name||"",
+            u0:u0-pad,u1:u1+pad,v0:v0-pad,v1:v1+pad,
+            soft:pad};
+  }).filter(Boolean);
+  /* Each outline only depends on TWO of the three coordinates — the side view never cares
+     about y, the top view never cares about z. So this field is SEPARABLE: work the three
+     2D distances out once into small tables, and every one of the ~54,000 field samples
+     becomes two lookups and a max instead of walking ~270 polygon edges. Identical answer,
+     roughly sixty times less work. Before this, one slider drag asked for ~100 million
+     distance computations and took the tab down with it. */
+  const TB=p.hullFast?1:2;                      // finer tables only matter once you stop moving
+  const mkTable=(poly,wSpan,hSpan,nu,nv)=>{
+    const d=new Float32Array((nu+1)*(nv+1)), R=nv+1;
+    for(let i=0;i<=nu;i++){const x=i/nu*wSpan;
+      for(let j=0;j<=nv;j++)d[i*R+j]=sdPoly(poly,x,j/nv*hSpan);}
+    return {nu,nv,w:wSpan,h:hSpan,R,d};
+  };
+  const look=(T,x,y,grow)=>{
+    let fu=x/T.w*T.nu, fv=y/T.h*T.nv;
+    /* The table only covers the drawing's own extent, and sampling past it used to clamp and
+       hand back the value AT the edge — so outside the body the field went flat at 0 and
+       stayed there however far out you went. Nothing inside the body ever noticed, because
+       only the sign matters there. A RAISE lives entirely outside the skin, and a field that
+       is 0 everywhere outside cannot say where a boss ends: the isosurface fell on the last
+       negative grid node instead, which is why a badge came out ceil(depth/cell) cells tall
+       — 2.86mm for a 2mm ask on a 2.857mm grid, and 8.57mm for a 6mm one.
+       The polygon is inside the domain, so for a point outside it the distance is the walk
+       back to the domain plus whatever the edge reported. Exact when the nearest bit of
+       outline is on the edge, a slight under-estimate otherwise, and either way it grows at
+       one millimetre per millimetre instead of not at all. */
+    let outside=0;
+    /* Growing outside the domain is OPT-IN, and only the body silhouette asks for it.
+       A FEATURE footprint must not: its outline is drawn on one view, and a distance that
+       keeps growing past the edge of that view is still a distance the pocket can reach
+       around a corner with. A sideR pocket started denting the nose the moment this applied
+       to footprints too. Face-local means the footprint stops at its own drawing. */
+    if(grow&&(fu<0||fu>T.nu||fv<0||fv>T.nv)){  // rare: only the padding ring and raised bosses
+      const cu=fu<0?0:(fu>T.nu?T.nu:fu), cv=fv<0?0:(fv>T.nv?T.nv:fv);
+      const du=(fu-cu)*T.w/T.nu, dv=(fv-cv)*T.h/T.nv;
+      /* Math.hypot is a lot slower than it looks — it guards against overflow the sqrt does
+         not — and this sits in the innermost sampling loop. These are millimetres on a model
+         a few hundred millimetres across, so there is nothing to overflow. */
+      outside=du?(dv?Math.sqrt(du*du+dv*dv):(du<0?-du:du)):(dv<0?-dv:dv);
+      fu=cu; fv=cv;
+    }
+    /* CLAMP ALWAYS, not only when growing. Without `grow` the clamp above never ran, so a
+       sample from the padding ring kept a negative fu — and `fu|0` on a negative number gives
+       a negative index, `T.d[-3]` is undefined, and undefined arithmetic is NaN. That NaN
+       flowed into the field array and out into vertex coordinates: 8,644 poisoned field nodes
+       and 1,488 NaN coordinates in the finished mesh. It only showed on RAISES because a
+       raise enlarges PAD to make room for the boss, pushing the grid further outside the
+       tables than a plain body ever goes.
+       Clamping here is right for both callers: with grow, `outside` has already recorded how
+       far out the point was, and without it the clamped edge value is exactly the old
+       behaviour a footprint expects. */
+    if(fu<0)fu=0; else if(fu>T.nu)fu=T.nu;
+    if(fv<0)fv=0; else if(fv>T.nv)fv=T.nv;
+    const i=fu>=T.nu?T.nu-1:fu|0, j=fv>=T.nv?T.nv-1:fv|0;
+    const tu=fu-i, tv=fv-j, R=T.R, o=i*R+j;
+    const a=T.d[o], b=T.d[o+R], c=T.d[o+1], e=T.d[o+R+1];
+    const top=a+(b-a)*tu, bot=c+(e-c)*tu;
+    return (top+(bot-top)*tv)+outside;
+  };
+  let Tside,TsideR,Ttop,Tfront;                 // filled once the grid size is known
 
-// =====================================================================================
-// NO FINS. The surface must be one you can actually wind.
-//
-// A dual contour puts ONE vertex in a cell, so wherever a shell pinches — a wall thin
-// enough that the outer skin and the inner wall cross the same cell, or a cavity thin
-// enough that the inner wall crosses it twice — both sheets get welded onto that vertex.
-// They face opposite ways, so the edge they share is traversed the same direction by both.
-// That is a zero-thickness fold, and it is not a winding mistake: NO winding of such a mesh
-// is consistent. profile_7 carried 61 of them, with the two faces back to back at a median
-// normal dot of -0.84.
-//
-// Checking boundary and non-manifold edge counts does NOT catch this — every edge still has
-// exactly two faces, so the mesh looks watertight. The test has to ask whether a consistent
-// winding EXISTS, which is a parity question: union-find over faces, where each shared edge
-// says its two faces agree or disagree. A contradiction is an odd cycle and proves the
-// surface is non-orientable.
-// =====================================================================================
-{
-  const orientable = g => {
-    const I = g.indices, nT = I.length / 3;
-    const par = new Int32Array(nT).fill(-1), rel = new Uint8Array(nT);
-    const find = x => { let p = 0; while (par[x] >= 0) { p ^= rel[x]; x = par[x]; } return [x, p]; };
-    const uni = (a, b, w) => {
-      const [ra, pa] = find(a), [rb, pb] = find(b);
-      if (ra === rb) return (pa ^ pb) === w;
-      par[ra] = rb; rel[ra] = pa ^ pb ^ w; return true;
+  /* EXTRA VIEWS FROM ANY ANGLE — the same carving rule, freed from the three axes.
+     The engine already carves the intersection of what three orthographic outlines allow:
+     material only where a point lands inside side AND top AND front. Nothing about that rule
+     needs the views to be axis-aligned. A view is just a direction to look from and an
+     outline of what the object covers from there, and the carve is the same max().
+     This matters because it is the bridge to building from photographs. The current
+     image-to-3D pipelines work by generating several consistent ORTHOGRAPHIC views of an
+     object and reconstructing from those — which is exactly this input. Three axis views is
+     a person tracing; N arbitrary views is a camera, or a model that imagined them.
+     Each entry: { dir:[x,y,z] (which way the camera looks), up:[x,y,z] (optional),
+                   poly:[[u,v],...] in millimetres about the object's centre }
+     Left empty, nothing changes: existing models take exactly the path they always did. */
+  const EXTRA=[];
+  for(const v of (p.extraViews||[])){
+    if(!v||!v.poly||v.poly.length<3)continue;
+    let d=v.dir||[0,1,0];
+    const dl=Math.hypot(d[0],d[1],d[2]); if(dl<1e-9)continue;
+    d=[d[0]/dl,d[1]/dl,d[2]/dl];
+    /* Build the view's own two image axes. `up` is whatever the caller gave, made
+       perpendicular to the look direction; if they gave nothing, or something parallel to it,
+       pick any perpendicular — for a silhouette the roll only has to be consistent with the
+       polygon that was traced in it. */
+    let up=v.up||(Math.abs(d[1])>0.9?[0,0,1]:[0,1,0]);
+    let rx=up[1]*d[2]-up[2]*d[1], ry=up[2]*d[0]-up[0]*d[2], rz=up[0]*d[1]-up[1]*d[0];
+    let rl=Math.hypot(rx,ry,rz);
+    if(rl<1e-6){ up=(Math.abs(d[0])>0.9?[0,1,0]:[1,0,0]);
+      rx=up[1]*d[2]-up[2]*d[1]; ry=up[2]*d[0]-up[0]*d[2]; rz=up[0]*d[1]-up[1]*d[0];
+      rl=Math.hypot(rx,ry,rz); }
+    const R=[rx/rl,ry/rl,rz/rl];
+    const U=[d[1]*R[2]-d[2]*R[1], d[2]*R[0]-d[0]*R[2], d[0]*R[1]-d[1]*R[0]];
+    /* A camera position turns the view from orthographic into PERSPECTIVE, which is what a
+       real photograph is. Without `from`, the outline is a slab of parallel lines through
+       the shape; with it, the outline is a CONE from the lens through the silhouette, and a
+       point is inside only if it falls in that cone.
+       `poly` is then in normalised image coordinates — (pixel - centre) / focal length, the
+       standard output of a calibrated camera — rather than millimetres. */
+    const from=v.from||null;
+    /* PRECOMPUTE THE OUTLINE INTO A TABLE, exactly as the three axis views already are.
+       Without this every grid sample runs sdPoly over every view's polygon — 48 vertices,
+       times the number of views, times a few hundred thousand samples. Measured before:
+       1.7s at 0 extra views, 21s at 60. Sampling the outline once into a small grid and
+       interpolating makes an extra view nearly as cheap as an axis view, which is what makes
+       reconstruction from a realistic number of photographs practical at all.
+       The table is built over the outline's own bounding box, padded, because an extra view's
+       coordinates are centred on the object (or normalised image units for a camera) rather
+       than running 0..L like the axis tables. Offsetting the polygon to sit in the positive
+       quadrant lets mkTable and look be reused unchanged rather than reimplemented. */
+    let u0=Infinity,u1=-Infinity,v0=Infinity,v1=-Infinity;
+    for(const q of v.poly){ if(q[0]<u0)u0=q[0]; if(q[0]>u1)u1=q[0];
+                            if(q[1]<v0)v0=q[1]; if(q[1]>v1)v1=q[1]; }
+    const padU=Math.max(1e-6,(u1-u0)*0.25), padV=Math.max(1e-6,(v1-v0)*0.25);
+    u0-=padU; u1+=padU; v0-=padV; v1+=padV;
+    const shifted=v.poly.map(q=>[q[0]-u0,q[1]-v0]);
+    const N=Math.max(24,Math.min(96,Math.round((p.hullFast?32:64))));
+    const T=mkTable(shifted,u1-u0,v1-v0,N,N);
+    EXTRA.push({R,U,D:d,T,u0,v0,
+                C: from?[from[0],from[1],from[2]]:null});
+  }
+  /* Distance to the silhouette of view `v` from a point, measured in the view's own image
+     plane. Negative inside, so it drops straight into the same max() as the three axis
+     views. Coordinates are about the object's centre, which is what a traced outline from a
+     camera naturally is — nothing here depends on where the grid happens to start. */
+  const cXv=L/2, cYv=W/2, cZv=H/2;
+  const extraAt=(x,y,z)=>{
+    if(!EXTRA.length)return -Infinity;            // no extra views: never constrains anything
+    const px2=x-cXv, py2=y-cYv, pz2=z-cZv;
+    let worst=-Infinity;
+    for(let i=0;i<EXTRA.length;i++){
+      const e=EXTRA[i];
+      let d2;
+      if(e.C){
+        const rx2=px2-e.C[0], ry2=py2-e.C[1], rz2=pz2-e.C[2];
+        const t=rx2*e.D[0]+ry2*e.D[1]+rz2*e.D[2];        // how far along the lens axis
+        /* Behind the lens is not "just outside" — it is not in this view's cone at all, and
+           it must never be talked into being material by another view. */
+        if(t<=1e-6){ worst=BIG; break; }
+        const u=(rx2*e.R[0]+ry2*e.R[1]+rz2*e.R[2])/t;
+        const vv=(rx2*e.U[0]+ry2*e.U[1]+rz2*e.U[2])/t;
+        /* sdPoly answers in IMAGE units, and the field is in millimetres. At depth t an image
+           unit spans t millimetres, so multiplying back is what makes a perspective view's
+           distance comparable with the axis views' in the same max(). Skip it and a far-away
+           camera contributes a field an order of magnitude too shallow, and the isosurface
+           lands in the wrong place instead of merely being mis-scaled. */
+        d2=look(e.T,u-e.u0,vv-e.v0,1)*t;
+      } else {
+        const u=px2*e.R[0]+py2*e.R[1]+pz2*e.R[2];
+        const vv=px2*e.U[0]+py2*e.U[1]+pz2*e.U[2];
+        d2=look(e.T,u-e.u0,vv-e.v0,1);
+      }
+      if(d2>worst)worst=d2;
+    }
+    return worst;
+  };
+  const sdFeat=(f,x,y,z)=> f.kind==="xz"?look(f.T,x,z) : f.kind==="xy"?look(f.T,x,y) : look(f.T,y,z);
+
+  // inside all three outlines = the largest of the three distances, then features applied
+  // The frame is hollowed AFTER the surface exists (see the end of this function), not by
+  // carving the field — that would need a grid fine enough to resolve a 1.8mm wall.
+  const wall=Math.max(0.2,p.wallThickness??1.8);
+  /* PER-FACE WALL THICKNESS — roof, sides and floor can differ.
+     The studio has offered "Different thickness per face" for a long time and this builder
+     ignored it: it read wallThickness and nothing else, so asking for a 16mm floor with 6mm
+     walls built a 6mm floor, silently. The smooth builder honoured it all along
+     (inner = outer - normal * wallAt(normal, spec)), so the same model came out two different
+     ways depending on which mode you were in — and this is the DEFAULT mode.
+     It matters because it is the load-bearing control: a thick floor to bolt through with thin
+     walls elsewhere. Nothing warned, and the wall safety gate could not catch it either,
+     because a uniform 6mm wall is not thin — it is exactly what was asked on two of the three
+     faces, and the floor is simply not what the person set.
+     WSPEC is only consulted when the three values actually differ, so a plain model takes
+     exactly the path it always did. */
+  const WSPEC=wallSpec(p);
+  const perFace = Math.abs(WSPEC.top-WSPEC.side)>1e-6 || Math.abs(WSPEC.bot-WSPEC.side)>1e-6
+               || Math.abs(WSPEC.top-WSPEC.bot)>1e-6;
+  /* The adequacy gate and the cavity fill both need ONE number to reason about "can this grid
+     carry the wall". Use the thinnest face: if the grid can hold that, it can hold the others. */
+  const wallMin = perFace ? Math.max(0.2, Math.min(WSPEC.top,WSPEC.side,WSPEC.bot)) : wall;
+  const hollow=p.hullHollow!==false;              // a toy frame is a shell, not a lump
+  // Edge crispness blends the whole SHAPE between two fields, not a smoothing pass:
+  //   crisp 0 -> the SMOOTH-mode field (a swept elliptical arch through the same envelopes),
+  //   crisp 1 -> the exact traced hull (side ∩ top ∩ front),
+  // linearly in between. Traced detail (features) belongs to the exact side, so it fades in
+  // with crisp — none at the smooth end. Semi-axes are floored to a grid cell so a thin
+  // cross-section can never pinch below the resolution and tear the shell apart.
+  const cY=W/2; let loftBox=null;
+  /* What the side view says at this point. With one outline that is a plain lookup and the
+     body comes out symmetric. With two, the answer sweeps across the width: the left drawing
+     governs the left flank, the right drawing the right, and in between they cross over
+     smoothly. It has to be a sweep rather than a switch — a hard changeover at the centreline
+     would leave a step running the length of the body. */
+  // smoothstep here takes ONE argument. Called as smoothstep(0,1,t) it silently reads the
+  // first — a constant 0 — so the blend weight never moved off zero and the second drawing
+  // was collected, tabled, and then ignored. Nothing threw; the model just came out
+  // symmetric, which is exactly what it looks like when the feature isn't wired at all.
+  /* THE BLEND RUNS ACROSS y = 0..W, NOT -W/2..+W/2.
+     This used to read (y+W/2)/W, which is the right expression for a y centred on zero —
+     but the field's y is built from py(j)=(j-PAD)*hy and runs 0 at one flank to W at the
+     other; the centring happens later, on the finished mesh. So the weight only ever
+     spanned 0.5..1: the RIGHT drawing governed its own half AND the whole centreline,
+     while the LEFT flank was a 50/50 average of the two drawings and never once matched
+     the outline that was traced for it. Measured on a full-height left drawing against a
+     half-height right one: the left flank came out 30.0mm where its own drawing says
+     40.0mm. With y/W it reads 40.1 / 20.3 with a smooth crossover, and a model with no
+     second drawing is bit-for-bit unchanged (t is never consulted). */
+  const sweep=(TA,TB2)=>TB2
+    ? (x,y,z)=>{ const t=smoothstep(clamp(y/(W||1),0,1));
+                 const a2=look(TA,x,z,1), b2=look(TB2,x,z,1); return a2+(b2-a2)*t; }
+    : (x,y,z)=>look(TA,x,z,1);
+  let sideAt=null, envSideAt=null;   // bound once the tables exist
+  /* The body as drawn, with no features on it. Hoisted out of F so a carve can ask where the
+     skin is along its own cut axis — F itself cannot be used for that, because by the time a
+     feature is being applied F would answer with the features already in it. */
+  const bodyAt=(x,y,z)=>{
+    const Es=envSideAt(x,y,z), Et=look(Etop,x,y), Ef=look(Efront,y,z);
+    let hull=Math.max(Es,Et,Ef);                       // the body, notches filled in
+    if(p.notchFaceOnly){   // opt-in: a notch stops short of the far side (leaves a block behind it)
+      // a notch cuts inward from its OWN face only, never through the frame
+      const Ts=sideAt(x,y,z);    if(Ts>0 && Es<=0 && -Et<notch) hull=Math.max(hull,Ts);
+      const Tt=look(Ttop,x,y,1);   if(Tt>0 && Et<=0 && -Es<notch) hull=Math.max(hull,Tt);
+      const Tf=look(Tfront,y,z,1); if(Tf>0 && Ef<=0 && Math.min(-Es,-Et)<notch) hull=Math.max(hull,Tf);
+    } else {
+      hull=Math.max(hull, sideAt(x,y,z), look(Ttop,x,y,1), look(Tfront,y,z,1), extraAt(x,y,z));
+    }
+    let d;
+    if(crisp>=0.999 || !loftBox){ d=hull; }
+    else {
+      const flr=Math.max(hx,hy,hz);
+      const b=loftBox(x), zBot=b[0], span=Math.max(flr,b[1]-b[0]), hw=Math.max(flr,b[2]);
+      const ny=(y-cY)/hw, nz=(z-zBot)/span;
+      /* The smooth field rounds the CROSS-SECTION and nothing else. It used to carry its own
+         floor as well, taken from the sampled bottom profile — and that profile smooths over
+         the sharp step between a wheel (down at the ground) and the underbody (up at 54mm), so
+         it disagreed with the traced outline about where the body ends. Averaging two fields
+         that disagree crosses zero in mid-air and lays a flat plank through the car. Now the
+         side outline alone says where the body starts and stops, for BOTH fields. */
+      const soft = (Math.hypot(ny,Math.max(0,nz))-1)*(hw+span)*0.5;
+      /* Both fields must agree about where the body ends, or the average between them crosses
+         zero in mid-air and manufactures a flat plane through the middle — the slab that showed
+         up from underneath. Clamping the smooth field to the same traced side outline the hull
+         uses keeps the wheel arches in BOTH, so the blend can only round the cross-section. */
+      const sSide=sideAt(x,y,z);
+      d = (1-crisp)*Math.max(soft,sSide) + crisp*hull;
+    }
+    /* CUT THROUGH MEANS CUT THROUGH, AT EVERY CRISPNESS.
+       This used to be scaled by crisp, so a window marked "cut clean through" was only
+       properly cut when the slider sat near the top. Measured on a plain box: at Smooth the
+       ray straight through the middle of the window still met 77.9mm of material — the full
+       thickness, as though the window had never been drawn — and it faded in gradually as
+       the slider moved. Crispness is about how closely the SURFACE follows your lines. It
+       was never supposed to decide whether a hole is a hole. A dent is a matter of degree;
+       a hole is not.
+       Indents are still stamped on the built surface instead (embossHull), so they land on
+       the face they were drawn on rather than everywhere at once. */
+    return d;
+  };
+  const F=(x,y,z,noCut)=>{
+    let d=bodyAt(x,y,z);
+    /* CARVE AND RAISE ARE FIELD OPERATIONS, NOT SURFACE PUSHES.
+       A carve is the feature footprint swept straight in along its view axis to a flat floor
+       `depth` mm below the surface — a prism subtracted from the solid. Because it acts on
+       the distance field before the surface is meshed, the floor is genuinely flat and lands
+       at exactly the asked-for depth (proven: a 6mm pocket floors at surface-6.0, a 20mm one
+       at surface-20.0, and the surrounding face never moves). There is no gradient limiter
+       and no travel cap because a field subtraction cannot fold the surface over itself the
+       way pushing a vertex along its normal can — the whole class of spikes and self-collision
+       simply cannot arise. Depth<0 removes; depth>0 adds the same prism as a raised boss.
+       The old path stamped these onto the finished mesh in embossHull, which is where the
+       clamps, the folding and the 2.77mm-instead-of-6mm ceilings all came from. */
+  /* WHERE THE BODY ENDS ALONG AN AXIS — the surface a view actually sees.
+     "Nearest surface along +x" is not that. A body with open wheel arches is several separate
+     runs of material along x, so a point inside an arch pillar has a surface a couple of
+     millimetres away that no front view can see past. This walks the whole line once, from
+     outside inward, and reports the FIRST material it meets — which is the outermost surface,
+     by definition. Cached per line and per axis, because the answer depends only on the other
+     two coordinates: on profile_7 that is a few thousand scans instead of one per sample. */
+  const outerCache=new Map();
+  const outerAt=(x,y,z,axis,nearMax)=>{
+    /* Cache on the grid line, and SCAN that same line. The first cut of this keyed on rounded
+       coordinates but then scanned using the caller's raw x,y,z — so the answer computed for
+       one line was handed back for every neighbour that rounded to the same key, and a nose
+       pocket appeared to reach x=97 on a 200mm body. Snap the line first, then scan it: the
+       key and the geometry it describes are now the same thing, which is the only way a cache
+       can be trusted. */
+    /* Written out one axis at a time. The first attempt packed the mapping into nested
+       conditionals and got it wrong — it keyed on one pair of coordinates and scanned with
+       another, so a line's answer was handed to its neighbours and a nose pocket appeared to
+       reach x=22 on a 200mm body. Three plain branches cannot make that mistake. */
+    const cell=Math.max(hx,hy,hz);
+    let a,b2,span;                                  // the two fixed coords, and the scan length
+    if(axis==="x"){ a=y; b2=z; span=L; }
+    else if(axis==="y"){ a=x; b2=z; span=W; }
+    else { a=x; b2=y; span=H; }
+    /* Cache on the grid line, but SCAN THE REAL ONE. Snapping the scan as well made the
+       answer a neighbour's face, which on a 2mm grid is up to 1mm out — and that was exactly
+       the over-cut seen: a 3mm pocket taking 4mm off a flat roof while the saddle a few
+       millimetres lower came out at a correct 3.00mm. The field samples are cheap enough that
+       scanning the true line and keying the cache loosely is the right trade; a caller half a
+       cell away gets its own scan rather than a plausible-looking wrong one. */
+    const ia=Math.round(a/cell*64), ib=Math.round(b2/cell*64);  // effectively exact keying
+    const key=axis+(nearMax?"+":"-")+ia+","+ib;
+    const hit=outerCache.get(key);
+    if(hit!==undefined)return hit;
+    const sa=a, sb=b2;                              // the caller's own line, not a snapped one
+    const step=cell*0.5;
+    /* Start OUTSIDE the body, not on it. The scan used to begin exactly at the span — but the
+       span is the drawing's own height, and a flat roof sits precisely there, so the first
+       sample was already inside material and the crossing was reported one step late. That
+       put the face a step deeper and a 3mm pocket cut 4mm on a full-height roof while cutting a
+       correct 3mm on a saddle a few millimetres lower. Begin a margin clear of the body and
+       refine the crossing linearly, so the answer is the surface rather than the first grid
+       step past it. */
+    const margin=cell*2;
+    let found=null, prev=null, prevM=null;
+    for(let t=-margin;t<=span+margin;t+=step){
+      const m=nearMax?(span-t):t;                   // walk inward from the outside
+      let v;
+      if(axis==="x") v=bodyAt(m,sa,sb);
+      else if(axis==="y") v=bodyAt(sa,m,sb);
+      else v=bodyAt(sa,sb,m);
+      /* A surface is where the field is ZERO, and on a flat roof built to the drawing's own
+         height the samples land on it exactly. `v<0` steps straight past that — measured, a
+         roof truly at 59.98 was reported at 59.00, half a step low, and a 3mm pocket then cut
+         3.99mm. Testing `v<=0` alone overshoots the other way, because the refinement divides
+         by (prev-v) and a zero sample makes that step meaningless. So: stop at zero, and only
+         interpolate when there is a genuine sign change to interpolate across. */
+      /* The field answers NaN outside its own tables, and every comparison with NaN is false —
+         so a scan that stepped off the domain found nothing, silently, and reported "no body
+         on this line". That killed the LEFT flank specifically: the leading margin puts the
+         first samples at negative y, where the field has nothing to say, and a side-view
+         pocket removed 0.000cm3 while the right flank worked perfectly. An unanswerable
+         sample means "not there yet", not "finished". */
+      if(!(v===v)){ prev=null; prevM=null; continue; }
+      if(v===0){ found=m; break; }
+      if(v<0){
+        if(prev!==null&&prev>0){                    // a real crossing: find where it hit zero
+          const f2=prev/(prev-v);
+          found=prevM+(m-prevM)*(f2>0&&f2<1?f2:0);
+        } else found=m;
+        break;
+      }
+      prev=v; prevM=m;
+    }
+    outerCache.set(key,found);
+    return found;
+  };
+    /* The skin every feature on this pass measures itself against. Taken once, before any
+       feature has touched d, so a pocket and a boss over the same spot both refer to the body
+       as drawn rather than to whatever the feature before them happened to leave behind. */
+    const d0=d;
+    for(let q=0;q<feats.length;q++){
+      const f=feats[q];
+      if(f.through)continue;                    // through-cuts handled below (full penetration)
+      if(!f.depth)continue;
+      // cheap rejection first: is this point even over the footprint's patch of the face?
+      const fu=f.kind==="xz"?x:f.kind==="xy"?x:y, fv=f.kind==="xz"?z:f.kind==="xy"?y:z;
+      if(fu<f.u0||fu>f.u1||fv<f.v0||fv>f.v1)continue;
+      const foot=sdFeat(f,x,y,z);               // 2D distance to the footprint on this face (<0 inside)
+      if(foot>=f.soft)continue;                 // far outside the footprint: nothing to do
+      /* HOW DEEP ARE WE — measured from the BODY, not from the box around it.
+         This read `faceMax - coord`: the distance in from the face of the sampling box. But
+         that box is the drawing's bounding box and the body sits INSIDE it — a car's nose
+         does not touch the front face and its roof does not touch the top. So every pocket
+         came out shallower than asked by however much clearance there was, and any pocket
+         shallower than that clearance never appeared at all. Measured on a plain block whose
+         roof sits 3mm below the box: a 2mm pocket cut 0.00mm, a 4mm cut 1.01mm, a 6mm cut
+         3.00mm — every one exactly 3mm short. Five of the suite's red tests were reporting
+         precisely this ("the detail must still press in (moved 0.00mm)"). They were right,
+         and they were not encoding old surface-stamp behaviour.
+         The body field already knows where the surface is: zero on it, negative inside. So
+         depth below the surface is just -d0, and it is correct on a curved or inset face
+         without needing to know anything about the box. d0 is the field BEFORE any feature
+         on this pass, so the depth is always measured from the original skin and two
+         features over the same spot cannot compound each other's reference. */
+      /* DEPTH FROM THE ENTRY FACE, NOT FROM WHICHEVER SURFACE HAPPENS TO BE NEAREST.
+         `-d0` is the distance to the nearest skin in any direction, which is right for how
+         DEEP we are but says nothing about WHICH face we came in through. Used alone the
+         pocket forms at every surface inside the footprint at once: a right-flank feature on
+         a 30mm-wide block gouged 60mm — both flanks, straight through. Face-local means the
+         cut enters from one face only.
+         So walk out along the cut axis from this point to where the body ends, and take the
+         depth from THAT crossing. march() steps until the field turns positive and refines
+         the last step linearly, so it is the true entry point on a curved nose or a domed
+         roof, not a bounding-box guess. Capped just past D because a pocket deeper than its
+         own depth is of no interest, which keeps this to a handful of samples. */
+      const D=Math.abs(f.depth);
+      /* Only points that could possibly be in the pocket pay for the march. A point outside
+         the footprint, or already deeper than the pocket can reach, is not going to be carved
+         whatever the march says — and the march costs up to 20 more evaluations of the whole
+         body field, per feature, per grid point. Measured without this gate: 2.9s -> 23.6s on
+         profile_7, which has 153 features. */
+      /* A skip must never be a CLIFF. Bailing out here leaves the field at its raw body value
+         while the neighbouring point carries the pocket's, and the mesher finds a surface by
+         interpolating along the grid edge between the two — so a jump lands the pocket floor
+         wherever the cliff happened to fall rather than at the depth asked for. Measured: the
+         field ran smoothly to -0.50 and then jumped to -4.75 one quarter-millimetre later,
+         and a 4mm pocket built 3.08mm.
+         These two skips are safe because they are exactly the cases where the feature has
+         NOTHING to contribute: outside the footprint the pocket's own distance is positive
+         and max() would keep the body value anyway, and past its reach the pocket is behind
+         solid stock. The bound below is what has to be continuous, so it is written to reach
+         the body value smoothly rather than to stop short of it. */
+      if(foot>0) continue;                        // outside the footprint: max() would keep d anyway
+      /* d0 is a true signed distance, so a point further inside than the pocket is deep can
+         never be reached by it — whatever direction the entry face lies in. Checking that
+         BEFORE marching turns the deep interior, which is most of a solid model's grid, from
+         twenty body-field evaluations into one comparison. The margin keeps the hand-over
+         continuous: bail only once the pocket's own term could not influence a crossing. */
+      if(f.depth<0 && d0 < -(D+Math.max(hx,hy,hz)*2)) continue;
+      const march=()=>{
+        /* Step size is the pocket's own depth, not the grid's. A half-cell step is far too
+           coarse for a shallow pocket — on a 2.7mm grid a 2mm ask floored at 1.95mm and at
+           res 80 it fell to 1.73mm, because the bracket the crossing was found in was wider
+           than the whole feature. Sixteen steps across D keeps the error proportional to what
+           was asked for instead of to the mesh, and the linear refinement on the last step
+           then lands it on the millimetre. */
+        /* Reach far enough that the field is still CONTINUOUS where this stops mattering.
+           The limit used to be D plus a few steps, so the march found the face down to a
+           depth of about D and then returned null one step later — and the null was skipped,
+           leaving the raw body value beside a pocket value. The mesher interpolates along the
+           grid edge between neighbouring samples, so that jump put the floor wherever the
+           cliff fell: measured, depthIn ran cleanly to 4.500 and then vanished, and a 4mm
+           pocket built 3.08mm. Marching a clear cell beyond the deepest point that can still
+           influence a crossing means the hand-over to the body value happens where the two
+           already agree. */
+        /* Start the walk where the surface can actually be, instead of from zero.
+           d0 is a true signed distance, so the skin is at LEAST -d0 away in any direction and
+           therefore at least that far along this axis too. Stepping from there skips the
+           whole solid interior, which is where nearly all the samples were being spent: on
+           profile_7 (153 features) the march cost 3.4s -> 20.6s, a six-fold regression on a
+           model that has to build on a phone. */
+        /* BISECT TO THE FACE — AND CHECK IT IS THE FACE YOU CAN SEE FROM THAT VIEW.
+           Bisection is right for the depth: d0 is a true signed distance, so the skin is at
+           least -d0 away along this axis, which brackets the crossing, and 12 halvings pin it
+           to a thousandth of a millimetre at fixed cost. Crawling a sixteenth of a cell at a
+           time cost 68 MILLION body-field evaluations on profile_7 and an 18-second feature
+           pass; this costs 14 and is exact.
+           But "the nearest surface along +x" is NOT the same as "the face a front view sees".
+           A body with open wheel arches has interior surfaces everywhere: stand inside an
+           arch pillar at mid-body and the nearest surface along +x is the pillar's own far
+           wall, a couple of millimetres away. The old march accepted that as the entry face,
+           so a front-view pocket carved the arch pillars — measured, a nose feature applied
+           at every x from 0 to 200 on a 200mm body, and the arch walls shifted inward by the
+           pocket depth through the whole lower body.
+           The face a view sees is the OUTERMOST surface along that axis. So after finding a
+           crossing, check that we are actually outside for good: step a further margin out
+           and require it to still be outside. An interior wall fails that immediately,
+           because past it is more body. This costs two extra samples, not another search. */
+        const lim=D+Math.max(hx,hy,hz)*2;
+        const dx=f.axis==="x"?(f.nearMax?1:-1):0;
+        const dy=f.axis==="y"?(f.nearMax?1:-1):0;
+        const dz=f.axis==="z"?(f.nearMax?1:-1):0;
+        let lo=Math.max(0, Math.min(-d0*0.999, lim)), hi=lim;
+        if(bodyAt(x+dx*lo, y+dy*lo, z+dz*lo)>=0) lo=0;    // bound was not conservative: start over
+        if(bodyAt(x+dx*hi, y+dy*hi, z+dz*hi)<0) return null;   // still solid at the limit
+        for(let it=0;it<12;it++){
+          const mid=(lo+hi)/2;
+          if(bodyAt(x+dx*mid, y+dy*mid, z+dz*mid)<0) lo=mid; else hi=mid;
+        }
+        const at=(lo+hi)/2;
+        /* Is this the face the view sees, or an interior wall? No LOCAL probe can tell: on
+           profile_7 at wheel height the body is three separate runs along x — wheels at
+           1..32, 85..106 and 174..200 with open arches between — so the gaps are ~50mm and
+           anything short of a full scan clears them. What settles it is the outer bound: the
+           view can only see material within D of the body's own outermost surface along this
+           axis, and outerAt() has that for this (u,v) line already, measured once per line
+           rather than per sample. A point whose crossing is not the outermost one is behind
+           stock as far as this view is concerned. */
+        /* DEPTH IS MEASURED FROM THE FACE THE VIEW SEES — and that is the whole measurement,
+           not a sanity check on a nearer one. This first compared depth-from-the-outer-face
+           against the locally-found crossing plus a cell; at x=22 on a 200mm body both are
+           about 178mm, so the test passed and the pocket applied anyway. The local crossing
+           is not wanted at all: a front view sees the nose, so the depth of a point IS how
+           far it lies behind the nose, whatever interior walls happen to sit in between. */
+        const out=outerAt(x,y,z,f.axis,f.nearMax);
+        if(out===null) return null;                 // no body on this line
+        const here=f.axis==="x"?x:f.axis==="y"?y:z;
+        const depth=f.nearMax?(out-here):(here-out);
+        /* A hair in front of the face is still ON the face. `depth<0` rejected the surface
+           itself: outerAt refines its crossing by interpolation, so on a flank that sits
+           exactly at the field's own y=0 it returns something like 1e-16 rather than a clean
+           zero, and every sample on that surface came out at -1e-16 and was thrown away. That
+           is what made a LEFT-side pocket remove 0.000cm3 while the right side worked
+           perfectly — 1694 of its 2350 samples were discarded at this line, and the few that
+           survived were too sparse to change the mesh. The right flank never hit it because
+           its face is at y=W, where the interpolation lands cleanly inside the domain.
+           Half a cell of tolerance: anything closer than that to the face is the face. */
+        const skin=Math.max(hx,hy,hz)*0.5;
+        if(depth<-skin || depth>lim) return null;   // in front of the face, or behind stock
+        if(depth<0) return 0;                       // on the face: zero depth, not a rejection
+        return depth;
+        return null;
+      };
+      /* A boss lives OUTSIDE the skin, where marching further outward never crosses back into
+         the body — so the inward march is not the right question for it. `look` now measures
+         properly beyond the body, which makes d0 a true signed distance on both sides of the
+         surface, and for a raise that is exactly the depth wanted: 0 on the skin, negative
+         outside. Reserve the march for pockets, where "which face did we enter through" is
+         the thing that actually matters. */
+      /* A raise reads its depth straight off the body field — but that field answers NaN
+         outside its own lookup tables, and the padding ring around the grid is exactly there.
+         NaN then flows through the boss SDF into the field array and out into vertex
+         coordinates: measured, 8,644 poisoned field nodes and 1,488 NaN coordinates in the
+         finished mesh, on raises only. A point the body cannot describe has no depth, so it
+         gets no feature rather than a NaN one. */
+      if(!(d0===d0)) continue;
+      let depthIn = f.depth<0 ? march() : -d0;
+      if(!(depthIn===depthIn)) continue;
+      if(depthIn===null){
+        /* No entry face within reach. For a POCKET that means this point sits behind solid
+           stock and cannot be carved, so skip it. For a RAISE it means the opposite: a boss
+           stands outside the skin, so marching further outward was never going to cross back
+           into the body. There the plain distance to the surface is exactly what is wanted,
+           and skipping the point deleted the boss entirely. */
+        if(f.depth<0)continue;
+        /* A boss stands outside the skin, so marching inward never crosses back into the body
+           and the loop above legitimately gives up. Walk the other way instead — from here
+           back along the cut axis until the body starts — and negate it, so depthIn keeps its
+           meaning: 0 at the surface, negative outside. Using -d0 here does not work, because
+           that is the distance to the NEAREST skin in any direction, and just off the nose of
+           a body the nearest skin is the flank; the boss then never found its own face and
+           snapped to whole grid cells (2.885mm for a 2mm ask on a 2.857mm grid). */
+        const st=Math.min(Math.max(hx,hy,hz),D)/16, lim=D+st*4;
+        const dx=f.axis==="x"?(f.nearMax?-1:1):0;
+        const dy=f.axis==="y"?(f.nearMax?-1:1):0;
+        const dz=f.axis==="z"?(f.nearMax?-1:1):0;
+        let prev=d0, hit=null;
+        for(let m=st;m<=lim;m+=st){
+          const v=bodyAt(x+dx*m, y+dy*m, z+dz*m);
+          if(v<=0){ const t=prev/(prev-v); hit=m-st+(t>0&&t<1?t*st:0); break; }
+          prev=v;
+        }
+        if(hit===null)continue;          // further out than this boss is tall
+        depthIn = -hit;
+      }
+      if(f.depth<0){
+        /* REMOVE: the pocket is the footprint prism from the face to a flat floor at depth D.
+           The obvious SDF is max(footprint, depthIn-D), but that is only a true distance on
+           the faces, not near the concave rim where floor meets wall — and the dual-contour
+           QEF, fitting planes through the crossings, extrapolates that crease and lands the
+           floor vertex at ~2D instead of D (measured: a 2mm ask meshed at 4mm). Using the
+           exact distance to the pocket solid — negative distance to the rectangular box that
+           is (footprint ∩ depth-slab) — gives the mesher the right gradient at the corner, so
+           the floor lands at exactly D. Outside the box it is the positive Euclidean distance;
+           inside, the (negative) distance to the nearest face. */
+        const a=foot;                    // signed dist to footprint in the face plane (<0 inside)
+        let floorDepth=D;
+        // a mask on this face holds the carve out to its own floor, so protected stock stands
+        const hold=maskHold(x,y,z,d0);
+        if(hold<floorDepth)floorDepth=Math.max(0,hold);
+        const b=depthIn - floorDepth;    // signed dist to the (possibly mask-limited) floor
+        let pocket;
+        if(a<0 && b<0){                  // inside the pocket box: nearest face, negative
+          pocket=Math.max(a,b);
+        } else {                         // outside: true Euclidean distance to the box
+          const ea=Math.max(a,0), eb=Math.max(b,0);
+          pocket=Math.hypot(ea,eb);
+        }
+        d=Math.max(d, -pocket);
+      } else {
+        /* RAISE: a boss standing D proud of the surface — the footprint prism grown outward
+           from the face. In the field this is a UNION (min with a negative SDF): a point is
+           inside the boss when it is inside the footprint AND within D of the face on the
+           outside. depthIn is 0 at the surface and negative just outside it, so the outside
+           slab is depthIn in [-D, 0]. As a box SDF (<0 inside): the footprint distance for
+           the in-plane extent, and (-D - depthIn) and (depthIn) bounding the slab. */
+        const a=foot;                    // in-plane footprint distance (<0 inside)
+        /* A boss is a UNION with the body, so it must not be bounded on the inside.
+           This carried a third term, `hi = depthIn`, meaning "only outside the face". With
+           depth now measured from the skin that term is exactly -distance-to-skin, so it
+           drove the boss field back to zero AT the original surface as well as at the boss
+           top — a tent, touching zero at both ends instead of crossing once. A dual contour
+           cannot place a surface on a value that merely touches zero, so the boss stopped
+           being resolved and snapped to whole cells instead: on a 200mm body at res 70
+           (2.857mm cells) a 2mm badge came out 2.857mm and a 6mm badge 8.571mm, both exactly
+           ceil(D/cell) cells.
+           Dropping it leaves the honest box: inside the footprint, and within D of the skin.
+           Inside the body that is already material, so the union changes nothing there. */
+        /* `look` now measures properly outside the body, so d0 is a real distance on both
+           sides of the skin and the boss needs nothing else: it is the footprint, out to D
+           beyond the surface. An earlier cut of this added the axial distance past the box
+           face to compensate for the flat field — with the field fixed that double-counts,
+           and a 6mm badge grew at two millimetres per millimetre. */
+        const lo=(-depthIn) - D;         // = d0 - D, negative while still within D of the skin
+        let boss;
+        if(a<0 && lo<0){                 // inside the boss: distance to its nearest face
+          boss=Math.max(a, lo);
+        } else {                         // outside: Euclidean distance to the box
+          boss=Math.hypot(Math.max(a,0), Math.max(lo,0));
+        }
+        d=Math.min(d, boss);
+      }
+    }
+    for(let q=0;q<feats.length;q++){
+      const f=feats[q]; if(!f.through)continue;
+      d=Math.max(d, -sdFeat(f,x,y,z));
+    }
+    // level base: outside below the cut, so the solid finishes flat instead of rounding off
+    /* `noCut` returns the body WITHOUT that clip. The clip is an artificial plane, not a
+       surface anybody traced, and the hollow needs to know the difference: a wall band grown
+       against a real surface is the shell, a wall band grown against this plane is a FLOOR
+       across the underside that nobody asked for. Only the cavity term uses it — the outer
+       skin keeps the clipped field and so keeps its exact shape. */
+    if(noCut) return d;
+    return baseCut>-1e29 ? Math.max(d, baseCut-z) : d;
+  };
+  /* HOW FINE A GRID TO BUILD ON.
+     The resolution is asked for by the drawing (its station count, or an explicit hullRes)
+     and then capped. Quality scales BOTH: the request and the cap. Scaling only the cap would
+     do nothing for most models — profile_7 asks for 72 and is capped at 80, so raising the cap
+     alone leaves it exactly where it was.
+     Why this is worth having at all: cell size decides the smallest detail that can exist. A
+     feature narrower than about one and a half cells has no grid point inside it, so the
+     mesher extrapolates and hands back the wrong shape. Before this there was NO setting that
+     would build a 3mm badge on a 200mm car — the warning could only say "you cannot have
+     this". Now it can say which step would.
+     Cost is roughly cubic. Measured on profile_7 (200mm): res 72 = 9.3s and 44k triangles,
+     res 110 = 28.9s and 107k. "Fine" is deliberately a bounded step and not an open slider,
+     because the ceiling on a phone is memory, not patience. */
+  const QUAL={fast:{k:0.7,cap:56}, normal:{k:1.0,cap:80}, fine:{k:1.5,cap:120}};
+  const qq=QUAL[p.hullQuality]||QUAL.normal;      // absent means today's behaviour, exactly
+  const asked=Math.round((p.hullRes||Math.max(p.stations||48,40))*qq.k);
+  let res=Math.max(20,Math.min(qq.cap,asked));
+  /* A THIN WALL MUST NOT SILENTLY LOSE THE PLANK FIX.
+     Field hollow needs about one and a half cells across the wall, or its two surfaces land in
+     the same cell and cancel. Below that the build fell back to the vertex-push path — and
+     that path is what plants the plank. So the whole reason field hollow was written stopped
+     applying at exactly the wall thicknesses a toy car actually uses. Measured on this
+     project's reference car at 200mm: a 2mm wall took the fallback, a 4.2mm wall did not, and
+     nothing said so — the readout showed "2 mm wall" and a watertight solid either way.
+     Refine the grid to fit the wall instead of abandoning the method. Past the cap the fallback
+     still applies, which is honest: there the grid genuinely cannot carry the wall. */
+  if(!p.hullFast && p.hullHollow!==false && p.fieldHollow!==false){
+    const wmm=Math.max(0.2, Math.min(
+      p.wallThickness??1.8,
+      p.wallTop??(p.wallThickness??1.8), p.wallSide??(p.wallThickness??1.8),
+      p.wallBottom??(p.wallThickness??1.8)));
+    /* The three cell sizes are L/res and the rounded equivalents for width and height, so the
+       widest cell is not simply L/res — solve for it rather than predict it. */
+    const worstCell=r=>Math.max(L/r, W/Math.max(10,Math.round(r*W/L)), H/Math.max(10,Math.round(r*H/L)));
+    let want=res;
+    while(want<qq.cap && wmm < worstCell(want)*HOLLOW_WALL_CELLS) want++;
+    if(wmm >= worstCell(want)*HOLLOW_WALL_CELLS) res=want;   // only if it actually gets there
+  }
+  /* NO SECRET RESOLUTION CHANGES.
+     An earlier cut of this raised the grid when hollowing, so a wall too thin for the field
+     path could still get one. It backfired twice over: the solid build kept the original
+     resolution, so simply ticking "hollow" moved the outside by half a millimetre — the very
+     invariant this is all meant to protect — and where the wall was far too thin the grid
+     climbed to the cap, cost about seven times the build time, and then got rejected anyway
+     and fell through to the path it would have taken at the original resolution.
+     So the grid is whatever the drawing asks for, and fieldHollow below simply decides
+     whether that grid can hold the wall. */
+  /* THE GRID IS PADDED, AND THAT PADDING IS WHY THE MODEL COMES OUT THE SIZE YOU ASKED FOR.
+     The outermost ring of grid corners is forced to "outside" so the surface always closes
+     rather than running off the edge of the sampled box. That ring used to sit exactly ON
+     the model's own limits — corner i=0 is x=0, which is the nose of the car — so the nose
+     was overwritten as empty air and the surface retreated to the next corner along. The
+     same at every face, on all three axes. Measured: a 200mm car came out 193mm, short by
+     one cell at each end (2L/res = 7.1mm at res 56), and it showed in the app's own bbox
+     readout as "L 195" for a 200mm setting.
+     So sample one cell FURTHER OUT and force that ring instead. The cell size is unchanged,
+     so nothing gets coarser; the ring is now genuinely outside the model, and x=0 and x=L
+     are ordinary interior samples that the surface can land on exactly. */
+  const cnx=res, cny=Math.max(10,Math.round(res*W/L)), cnz=Math.max(10,Math.round(res*H/L));
+  const hx=L/cnx, hy=W/cny, hz=H/cnz;              // cell size: set by the model, not the padding
+  /* Enough ring outside the body to hold the tallest RAISED boss. A raise grows the surface
+     outward, so the isosurface leaves the body by up to its depth; with only one cell of
+     padding a 3mm boss on a grid whose cells are ~1.25mm was clipped to almost nothing. One
+     cell is plenty for carves (they go inward) and for the plain body, so pad only as far as
+     the biggest positive-depth feature actually needs. */
+  let maxRaise=0;
+  for(const f of feats) if(f.depth>0 && Math.abs(f.depth)>maxRaise) maxRaise=Math.abs(f.depth);
+  const PAD=Math.max(1, Math.ceil(maxRaise/Math.min(hx,hy,hz))+1);
+  const nx=cnx+2*PAD, ny=cny+2*PAD, nz=cnz+2*PAD;  // cells including the ring outside
+  const NX=nx+1,NY=ny+1,NZ=nz+1, idx=(i,j,k)=>(i*NY+j)*NZ+k;
+  const cell=Math.max(hx,hy,hz);
+  // now the grid is known, the three 2D distance tables can be built
+  Tside =mkTable(sideP ,L,H,nx*TB,nz*TB);
+  TsideR= sidePR ? mkTable(sidePR,L,H,nx*TB,nz*TB) : null;
+  Ttop  =mkTable(topP  ,L,W,nx*TB,ny*TB);
+  Tfront=mkTable(frontP,W,H,ny*TB,nz*TB);
+  /* A traced outline says two different things at once: how big the body is, and where that
+     face is notched. The old build treated both as one shape and intersected them, so a wheel
+     arch drawn on the SIDE bored a tunnel clean through the full width of the car — material
+     removed from parts of the frame that view can't even see. The envelope (the outline with
+     its notches filled in) gives the body; the notches themselves are put back afterwards, and
+     only into the face they were drawn on. */
+  const envOf=(pts)=>{ try{ const e=outlineEnvelope(pts.map(q=>({x:q[0],y:q[1]})),56);
+      if(!e||!e.top||e.top.length<2)return pts;
+      const loop=e.top.map(q=>[q.x,q.y]).concat(e.bot.slice().reverse().map(q=>[q.x,q.y]));
+      return loop.length>2?loop:pts; }catch(err){ return pts; } };
+  const Eside =mkTable(envOf(sideP ),L,H,nx*TB,nz*TB);
+  // the envelope has to sweep too, or the second side gets clipped by the first one's body
+  const EsideR= sidePR ? mkTable(envOf(sidePR),L,H,nx*TB,nz*TB) : null;
+  const Etop  =mkTable(envOf(topP  ),L,W,nx*TB,ny*TB);
+  const Efront=mkTable(envOf(frontP),W,H,ny*TB,nz*TB);
+  sideAt    = sweep(Tside , TsideR);
+  envSideAt = sweep(Eside , EsideR);
+  const notch=Math.max(0.5, p.notchDepth ?? Math.min(W,H)*0.18);
+  feats.forEach(f=>{
+    f.T = f.kind==="xz" ? mkTable(f.pts,L,H,nx*TB,nz*TB)
+        : f.kind==="xy" ? mkTable(f.pts,L,W,nx*TB,ny*TB)
+        :                 mkTable(f.pts,W,H,ny*TB,nz*TB);
+  });
+  /* MASKS AS FIELD REGIONS.
+     A mask is a shape left at depth 0: the material you keep, the pony that stands proud once
+     the grille around it is cut down. With carves now living in the field, the field is where
+     a mask has to take effect too — otherwise the carve removes the pony along with the grille.
+     A mask is not itself geometry; it is a veto on carving. So build the same footprint tables
+     for the depth-0 shapes, tagged with the face they sit on, and where the carve loop is about
+     to remove material, check whether this point falls inside a mask on the SAME face at a
+     shallower depth than the mask protects. If it does, the removal is held back to the mask's
+     own floor, leaving the shape standing. */
+  const masks=(p.features||[]).map(f=>{
+    if(!f||f.depth||!f.poly||f.poly.length<3)return null;      // masks are the depth-0 shapes
+    const view=f.view||"side";
+    let pts,kind;
+    if(view==="side"||view==="sideR"){pts=f.poly.map(q=>[(view==="sideR"?1-q[0]:q[0])*L,q[1]*H]); kind="xz";}
+    else if(view==="top"||view==="bottom"){pts=f.poly.map(q=>[q[0]*L,(1-q[1])*W]); kind="xy";}
+    else {pts=f.poly.map(q=>[(view==="rear"?1-q[0]:q[0])*W,q[1]*H]); kind="yz";}
+    const axis=(view==="side"||view==="sideR")?"y":(view==="top"||view==="bottom")?"z":"x";
+    const nearMax=(view==="side")?false:(view==="sideR")?true:(view==="top")?true:(view==="bottom")?false:(view==="rear")?false:true;
+    return {pts,kind,axis,nearMax,soft:Math.max(0.35,(f.soft==null?0.1:f.soft)*soft0)};
+  }).filter(Boolean);
+  masks.forEach(m=>{
+    m.T = m.kind==="xz" ? mkTable(m.pts,L,H,nx*TB,nz*TB)
+        : m.kind==="xy" ? mkTable(m.pts,L,W,nx*TB,ny*TB)
+        :                 mkTable(m.pts,W,H,ny*TB,nz*TB);
+  });
+  const maskHold=(x,y,z,d0)=>{
+    // deepest surface a mask lets a carve reach at this point (Infinity = no mask here)
+    let hold=Infinity;
+    for(let q=0;q<masks.length;q++){
+      const m=masks[q], foot=sdFeat(m,x,y,z);
+      if(foot>=0)continue;                          // outside this mask footprint
+      // same correction as the carve loop: depth is measured from the skin, not the box
+      const depthIn=-d0;
+      if(depthIn<hold)hold=depthIn;                 // protect from the surface inward
+    }
+    return hold;
+  };
+  // per-length floor/roof/half-width, so the crisp<1 ellipse blend costs a lookup, not a solve
+  if(crisp<0.999){
+    const lz0=new Float32Array(nx+1), lz1=new Float32Array(nx+1), lhw=new Float32Array(nx+1);
+    for(let i=0;i<=nx;i++){const xf=i/nx;
+      lz0[i]=p.bottomProfile?sampleProfile(p.bottomProfile,xf):0;
+      lz1[i]=sampleProfile(p.topProfile,xf);
+      lhw[i]=Math.max(0.05,sampleProfile(p.widthProfile,xf));}
+    loftBox=(x)=>{ let fi=x/L*nx; fi=fi<0?0:(fi>nx?nx:fi); const i=fi|0,t=fi-i,i2=i<nx?i+1:nx;
+      return [lz0[i]+(lz0[i2]-lz0[i])*t, lz1[i]+(lz1[i2]-lz1[i])*t, lhw[i]+(lhw[i2]-lhw[i])*t]; };
+  }
+  const px=i=>(i-PAD)*hx, py=j=>(j-PAD)*hy, pz=k=>(k-PAD)*hz;   // grid -> mm (y centred later)
+  const field=new Float32Array(NX*NY*NZ);
+  const BIG=Math.max(L,W,H);
+  for(let i=0;i<NX;i++)for(let j=0;j<NY;j++)for(let k=0;k<NZ;k++){
+    const border=(i===0||j===0||k===0||i===nx||j===ny||k===nz);
+    field[idx(i,j,k)] = border ? BIG : F(px(i),py(j),pz(k));   // keep the shell closed
+  }
+  /* FIELD-BASED HOLLOW (opt-in via p.fieldHollow).
+     The cavity is a second reading of the SAME field, not a mesh operation bolted on after.
+     A point is shell material when it is inside the body (F<0) but not deep enough to be the
+     cavity (F > -wall) — i.e. within one wall of the outer surface. As a signed field that
+     shell is max(F, -(F+wall)): negative in the wall band, positive both in the open air
+     outside and in the hollow core. Meshing THAT one field yields the outer skin and the
+     inner wall together, correct by construction, because the field already knows the true
+     3D thickness everywhere. A thin deck the old vertex-offset hollow paved into a solid
+     plank (its two surfaces pushed until they collided) here simply has the field report it
+     is only 16mm thick, leaving exactly room for two walls and a core — proven on profile_7.
+     The underside stays open the same way the solid path opens it: below the level-base cut
+     plane the field is already outside, so the core reaches the opening with no extra work.
+     No innerOffsets, no rim stitch, no plank. */
+  /* ON BY DEFAULT as of this build. It was opt-in while it was being proved out; it is now
+     the hollowing path, because it fixes the plank at the root rather than patching the
+     mesh afterwards. Verified on profile_7 at its own resolution: the thin deck builds as a
+     closed box (top wall, side walls, bottom wall, cavity between) where the vertex-offset
+     path built a bare plate with its underside missing. Pass fieldHollow:false to get the
+     old innerOffsets path back — kept because saved models and the exact-STEP backend still
+     round-trip through it, and because a way back is worth having. */
+  /* ...and only if the grid we ended up with can actually hold it. If the wall is thinner
+     than about one and a half cells the two surfaces would eat each other, so hand the job
+     back to the vertex-offset path rather than build a shell full of holes. That path has
+     the plank problem on thin SECTIONS, but a thin WALL is the one case it does better,
+     and a plank is a nicer failure than a body 3.7mm short with skin missing. */
+  const fieldHollow = hollow && wall>0 && p.fieldHollow!==false
+                   && wallMin >= Math.max(hx,hy,hz)*HOLLOW_WALL_CELLS;   // thinnest face decides
+  /* When this is false and the model is hollow, the build has fallen back to the vertex-push
+     path — the one that welds a thin section into a plank. It is not a crash and the solid is
+     watertight, so nothing downstream notices; the person just gets a shelf with air under it.
+     Report it so the studio can say so instead of staying silent. */
+  const thinWallFallback = (hollow && wall>0 && p.fieldHollow!==false && !fieldHollow)
+    ? {wall:wall, cell:Math.max(hx,hy,hz)} : null;
+  if(fieldHollow){
+    const shell=new Float32Array(NX*NY*NZ);
+    /* The body field is a max of three separable 2D fields, which is exact at the surface but
+       NOT a true Euclidean distance just inside it: on a gently sloped face (a beltline, the
+       base of the roof) the value changes slowly with depth, so a fixed value band -wall<F<0
+       covers a geometrically THICK slab and the cavity there fills solid. Divide by the local
+       gradient magnitude to turn the value into true perpendicular distance, so the wall band
+       is `wall` mm thick measured square to the surface everywhere, slope or no slope. */
+    /* THE OUTER SKIN IS NOT NEGOTIABLE.
+       Step 2 wrote max(dist, -(dist+wall)) with dist = b/|grad b| — normalising BOTH terms.
+       That moves the outer surface: the mesher finds a crossing by interpolating values
+       along a grid edge, so rescaling those values by a varying 1/|grad| slides the
+       crossing point. Measured on profile_7 it cost 0.3mm of width, and a coarser gradient
+       cost 0.9mm. A hollow body must be the same size as the solid one — that is the whole
+       invariant the hollow tests rest on.
+       So normalise only the term that draws the INNER wall, and leave the outer term as the
+       raw body field. Outer surface: b = 0, bit-identical to the solid build. Inner surface:
+       b/|grad| = -wall, a true perpendicular wall in millimetres even on a shallow slope. */
+    const eps=Math.min(hx,hy,hz)*0.5;
+    const deep=-wall*3;                     // past here it is core, and only the sign matters
+
+    /* ADAPTIVE WALL — thin the wall only where the section is a genuine thin SLAB.
+       Opt-in via p.adaptiveWall.
+
+       Why the old step-3 probe was wrong, so nobody rebuilds it: it fired 26 rays and took
+       the NEAREST outside sample as the local thickness. But for a point at depth d, the
+       nearest outside sample IS d — it was measuring depth-to-surface, which the field
+       already told us, so the "local thickness" tracked depth and the wall collapsed to its
+       floor value everywhere. Measured result: 0.52mm walls at the tenth percentile and the
+       whole body 4mm undersized. It was never a corner bug; it was measuring the wrong thing.
+
+       What thickness actually means: pick a direction, walk to the surface one way, walk to
+       the surface the other way, add them. That is the thickness of the section along that
+       direction. Take the smallest over all directions and you have the local thickness.
+       Both sides have to be close for it to count — at a corner one face is near and the
+       other is the whole width of the body away, so a corner reads THICK and is left alone.
+       That bilateral test is the whole difference between this and the version that failed.
+
+       It reads the grid that was already sampled rather than calling F again. The 26
+       neighbours ARE grid directions, so marching along them is plain array indexing — the
+       old probe's ray marching cost roughly a hundred F calls per voxel, which on this model
+       would have turned a 3.4s build into something you would not wait for. */
+    /* ADAPTIVE WALL IS RETIRED. The flag is honoured so an old saved file still loads and
+       still means something, but it is off unless explicitly asked for and it is not offered
+       in the UI. Kept rather than deleted so the reasoning is not lost and so a file carrying
+       adaptiveWall:true does not silently change shape.
+
+       WHY, measured across ten geometries (heights 20/26/40/60/90mm, walls 4 and 8mm):
+         wall 4mm  — saved 0.0% in every case. It never acted at all.
+         wall 8mm  — saved 1.6-4.3%, and opened a thin patch in EVERY case, down to 0.00mm.
+       There was not one clean win. It is not a trade between material and strength; it is a
+       few percent of filament in exchange for a hole in the wall.
+
+       And the case it was written for is already handled. Field hollow leaves a section that
+       cannot hold two walls plus a cavity SOLID, by construction, which is the right answer
+       for a thin rib. On a 26mm slab the centre column measures identical with the flag on or
+       off — so the flag was not even delivering on the case it existed for, only thinning
+       corners on the way past.
+       If this is ever revisited, the missing piece is the bilateral test: thin only where two
+       OPPOSING sides are close, never where a single corner is near. That was designed and
+       deliberately not shipped, because on a 7mm rib it converts solid material into 2.8mm
+       walls around a 1.4mm void that a slicer would fill anyway. */
+    const AD = !!p.adaptiveWall;
+    const dirs=[];
+    for(let a=-1;a<=1;a++)for(let b2=-1;b2<=1;b2++)for(let c=-1;c<=1;c++){
+      if(!a&&!b2&&!c)continue;
+      if(a>0||(!a&&b2>0)||(!a&&!b2&&c>0)) dirs.push([a,b2,c,Math.hypot(a*hx,b2*hy,c*hz)]);
+    }
+    const maxN=Math.max(1,Math.ceil((wall*1.25)/Math.min(hx,hy,hz)));
+    /* How far to the surface from (i,j,k) heading (di,dj,dk), or INFINITY if it does not reach
+       one within the march.
+       It used to return the capped distance instead, described as making "thick" the safe
+       default. That was exactly backwards. The caller adds the two opposing reaches and thins
+       the wall when the sum is small, so substituting a small number for an unknown one makes
+       a THICK section look thin. Measured: a point 2.5mm under the roof of a 90mm-thick body
+       marches down, never finds the far side inside the cap, and reports 11.25mm instead of
+       87.5 — so the section reads 13.75mm thick and the wall is cut from 8mm to 5mm on a body
+       with nothing thin about it anywhere. The wall safety gate flagged a 0.00mm patch over
+       855 readings, which is how this was caught.
+       Infinity is the honest answer for "further than I looked", and it makes the caller
+       leave the wall alone, which is the safe direction. */
+    const reach=(i,j,k,di,dj,dk,stepLen)=>{
+      let prev=field[idx(i,j,k)];
+      for(let n=1;n<=maxN;n++){
+        const I2=i+di*n, J2=j+dj*n, K2=k+dk*n;
+        if(I2<0||I2>=NX||J2<0||J2>=NY||K2<0||K2>=NZ) return n*stepLen;   // left the grid: a real edge
+        const v=field[idx(I2,J2,K2)];
+        if(v>=BIG*0.5) return n*stepLen;      // sentinel ring: also a real edge
+        if(v>=0){ const f=prev/(prev-v); return (n-1+(f>0&&f<1?f:0))*stepLen; }
+        prev=v;
+      }
+      return Infinity;                        // never found it: unknown, so assume thick
     };
+    /* The floor is not a taste setting. A wall below about one and a half cells cannot be
+       meshed at all — the outer and inner surfaces land in the same cell and cancel — so
+       thinning past that does not produce a thinner shell, it produces holes. And a wall
+       thinner than this is not worth printing even when it can be meshed. Where a section is
+       too thin for even the floor, no cavity is attempted and it stays solid, which is the
+       right answer for a thin rib anyway. */
+    const wallFloor=Math.min(wall, Math.max(1.2, Math.max(hx,hy,hz)*HOLLOW_THIN_CELLS));
+
+    for(let i=0;i<NX;i++)for(let j=0;j<NY;j++)for(let k=0;k<NZ;k++){
+      const o=idx(i,j,k), b=field[o];
+      if(b>=BIG*0.5){ shell[o]=BIG; continue; }
+      /* Outside the body the first term already wins, whatever the gradient is, and deep in
+         the core the second term is positive by a mile. Both cases skip the gradient, which
+         is six calls to F — so it is only paid for in the wall band, about a tenth of the
+         grid instead of all of it. */
+      if(b>=0){ shell[o]=b; continue; }
+      if(b<deep){ shell[o]=-(b+wall); continue; }
+      const xm=px(i),ym=py(j),zm=pz(k);
+      const gx=(F(xm+eps,ym,zm)-F(xm-eps,ym,zm))/(2*eps);
+      const gy=(F(xm,ym+eps,zm)-F(xm,ym-eps,zm))/(2*eps);
+      const gz=(F(xm,ym,zm+eps)-F(xm,ym,zm-eps))/(2*eps);
+      const g=Math.hypot(gx,gy,gz)||1;
+      /* THE CAVITY IGNORES THE LEVELLING PLANE; THE OUTER SKIN DOES NOT.
+         `b` carries the base-plane clip, and the shell band grows against every surface in it
+         — including that plane, which is not a surface anybody traced. The result is a floor
+         sealing the underside, and it appears only once the wall is thick enough for the field
+         path to switch on. Hence "turn the thickness up and the underbody stops being hollow".
+
+         So the inner wall is drawn from the UNCLIPPED body while `shell` below still takes the
+         outer surface from `b`. Below the plane the unclipped field keeps going, so the cavity
+         runs straight out through the opening and no floor is ever built.
+
+         REJECTED, and measured, so it is not tried again: scaling `wLoc` to zero on
+         ground-facing normals. It removes the floor, but `-(dist+wLoc)` draws BOTH surfaces,
+         so zeroing it deletes the outer bottom skin too — the body's outside moves, and three
+         guard tests fail (the one-wall rim band, "the outside is identical at every wall
+         thickness", and no inner vertex outside the outer skin). Touch the cavity's input,
+         never the term the outer surface is read from. */
+      let bIn = openUnder ? Math.min(b, F(xm,ym,zm,true)) : b;
+      /* THE FLOOR BAND JUST ABOVE THE OPENING.
+         The unclipped reading is not deep enough down here to clear a thick wall. Measured on
+         a real traced car at mesh (100,0), wall 5, baseCut 5.017 — the cavity only forms once
+         |bIn| exceeds wLoc:
+
+             z= 5.56  bIn=-4.19  wLoc=5.00  cav=-0.81   MATERIAL
+             z= 7.42  bIn=-4.51  wLoc=5.00  cav=-0.49   MATERIAL
+             z= 9.27  bIn=-4.80  wLoc=5.00  cav=+0.35   cavity
+
+         `bIn` bottoms out at -4.19 and climbs about 0.16/mm, so ANY wall thicker than roughly
+         4.2mm seals the underside and any thinner one does not — which is exactly where the
+         floor was observed to appear, between 4.00 and 4.50. It is bounded there because the
+         body field is a max of three separable 2D fields and the side/front silhouettes carry
+         their own lower edge. That edge sits BELOW the base cut and has been cut away, so it
+         has no business constraining the cavity, but the unclipped reading still sees it.
+
+         So measure the depth from the OPENING instead, which is the surface that actually
+         matters down here.
+
+         BOUNDED AND LOCAL, both deliberately. Only within two walls of the base plane, so it
+         cannot grow without limit — a term that does turns the entire body into cavity, which
+         is recorded above as already tried. And only where the surface looks at the ground, so
+         the SIDE WALLS coming down to the base plane are untouched: they are what holds the
+         body's lowest material, and hollowing them out is what lifts the bbox floor and fails
+         `hollow: the outside is identical at every wall thickness`. */
+      if(openUnder && zm < baseCut + wall*2 && -gz/g > 0.35 && bIn < -wall*0.6)
+        bIn = Math.min(bIn, -(zm - baseCut) - wall - cell);
+      const dist=bIn/g;                            // true perpendicular distance, mm, negative inside
+      /* A CAVITY TOO NARROW TO MESH leaves a sliver of material a fraction of a millimetre
+         thick just inside the wall — measured on a 200mm slab at an 8mm wall, a 4mm cavity
+         left 0.68mm and a 6mm cavity left 0.24mm, while 10mm and above were clean. Both were
+         watertight with a healthy median wall, so only the safety gate saw them.
+         ATTEMPTED AND REVERTED: gating on `(-dist)*2 - wall*2`, i.e. treating twice the
+         distance-to-nearest-surface as the section thickness. It is not. `dist` is the
+         nearest surface in ANY direction, so on a side wall it measures across the width and
+         the gate fired where nothing was wrong — side walls went from 8mm to 11.5-15mm on
+         bodies that had been correct. A real fix needs the thickness along the wall's own
+         normal, which is what the retired adaptive-wall probe was trying to measure and got
+         wrong in its own way. Left as a known limit rather than a half-fix. */
+      /* The wall for THIS point, from the direction its surface faces. The gradient of the
+         body field is that normal — it is already computed here for `dist`, so per-face costs
+         one blend and no extra sampling. wallAt() weights roof/side/floor by how much the
+         normal points up, sideways and down, so the thickness turns smoothly through a corner
+         instead of stepping, and the shell stays closed. */
+      let wLoc = perFace ? wallAt([gx/g, gy/g, gz/g], WSPEC) : wall;
+      if(AD && wallFloor<wall){
+        let T=Infinity;
+        for(let d=0;d<dirs.length;d++){
+          const D=dirs[d];
+          const t=reach(i,j,k,D[0],D[1],D[2],D[3])+reach(i,j,k,-D[0],-D[1],-D[2],D[3]);
+          if(t<T)T=t;
+        }
+        /* Two walls and a cavity have to fit inside T. At 40% each there is a fifth of the
+           section left as cavity, which is enough to be worth hollowing and not so little
+           that it closes up again under meshing. */
+        const want=T*0.4;
+        if(want<wall) wLoc=Math.max(wallFloor, want);
+      }
+      /* ARCH CEILINGS, in the field path.
+         The unclipped cavity above opens the BASE PLANE and nothing else, so the underside of
+         the body where it sits over a wheel arch — a ceiling up at z=31 or z=42 on a real
+         traced car — stayed floored at every field wall thickness. The vertex-offset path
+         opens those through `bottomSkinTris`; the field path had no equivalent at all, which
+         is why turning the thickness up put the floor back.
+
+         Thin the wall to nothing where the surface looks at the ground, so the cavity reaches
+         the outer surface and no ceiling is built.
+
+         **ONLY ABOVE THE BASE PLANE.** Doing it everywhere also strips the flat bottom at the
+         levelled base and lifts the body's lowest material, which is what failed three tests
+         on the first attempt. Above the base plane nothing can move the bounding box, because
+         the extremes are set at the base and the roof.
+
+         This block must sit AFTER `wLoc` is settled — it is declared below `dist`, and placing
+         it earlier is a `Cannot access 'wLoc' before initialization`.
+
+         The ramp reaches zero at down=0.50 rather than 0.70 because a real arch ceiling on a
+         traced car measures about -0.5: the gentler ramp only took the wall to 57% there and
+         left a thinner floor instead of none, opening at 3mm and not at 2.5 or 4. */
+      if(openUnder && zm > baseCut + Math.max(wLoc, cell * 2)){
+        const down = -gz/g;                                  // 1 = looks straight at the ground
+        if(down > 0.30) wLoc *= Math.max(0, 1 - (down - 0.30) / 0.20);
+      }
+      /* KNOWN ARTEFACT — a knife edge, diagnosed and deliberately not fixed. Read this before
+         attempting it again; three earlier attempts were made on a WRONG diagnosis.
+         `dist` is b divided by a SAMPLED gradient, so it carries a few percent of noise. Where
+         a section is barely one wall deep, that noise decides material or cavity. Measured on
+         a boxy end cap at res 52, walking in along the length:
+             i=5   b=-5.38  |grad|=1.001  dist=-5.38  -(dist+w)=-2.62  material
+             i=6   b=-7.70  |grad|=0.901  dist=-8.55  -(dist+w)=+0.55  CAVITY   <-- one cell
+             i=7   b=-7.70  |grad|=1.000  dist=-7.70  -(dist+w)=-0.30  material
+         The field bottoms out at 7.70mm against an 8mm wall, so the section should be solid
+         outright; a 10% wobble in |grad| flips that single cell and the mesher puts a surface
+         through it. An 8mm end cap builds as 7.07mm + 0.82mm gap + 2.32mm.
+         It is NOT a collapsed gradient (|grad| is ~1 throughout — an earlier note here said
+         otherwise and was wrong), and NOT a size threshold. It looks like grid alignment
+         (fires at 52 and 54 stations, clean at 46/48/50/60/72) because alignment decides
+         whether any cell lands near enough to the edge for the noise to matter.
+         WHY NO FIX SHIPPED: the obvious rule — where the raw and normalised readings disagree
+         about which side of the wall a cell is on, believe the raw field — cuts the wall under
+         a carved pocket from 5.11mm to 3.54mm, six test failures including the safety property
+         this engine exists for. Under a pocket the gradient legitimately runs about 0.6 and
+         the NORMALISED reading is the correct one there. Restricting the rule to near-unity
+         gradients rescues three of four resolutions and leaves station 54, and tightening the
+         band further is fitting to a fixture.
+         A real fix needs to separate sampling noise from real geometry, not guess a band. */
+      shell[o]=Math.max(b, -(dist+wLoc));
+    }
+    /* WHERE BOTH SKINS WANT THE SAME CELL, THE SOLID ONE WINS.
+       A dual contour puts ONE vertex in a cell. Where the wall is thin enough that the outer
+       skin and the inner wall both pass through a single cell, both sheets are forced onto
+       that one vertex and welded together — and because they face opposite ways, the edge
+       they end up sharing is traversed the same direction by both. That is a fin: a fold of
+       zero-thickness material, and it is not a winding mistake but a genuinely non-orientable
+       surface that NO winding can fix. Measured on profile_7: 61 such edges, normals back to
+       back at a median dot of -0.84, and exactly 61 vertices where two separate sheets meet.
+       The winding pass was right to refuse them.
+       So do not hand the mesher an impossible cell. A cell holding both an outside corner and
+       a core corner is one where the wall has pinched below what the grid can carry; fill its
+       core corners back to solid, which drops the inner surface out of that cell and leaves a
+       single sheet. Locally the shell just becomes solid there — a few voxels of extra
+       material, which is the right trade against a fold that no slicer should have to see. */
+    /* A cell is safe for a single-vertex dual contour only if its material corners form ONE
+       connected group and its air corners do too. If either splits in two, the cell holds two
+       separate sheets and they get welded onto the one vertex the mesher is allowed. That
+       covers both ways a shell pinches: a thin WALL puts the outer skin and the inner wall in
+       one cell, and a thin CAVITY puts the inner wall in twice. Testing connectivity of the
+       corner signs catches both without having to know which is happening.
+       Corners are the 8 bits of (i,j,k); two are adjacent along a cube edge when their
+       indices differ in exactly one bit, i.e. a^1, a^2, a^4. */
+    const oneGroup=(mask)=>{
+      if(mask===0||mask===255)return true;
+      let first=0; while(!((mask>>first)&1))first++;
+      let seen=1<<first, st=[first];
+      while(st.length){ const a=st.pop();
+        for(const nb of [a^1,a^2,a^4])
+          if(((mask>>nb)&1)&&!((seen>>nb)&1)){ seen|=1<<nb; st.push(nb); } }
+      return seen===mask;
+    };
+    const patch=[];
+    for(let i=0;i<NX-1;i++)for(let j=0;j<NY-1;j++)for(let k=0;k<NZ-1;k++){
+      let solidMask=0, off=[];
+      let skip=false;
+      for(let a=0;a<8;a++){
+        const o=idx(i+(a&1),j+((a>>1)&1),k+((a>>2)&1));
+        off.push(o);
+        if(field[o]>=BIG*0.5){ skip=true; break; }
+        if(shell[o]<=0) solidMask|=1<<a;
+      }
+      if(skip)continue;
+      if(oneGroup(solidMask)&&oneGroup((~solidMask)&255))continue;   // unambiguous, leave alone
+      /* Ambiguous. Resolve towards material: the core corners are the cavity, and filling them
+         merges whichever pair of sheets was about to be welded into one. Extra material in a
+         handful of voxels is a far better outcome than a zero-thickness fold. */
+      for(let a=0;a<8;a++){ const o=off[a]; if(shell[o]>0&&field[o]<0) patch.push(o); }
+    }
+    for(let q=0;q<patch.length;q++) shell[patch[q]]=field[patch[q]];
+    /* CLOSE A CAVITY THAT COULD NOT OPEN.
+       Where the gap between the two walls is narrower than the grid can carry, the cavity does
+       not simply fail to appear — it collapses into slivers of air a fraction of a millimetre
+       wide, hugging the inside of the wall. Measured on a 200mm slab at an 8mm wall: a 6mm
+       cavity left an 82.8mm SOLID core with a 0.24mm air sliver down each side, and a 4mm
+       cavity left 0.68mm slivers. A 10mm cavity was clean.
+       That is worse than being solid in two ways. The part reports itself hollow when it is
+       not, and the wall safety gate measures across a sliver and calls it a 0.28mm wall — a
+       false alarm on a part that is actually a solid block, which is exactly the kind of thing
+       that teaches someone to ignore the warning.
+       So: an air cell with material on BOTH sides along any axis is a sliver, not a cavity,
+       and gets filled. Bilateral by design — the same distinction that the adaptive wall got
+       wrong by testing only the nearest side. A real cavity is at least two cells across, so
+       its interior cells have air neighbours and survive. */
+    {
+      const solid=o=>shell[o]<=0;
+      const fill=[];
+      for(let i=1;i<NX-1;i++)for(let j=1;j<NY-1;j++)for(let k=1;k<NZ-1;k++){
+        const o=idx(i,j,k);
+        if(shell[o]<=0)continue;                 // already material
+        if(field[o]>=0)continue;                 // outside the body: leave it alone
+        if((solid(idx(i-1,j,k))&&solid(idx(i+1,j,k))) ||
+           (solid(idx(i,j-1,k))&&solid(idx(i,j+1,k))) ||
+           (solid(idx(i,j,k-1))&&solid(idx(i,j,k+1)))) fill.push(o);
+      }
+      // applied after the scan so one filled cell cannot cascade into its neighbours
+      for(let q=0;q<fill.length;q++) shell[fill[q]]=field[fill[q]];
+    }
+    for(let o=0;o<NX*NY*NZ;o++) field[o]=shell[o];
+  }
+  /* NO GUTS. Anywhere the field happens to enclose a pocket of air — where traced cuts cross,
+     where a fold closes over on itself — the mesher faithfully builds a surface around it, and
+     those become the slabs and boxes rattling about inside the frame. A frame should be its
+     outer skin and the wall behind it, nothing else. So flood the OUTSIDE air inward from the
+     border first; any air the flood never reaches is a sealed pocket, and it gets filled in as
+     solid. What's left is one clean cavity you can see into, and no interior scenery.
+     Skipped for field-hollow: there the hollow CORE is a deliberately sealed air pocket, and
+     filling it would defeat the whole point. Field-hollow keeps its core; the underside opening
+     is handled by the base cut, and any true stray pocket is dropped later by dropStrayShells. */
+  if(!fieldHollow){
+    const N=NX*NY*NZ, out=new Uint8Array(N), st=[];
+    for(let i=0;i<NX;i++)for(let j=0;j<NY;j++)for(let k=0;k<NZ;k++){
+      if(i===0||j===0||k===0||i===nx||j===ny||k===nz){const o=idx(i,j,k); if(field[o]>0&&!out[o]){out[o]=1;st.push(o);}}}
+    while(st.length){
+      const o=st.pop(), k=o%NZ, j=((o-k)/NZ)%NY, i=((o-k)/NZ-j)/NY;
+      const go=(i2,j2,k2)=>{ if(i2<0||j2<0||k2<0||i2>=NX||j2>=NY||k2>=NZ)return;
+        const q=idx(i2,j2,k2); if(!out[q]&&field[q]>0){out[q]=1;st.push(q);} };
+      go(i-1,j,k);go(i+1,j,k);go(i,j-1,k);go(i,j+1,k);go(i,j,k-1);go(i,j,k+1);
+    }
+    for(let o=0;o<N;o++) if(field[o]>0 && !out[o]) field[o]=-cell*0.5;   // sealed pocket -> solid
+  }
+  const inside=(i,j,k)=>field[idx(i,j,k)]<0;
+  const grad=(x,y,z)=>{                       // which way the surface faces here
+    const e=Math.min(hx,hy,hz)*0.35;
+    const gx=F(x+e,y,z)-F(x-e,y,z), gy=F(x,y+e,z)-F(x,y-e,z), gz=F(x,y,z+e)-F(x,y,z-e);
+    const l=Math.hypot(gx,gy,gz)||1; return [gx/l,gy/l,gz/l];
+  };
+  const CC=[[0,0,0],[1,0,0],[0,1,0],[1,1,0],[0,0,1],[1,0,1],[0,1,1],[1,1,1]];
+  const ED=[[0,1],[0,2],[0,4],[1,3],[1,5],[2,3],[2,6],[3,7],[4,5],[4,6],[5,7],[6,7]];
+  const cellV=new Int32Array(nx*ny*nz).fill(-1), cIdx=(i,j,k)=>(i*ny+j)*nz+k, V=[];
+  for(let i=0;i<nx;i++)for(let j=0;j<ny;j++)for(let k=0;k<nz;k++){
+    let mask=0; for(let c=0;c<8;c++){const d=CC[c]; if(inside(i+d[0],j+d[1],k+d[2]))mask|=(1<<c);}
+    if(mask===0||mask===255)continue;
+    const pts=[],nrms=[];
+    for(const e of ED){
+      const a=e[0],b=e[1], ia=!!(mask&(1<<a)), ib=!!(mask&(1<<b));
+      if(ia===ib)continue;
+      const A=CC[a],B=CC[b];
+      const fa=field[idx(i+A[0],j+A[1],k+A[2])], fb=field[idx(i+B[0],j+B[1],k+B[2])];
+      let t=(fa-fb)!==0?fa/(fa-fb):0.5; t=t<0?0:t>1?1:t;        // where it actually crosses
+      const wx=px(i+A[0]+(B[0]-A[0])*t), wy=py(j+A[1]+(B[1]-A[1])*t), wz=pz(k+A[2]+(B[2]-A[2])*t);
+      pts.push([wx,wy,wz]); nrms.push(grad(wx,wy,wz));
+    }
+    if(!pts.length)continue;
+    // average of the crossings — where a rounded-off surface net would put the vertex
+    let mx=0,my=0,mz=0; for(const q of pts){mx+=q[0];my+=q[1];mz+=q[2];}
+    mx/=pts.length; my/=pts.length; mz/=pts.length;
+    // solve for the point that best satisfies every crossing plane -> lands on the corner
+    let a00=0,a01=0,a02=0,a11=0,a12=0,a22=0,b0=0,b1=0,b2=0;
+    for(let q=0;q<pts.length;q++){
+      const n=nrms[q], d=n[0]*pts[q][0]+n[1]*pts[q][1]+n[2]*pts[q][2];
+      a00+=n[0]*n[0]; a01+=n[0]*n[1]; a02+=n[0]*n[2];
+      a11+=n[1]*n[1]; a12+=n[1]*n[2]; a22+=n[2]*n[2];
+      b0+=n[0]*d; b1+=n[1]*d; b2+=n[2]*d;
+    }
+    const lam=(1.0-crisp)*pts.length+0.02;      // pull back toward the average = softer edges
+    a00+=lam; a11+=lam; a22+=lam; b0+=lam*mx; b1+=lam*my; b2+=lam*mz;
+    const det=a00*(a11*a22-a12*a12)-a01*(a01*a22-a12*a02)+a02*(a01*a12-a11*a02);
+    let vx=mx,vy=my,vz=mz;
+    if(Math.abs(det)>1e-9){
+      vx=( b0*(a11*a22-a12*a12) - a01*(b1*a22-a12*b2) + a02*(b1*a12-a11*b2))/det;
+      vy=( a00*(b1*a22-a12*b2) - b0*(a01*a22-a12*a02) + a02*(a01*b2-b1*a02))/det;
+      vz=( a00*(a11*b2-b1*a12) - a01*(a01*b2-b1*a02) + b0*(a01*a12-a11*a02))/det;
+    }
+    /* Never let the solve fling a vertex out of its own cell — that would tear the surface.
+       The quarter-cell of slack on each side is DELIBERATE and was tried without: clamping
+       hard to the cell removes a 0.47mm bump at a pocket rim, but it snaps vertices onto
+       shared cell edges and produced non-manifold edges on other models — 14 on one traced
+       body, 7 on a thick-walled shell, and 4 edges wound the same way twice. A hair of
+       overshoot at a rim is a cosmetic defect; a non-manifold edge is a broken solid. Keep
+       the slack. */
+    const cx0=px(i),cy0=py(j),cz0=pz(k);
+    vx=Math.max(cx0-hx*0.25,Math.min(cx0+hx*1.25,vx));
+    vy=Math.max(cy0-hy*0.25,Math.min(cy0+hy*1.25,vy));
+    vz=Math.max(cz0-hz*0.25,Math.min(cz0+hz*1.25,vz));
+    if(!isFinite(vx)||!isFinite(vy)||!isFinite(vz)){vx=mx;vy=my;vz=mz;}
+    cellV[cIdx(i,j,k)]=V.length; V.push([vx, vy-W/2, vz]);
+  }
+  let indices=[]; const quad=(a,b,c,d,flip)=>{if(a<0||b<0||c<0||d<0)return; if(flip)indices.push(a,b,c,a,c,d); else indices.push(a,d,c,a,c,b);};
+  for(let i=0;i<NX;i++)for(let j=0;j<NY;j++)for(let k=0;k<NZ;k++){const p0=inside(i,j,k)?1:0;
+    if(i<nx && j>0&&j<ny&&k>0&&k<nz){const p1=inside(i+1,j,k)?1:0; if(p0!==p1)quad(cellV[cIdx(i,j-1,k-1)],cellV[cIdx(i,j,k-1)],cellV[cIdx(i,j,k)],cellV[cIdx(i,j-1,k)],p1>p0);}
+    if(j<ny && i>0&&i<nx&&k>0&&k<nz){const p1=inside(i,j+1,k)?1:0; if(p0!==p1)quad(cellV[cIdx(i-1,j,k-1)],cellV[cIdx(i,j,k-1)],cellV[cIdx(i,j,k)],cellV[cIdx(i-1,j,k)],p1<p0);}
+    if(k<nz && i>0&&i<nx&&j>0&&j<ny){const p1=inside(i,j,k+1)?1:0; if(p0!==p1)quad(cellV[cIdx(i-1,j-1,k)],cellV[cIdx(i,j-1,k)],cellV[cIdx(i,j,k)],cellV[cIdx(i-1,j,k)],p1>p0);}
+  }
+  /* WATERTIGHT REPAIR.
+     The one-vertex-per-cell solve is exact on the corners, but at a "saddle" cell — where
+     the surface threads through as two separate sheets — that single vertex can't seal both.
+     It leaves either an edge used once (a hole) or an edge shared by >2 faces (a pinch).
+     Neither is acceptable for a printable part or an honest volume, so the mesh is repaired
+     toward a closed 2-manifold: drop degenerate/duplicate faces, prune any over-shared edge
+     back to two, then cap every hole that closes into a loop with a centroid fan wound to
+     match. A clean mesh (spheres, boxes, most traces) has no defects and returns instantly.
+     Hard guarantee: the result is measured against the raw mesh and the raw mesh is returned
+     unchanged unless the repair STRICTLY reduced the defect count — repair can never regress. */
+  function sealMesh(V, tris){
+    const und=(a,b)=>a<b?a+"_"+b:b+"_"+a, dk=(a,b)=>a+"_"+b;
+    const area=(a,b,c)=>{const A=V[a],B=V[b],C=V[c],
+      ux=B[0]-A[0],uy=B[1]-A[1],uz=B[2]-A[2],vx=C[0]-A[0],vy=C[1]-A[1],vz=C[2]-A[2],
+      cx=uy*vz-uz*vy,cy=uz*vx-ux*vz,cz=ux*vy-uy*vx; return Math.hypot(cx,cy,cz);};
+    const defects=list=>{const m=new Map();
+      for(const t of list)for(const[u,v]of[[t[0],t[1]],[t[1],t[2]],[t[2],t[0]]]){const k=und(u,v);m.set(k,(m.get(k)||0)+1);}
+      let d=0; for(const c of m.values())if(c===1||c>2)d++; return d;};
+    // parse; on an already-sealed mesh (the common case) do nothing at all
+    let T=[]; for(let q=0;q<tris.length;q+=3)T.push([tris[q],tris[q+1],tris[q+2]]);
+    const rawDefects=defects(T);
+    if(rawDefects===0)return tris;
+    const V0=V.length;                                       // to roll back centroids if we bail
+    // 1) drop degenerate + duplicate faces
+    const seen=new Set(), T2=[];
+    for(const t of T){const a=t[0],b=t[1],c=t[2];
+      if(a===b||b===c||a===c)continue; if(area(a,b,c)<1e-9)continue;
+      const s=Math.min(a,b,c)+"_"+(a+b+c)+"_"+Math.max(a,b,c);   // min_sum_max -> the set, any winding
+      if(seen.has(s))continue; seen.add(s); T2.push([a,b,c]);}
+    T=T2;
+    for(let pass=0; pass<3 && defects(T)>0; pass++){
+      // 2) prune over-shared edges (>2 faces): drop the smallest offender until none remain
+      const em=new Map(), alive=new Uint8Array(T.length).fill(1);
+      const eAdd=ti=>{const t=T[ti];for(const[u,v]of[[t[0],t[1]],[t[1],t[2]],[t[2],t[0]]]){const k=und(u,v);let s=em.get(k);if(!s){s=new Set();em.set(k,s);}s.add(ti);}};
+      const eDel=ti=>{const t=T[ti];for(const[u,v]of[[t[0],t[1]],[t[1],t[2]],[t[2],t[0]]]){const k=und(u,v);const s=em.get(k);if(s){s.delete(ti);if(!s.size)em.delete(k);}}};
+      for(let ti=0;ti<T.length;ti++)eAdd(ti);
+      for(let g=0;;g++){ let over=null; for(const s of em.values())if(s.size>2){over=s;break;}
+        if(!over||g>T.length)break;
+        let victim=-1,vA=Infinity; for(const ti of over){const ar=area(T[ti][0],T[ti][1],T[ti][2]);if(ar<vA){vA=ar;victim=ti;}}
+        if(victim<0)break; eDel(victim); alive[victim]=0; }
+      const live=[]; for(let ti=0;ti<T.length;ti++)if(alive[ti])live.push(T[ti]);
+      // 3) cap holes. A boundary edge sits in exactly one triangle; it is sealed the moment a
+      //    cap gives it a second face — whichever way that cap winds. So the boundary is walked
+      //    UNDIRECTED (every vertex has even degree there, so an Eulerian walk covers every
+      //    edge), the walk is split into SIMPLE cycles — no vertex repeats inside one cap — and
+      //    each cycle is capped with a centroid fan. Fan edges within a cap pair up with each
+      //    other, so capping cannot mint a new defect, and no boundary edge is ever left out.
+      const uCnt=new Map(), dHas=new Set();
+      for(const t of live)for(const[u,v]of[[t[0],t[1]],[t[1],t[2]],[t[2],t[0]]]){uCnt.set(und(u,v),(uCnt.get(und(u,v))||0)+1);dHas.add(dk(u,v));}
+      const adj=new Map(); const addA=(a,b)=>{let o=adj.get(a);if(!o){o=[];adj.set(a,o);}o.push(b);};
+      for(const[k,c]of uCnt){ if(c!==1)continue; const q=k.indexOf("_"),a=+k.slice(0,q),b=+k.slice(q+1); addA(a,b); addA(b,a); }
+      const takeEdge=(a,b)=>{const o=adj.get(a),i=o.indexOf(b); o.splice(i,1); const o2=adj.get(b); o2.splice(o2.indexOf(a),1);};
+      const capLoop=cyc=>{ const n=cyc.length; if(n<3)return; let cx=0,cy=0,cz=0;
+        for(const a of cyc){cx+=V[a][0];cy+=V[a][1];cz+=V[a][2];} cx/=n;cy/=n;cz/=n;
+        const C=V.length; V.push([cx,cy,cz]);
+        for(let q=0;q<n;q++){const a=cyc[q],b=cyc[(q+1)%n];
+          if(dHas.has(dk(a,b)))live.push([b,a,C]); else live.push([a,b,C]);} };  // wind against the lone face
+      const hasEdge=()=>{for(const o of adj.values())if(o.length)return true;return false;};
+      for(let comp=0; hasEdge() && comp<=uCnt.size; comp++){
+        let s0=null; for(const[v,o]of adj)if(o.length){s0=v;break;} if(s0==null)break;
+        const st=[s0], circ=[];                        // Hierholzer over the undirected edges
+        while(st.length){ const v=st[st.length-1], o=adj.get(v);
+          if(o&&o.length){const w=o[o.length-1]; takeEdge(v,w); st.push(w);} else circ.push(st.pop()); }
+        circ.reverse();
+        const stk=[], at=new Map();                    // split circuit into simple cycles
+        for(let q=0;q<circ.length;q++){ const v=circ[q];
+          if(at.has(v)){ const start=at.get(v); const cyc=stk.slice(start);
+            for(let j=start;j<stk.length;j++)at.delete(stk[j]); stk.length=start;
+            capLoop(cyc); stk.push(v); at.set(v,stk.length-1); }
+          else { stk.push(v); at.set(v,stk.length-1); } }
+      }
+      T=live;
+    }
+    // never-worse: keep the repair only if it strictly beat the raw mesh, else hand back raw
+    if(defects(T)>=rawDefects && defects(T)>0){ V.length=V0; return tris; }
+    const res=[]; for(const t of T)res.push(t[0],t[1],t[2]); return res;
+  }
+  indices = sealMesh(V, indices);
+  let positions=new Float32Array(V.length*3); V.forEach((v,q)=>{positions[q*3]=v[0];positions[q*3+1]=v[1];positions[q*3+2]=v[2];});
+  const facing=idx=>{let s2=0; for(let q=0;q<idx.length;q+=3){const A=idx[q]*3,B=idx[q+1]*3,C=idx[q+2]*3;
+    s2+=(positions[A]*(positions[B+1]*positions[C+2]-positions[B+2]*positions[C+1])-positions[A+1]*(positions[B]*positions[C+2]-positions[B+2]*positions[C])+positions[A+2]*(positions[B]*positions[C+1]-positions[B+1]*positions[C]))/6;}
+    return s2;};
+  let vol=facing(indices);
+  if(vol<0){for(let q=0;q<indices.length;q+=3){const t=indices[q+1];indices[q+1]=indices[q+2];indices[q+2]=t;}vol=-vol;}
+
+  // Sculpt touch-ups are a change to the SHAPE, so they happen first and the inner wall follows.
+  if(p.sculptStrokes && p.sculptStrokes.length){ applyHullStrokes(positions,indices,p.sculptStrokes); vol=Math.abs(facing(indices)); }
+
+  /* The clean shape, kept aside. Traced detail is SURFACE decoration on the outside of the
+     frame — it must not appear inside. The inner wall is built from this copy, so the cavity
+     stays a smooth empty shell: no ribbing, no ridges, no guts, whatever the drawing shows. */
+  const cleanPos=new Float32Array(positions);
+
+  // traced detail, stamped on the face it was drawn on (outer skin only)
+  // The inner wall is built from THIS copy — the shape before any drawing is stamped on it —
+  // so the inside stays a clean smooth frame. Copying the detailed surface inward is what put
+  // a rib on the inside for every rib on the outside.
+  let plainSkin=positions;
+  if(crisp>0.001 && p.features && p.features.length){
+    plainSkin=new Float32Array(positions);
+    embossHull(p,positions,indices,crisp,wall); vol=Math.abs(facing(indices)); }
+
+  /* HOLLOW IT.
+     Trying to carve the void out of the distance field needs a grid fine enough to SEE a
+     1.8mm wall — on a 200mm car that's a 1.3M-cell grid and seconds per rebuild, which is
+     why this mode used to hand back a filled lump. But it doesn't need the field at all:
+     the surface we just built is already closed, so a copy of it pushed inward along its
+     own normals, wound the other way, IS the inside. Any wall thickness, at any detail, for
+     the cost of one more copy. Unless a bottom face was traced, the underside is OPENED first
+     (the ground-facing skin is dropped) and the two shells are stitched with a rim, so it's a
+     genuine open-bottom shell you can see up into — like the smooth body — and still watertight. */
+  let openedBottom=false;
+  if(hollow && wall>0 && !fieldHollow){
+    const openBottom = !p.closedBottom;
+    let outerIdx = indices;
+    if(openBottom){                                    // open only the true underside
+      // either spelling turns it on. ?? only falls through on null, so a file carrying the
+      // newer key as false would have silently ignored the older one set true.
+      const flag=bottomSkinTris(positions,indices,{openArches:!!(p.openUnderside || p.openArches),baseCut,cell});
+      const keep=[];
+      for(let q=0,t=0;q<indices.length;q+=3,t++){ if(flag[t])continue; keep.push(indices[q],indices[q+1],indices[q+2]); }
+      if(keep.length && keep.length<indices.length) outerIdx=keep;   // never remove everything
+    }
+    const trimmed = outerIdx!==indices; openedBottom=trimmed;   // did we actually open the underside?
+    const vc=V.length;
+    /* FAIR THE OPENING'S EDGE. The trim follows triangle boundaries on a grid, so even after
+       the flag is settled the edge is a staircase at grid scale. Relax each boundary vertex
+       toward the average of its neighbours ALONG the loop — a curve fairing, nothing off the
+       loop moves — capped so no vertex strays more than ~1.75 grid cells from where the mesher
+       put it (the staircase's own amplitude). The SAME displacement is applied to plainSkin,
+       so the inner wall and the stitched rim follow the faired edge instead of the old jagged
+       one; the rim stays a clean wall-height band all the way round. */
+    if(trimmed){
+      const ec3=new Map(), u3=(a,b)=>a<b?a+"_"+b:b+"_"+a;
+      for(let q=0;q<outerIdx.length;q+=3){const t=[outerIdx[q],outerIdx[q+1],outerIdx[q+2]];
+        for(const[u,v]of[[t[0],t[1]],[t[1],t[2]],[t[2],t[0]]])ec3.set(u3(u,v),(ec3.get(u3(u,v))||0)+1);}
+      const loop=new Map();                                  // boundary vertex -> loop neighbours
+      for(const[k,c]of ec3){ if(c!==1)continue; const p2=k.indexOf("_"),a=+k.slice(0,p2),b=+k.slice(p2+1);
+        let A=loop.get(a); if(!A){A=[];loop.set(a,A);} A.push(b);
+        let B=loop.get(b); if(!B){B=[];loop.set(b,B);} B.push(a); }
+      if(loop.size>2){
+        const orig=new Map(); for(const s of loop.keys())orig.set(s,[positions[s*3],positions[s*3+1],positions[s*3+2]]);
+        const capD=cell*2.5;                       // just past the staircase's own amplitude
+        /* Six passes was enough when the opening was a flat cut at the base: measured, the
+           edge wandered up and down by 0.12mm and looked straight. With the underside left
+           open the edge runs over the curved ceiling of a wheel arch instead, where the
+           correct line is itself a curve, and six passes left it wandering 0.91mm on a 4.2mm
+           rim — which is exactly the toothy arch edge. More passes cost nothing measurable
+           (a few hundred vertices) and the cap below still stops any vertex straying more
+           than 2.5 cells from where the mesher put it, so this cannot pull the edge away
+           from the drawing. Measured on that model: 0.91mm -> 0.47mm, volume unchanged. */
+        for(let pass=0;pass<24;pass++){
+          const snap=new Map(); for(const s of loop.keys())snap.set(s,[positions[s*3],positions[s*3+1],positions[s*3+2]]);
+          for(const[s,nbs]of loop){
+            if(nbs.length<2)continue;
+            let ax=0,ay=0,az=0; for(const n of nbs){const q=snap.get(n)||[positions[n*3],positions[n*3+1],positions[n*3+2]];ax+=q[0];ay+=q[1];az+=q[2];}
+            ax/=nbs.length; ay/=nbs.length; az/=nbs.length;
+            const cur=snap.get(s);
+            let px=cur[0]+(ax-cur[0])*0.5, py=cur[1]+(ay-cur[1])*0.5, pz=cur[2]+(az-cur[2])*0.5;
+            const o=orig.get(s); let dx=px-o[0],dy=py-o[1],dz=pz-o[2];
+            const dl=Math.hypot(dx,dy,dz);
+            if(dl>capD){const f=capD/dl; dx*=f;dy*=f;dz*=f; px=o[0]+dx;py=o[1]+dy;pz=o[2]+dz;}
+            positions[s*3]=px; positions[s*3+1]=py; positions[s*3+2]=pz;
+          }
+        }
+        if(plainSkin!==positions)for(const s of loop.keys()){   // inner wall follows the faired edge
+          const o=orig.get(s);
+          plainSkin[s*3]  +=positions[s*3]  -o[0];
+          plainSkin[s*3+1]+=positions[s*3+1]-o[1];
+          plainSkin[s*3+2]+=positions[s*3+2]-o[2];
+        }
+      }
+    }
+    /* OFFSET AGAINST THE CLOSED SHELL, NOT THE TRIMMED ONE.
+       innerOffsets pushes each vertex inward along the average normal of the triangles that
+       touch it. outerIdx has had the whole underside removed, so every vertex that lived only
+       on those removed triangles — measured here, 3,605 of them, the full base and the arch
+       ceilings — is now touched by NO triangle. Its normal comes out zero, so it isn't pushed
+       anywhere: inner[k] = positions[k] - 0, and it stays sitting on the OUTER surface. Those
+       stranded vertices then get welded into the inner shell and drag its bounding box out to
+       meet the outer one. That is the whole bug: at 12mm the inner shell measured 129mm wide
+       and its floor at -2.9mm, both LARGER than the fixed 115mm / +5.6mm outer skin, because
+       thousands of its vertices never actually moved inward.
+       The offset direction is a property of the geometry, not of which faces we chose to keep,
+       so compute it from the complete closed mesh (`indices`). The TRIM still applies to what
+       gets drawn — outerIdx decides which inner triangles are emitted below — but every vertex
+       now has a real inward normal and a real offset, so the inner shell sits wholly inside
+       the outer one at every wall thickness and the outside never moves. */
+    const inner=innerOffsets(plainSkin,indices,wall,vc);   // clean inside, offset off the closed shell
+    /* THE RIM IS THE ONE PLACE THE WALL IS ON SHOW.
+       Everywhere else the inside is hidden, so innerOffsets is free to relax it smooth and
+       only guarantees a MINIMUM thickness. Around the opening that freedom is visible: the
+       relaxation has neighbours on one side only, so the inner edge wanders, and measured on
+       this car at a 2mm setting the rim came out anywhere from 1.7mm to 6.8mm wide — a
+       four-to-one spread swinging back and forth around the arch. Seen edge-on through a
+       wheel arch that band IS the edge, and a band that keeps changing width reads as teeth.
+       Note the outer boundary curve itself is already fair (measured: 0.28mm p90 wobble) —
+       it was never the outline that looked ragged, it was the lip hanging off it.
+       So pin it: on the boundary the inner surface sits at exactly the asked-for thickness
+       along the direction it was already offset, and the ring just inside blends back to the
+       relaxed interior so there's no step where the two meet. */
+    if(trimmed){
+      const ec4=new Map(), u4=(a,b)=>a<b?a+"_"+b:b+"_"+a;
+      for(let q=0;q<outerIdx.length;q+=3){const t=[outerIdx[q],outerIdx[q+1],outerIdx[q+2]];
+        for(const[u,v]of[[t[0],t[1]],[t[1],t[2]],[t[2],t[0]]])ec4.set(u4(u,v),(ec4.get(u4(u,v))||0)+1);}
+      const edge=new Set(), ring=new Set();
+      for(const[k,c]of ec4){ if(c!==1)continue; const p2=k.indexOf("_");
+        edge.add(+k.slice(0,p2)); edge.add(+k.slice(p2+1)); }
+      for(let q=0;q<outerIdx.length;q+=3){const t=[outerIdx[q],outerIdx[q+1],outerIdx[q+2]];
+        if(t.some(v=>edge.has(v))) for(const v of t) if(!edge.has(v)) ring.add(v); }
+      /* Measured from the OUTER skin, not the clean copy the inside was built from. The rim
+         quads join positions[v] to inner[v], so that pair is the band you actually see; the
+         plain copy can be a stamp's depth away from it and pinning to the wrong one leaves
+         the lip varying by exactly that much (measured: it left some of the band at 0.9mm on
+         a 2mm setting). */
+      const setGap=(v,frac)=>{
+        const ox=positions[v*3], oy=positions[v*3+1], oz=positions[v*3+2];
+        let dx=inner[v*3]-ox, dy=inner[v*3+1]-oy, dz=inner[v*3+2]-oz;
+        const L=Math.hypot(dx,dy,dz); if(L<1e-6)return;
+        /* Only ever pull the lip IN, never push it out. innerOffsets deliberately shortens
+           the offset where the body turns tighter than the wall is thick, and that back-off is
+           what stops the inside folding through itself and throwing spikes. Forcing those
+           vertices back out to full thickness would undo exactly that protection, so the pin
+           caps an over-wide band and otherwise leaves the safe distance alone. */
+        const want=Math.min(1,wall/L), s=1+(want-1)*frac;
+        /* And s may only ever be <= 1. want<1 means pull in, which is fine; but on a
+           one-sided boundary normal the offset direction can tip outward, and then even
+           s=1 places the inner vertex beyond the outer skin — a single such vertex was
+           enough to widen the whole shell at 12mm. Clamp so the lip can never sit outside
+           the surface it hangs from. */
+        const sc=Math.min(1,s);
+        inner[v*3]=ox+dx*sc; inner[v*3+1]=oy+dy*sc; inner[v*3+2]=oz+dz*sc;
+      };
+      for(const v of edge) setGap(v,1);              // the lip itself: exact
+      for(const v of ring) setGap(v,0.5);            // one ring in: half way back to relaxed
+    }
+    /* FINAL GUARANTEE: nothing on the inner shell may sit outside the outer skin.
+       A handful of vertices on the arch ceilings touch kept triangles on one side only after
+       the trim, so their averaged normal tips slightly outward and the offset carries them a
+       few millimetres past the outer surface — measured, 2 vertices at 12mm, but that is
+       enough to widen the whole shell. They are interior to the opening, so the edge/ring pin
+       above never reaches them. Rather than special-case them, enforce the invariant directly:
+       the inner surface is the outer eroded inward, so no inner point can lie outside the
+       outer bounding surface. Any vertex that does is pulled back to the outer skin along the
+       line to its own outer position. This is a safety clamp on a few strays, not the offset
+       itself, so the wall everywhere else is untouched — and it makes the outside provably
+       independent of wall thickness. */
+    {
+      let ox0=Infinity,oy0=Infinity,oz0=Infinity,ox1=-Infinity,oy1=-Infinity,oz1=-Infinity;
+      for(let i=0;i<vc*3;i+=3){
+        if(positions[i]<ox0)ox0=positions[i]; if(positions[i]>ox1)ox1=positions[i];
+        if(positions[i+1]<oy0)oy0=positions[i+1]; if(positions[i+1]>oy1)oy1=positions[i+1];
+        if(positions[i+2]<oz0)oz0=positions[i+2]; if(positions[i+2]>oz1)oz1=positions[i+2];
+      }
+      for(let k=0;k<vc;k++){
+        let ix=inner[k*3],iy=inner[k*3+1],iz=inner[k*3+2];
+        const outside = ix<ox0||ix>ox1||iy<oy0||iy>oy1||iz<oz0||iz>oz1;
+        if(!outside)continue;
+        const px=positions[k*3],py=positions[k*3+1],pz=positions[k*3+2];
+        // largest t in [0,1] along outer->inner that still clears every face of the outer box
+        let t=1;
+        const lim=(o,p,lo,hi)=>{const d=o-p;
+          if(d>1e-9){ if(o>hi)t=Math.min(t,(hi-p)/d); }
+          else if(d<-1e-9){ if(o<lo)t=Math.min(t,(lo-p)/d); }};
+        lim(ix,px,ox0,ox1); lim(iy,py,oy0,oy1); lim(iz,pz,oz0,oz1);
+        t=Math.max(0,Math.min(1,t));
+        inner[k*3]=px+(ix-px)*t; inner[k*3+1]=py+(iy-py)*t; inner[k*3+2]=pz+(iz-pz)*t;
+      }
+    }
+    const pos2=new Float32Array(vc*6); pos2.set(positions,0); pos2.set(inner,vc*3);
+    const idx2=Array.from(outerIdx);
+    for(let q=0;q<outerIdx.length;q+=3)idx2.push(vc+outerIdx[q], vc+outerIdx[q+2], vc+outerIdx[q+1]);  // wound inward
+    if(trimmed){                                       // stitch the rim around the opening
+      const ec=new Map(), dir=new Set(), und=(a,b)=>a<b?a+"_"+b:b+"_"+a, dk=(a,b)=>a+"_"+b;
+      for(let q=0;q<outerIdx.length;q+=3){const t=[outerIdx[q],outerIdx[q+1],outerIdx[q+2]];
+        for(const[u,v]of[[t[0],t[1]],[t[1],t[2]],[t[2],t[0]]]){ec.set(und(u,v),(ec.get(und(u,v))||0)+1); dir.add(dk(u,v));}}
+      for(const[k,c]of ec){ if(c!==1)continue; const p2=k.indexOf("_"),a=+k.slice(0,p2),b=+k.slice(p2+1);
+        const s=dir.has(dk(a,b))?a:b, e=s===a?b:a;     // oriented as the outer skin winds it
+        idx2.push(e, s, vc+s); idx2.push(e, vc+s, vc+e);
+      }
+    }
+    positions=pos2; indices=idx2;
+    if(trimmed){       // the rim can leave a couple of non-manifold edges where the footprint pinches
+      const V2=[]; for(let k=0;k<positions.length;k+=3)V2.push([positions[k],positions[k+1],positions[k+2]]);
+      indices=sealMesh(V2,indices);
+      positions=new Float32Array(V2.length*3);
+      for(let k=0;k<V2.length;k++){positions[k*3]=V2[k][0];positions[k*3+1]=V2[k][1];positions[k*3+2]=V2[k][2];}
+    }
+    indices=dropStrayShells(positions,indices,trimmed?1:2);   // exactly the frame, nothing else
+    vol=Math.abs(facing(indices));                     // now the SHELL's material, not the lump
+  }
+  if(fieldHollow){
+    // the shell field already meshed the outer skin + inner wall as one closed surface.
+    // Do NOT run dropStrayShells here — the inner wall is a separate connected component from
+    // the outer skin (they meet only at the open underside), and dropStrayShells keeps just the
+    // largest, which would throw the whole inner wall away and leave a solid lump. Instead drop
+    // only trivially small fragments (grid-border crumbs), preserving both walls.
+    openedBottom = !p.closedBottom;
+    indices = dropTinyShells(positions, indices, 0.02);   // <2% of the biggest = a crumb
+    vol=Math.abs(facing(indices));
+  }
+  /* ONE WINDING FOR THE WHOLE SURFACE.
+     Every check up to here counts how often an edge is USED. Two faces on an edge is the
+     test for watertight, and a face that is wound backwards still uses its edges twice — so
+     a flipped face passes every one of those checks while being wrong. It matters twice
+     over: the volume is a SIGNED sum, so a backwards face quietly subtracts where it should
+     add, and a slicer reading the file sees a facet whose normal points into the part.
+     Measured before this pass: one or two backwards faces per model, always in the repaired
+     seams, none on a plain box. Sealing produced them because its own success test is
+     undirected too, so it had no way to notice.
+     On a closed surface the cure is exact rather than approximate: walk face to face across
+     shared edges, and wherever a neighbour uses the shared edge the SAME way round, flip it.
+     A correctly wound pair always uses its shared edge in opposite directions — the same
+     rule that makes a sheet of paper have two sides. Then check the total volume came out
+     positive, and if the whole shell ended up inside-out, turn it once. */
+  {
+    /* Measured first, kept only if it helps. Where an edge carries more than two faces the
+       walk has no single right answer, and on one wall setting a blind pass turned six bad
+       edges into fourteen. So count them, try, count again, and put it back if it did not
+       come out better. */
+    const dirBad=idx=>{
+      const d=new Map();
+      for(let q=0;q<idx.length;q+=3){
+        const a=idx[q],b=idx[q+1],c=idx[q+2];
+        for(const[u,v]of[[a,b],[b,c],[c,a]])d.set(u+">"+v,(d.get(u+">"+v)||0)+1);
+      }
+      let bad=0;
+      for(const[k,n]of d){ if(n>1)bad++;
+        const q2=k.indexOf(">"); if(!d.has(k.slice(q2+1)+">"+k.slice(0,q2)))bad++; }
+      return bad;
+    };
+    const before=dirBad(indices);
+    const snap=before>0?Array.prototype.slice.call(indices):null;
+    const nT=indices.length/3, em=new Map();
+    for(let t=0;t<nT;t++){
+      const a=indices[t*3],b=indices[t*3+1],c=indices[t*3+2];
+      for(const[u,v]of[[a,b],[b,c],[c,a]]){
+        const k=u<v?u+"_"+v:v+"_"+u;
+        let arr=em.get(k); if(!arr){arr=[];em.set(k,arr);} arr.push(t);
+      }
+    }
+    const seen=new Uint8Array(nT); let flipped=0;
+    for(let s0=0;s0<nT;s0++){
+      if(seen[s0])continue;
+      seen[s0]=1; const st=[s0];
+      while(st.length){
+        const t=st.pop();
+        const a=indices[t*3],b=indices[t*3+1],c=indices[t*3+2];
+        for(const[u,v]of[[a,b],[b,c],[c,a]]){
+          const arr=em.get(u<v?u+"_"+v:v+"_"+u); if(!arr)continue;
+          for(const n of arr){
+            if(n===t||seen[n])continue;
+            const na=indices[n*3],nb=indices[n*3+1],nc=indices[n*3+2];
+            if((na===u&&nb===v)||(nb===u&&nc===v)||(nc===u&&na===v)){   // same way round: backwards
+              indices[n*3+1]=nc; indices[n*3+2]=nb; flipped++;
+            }
+            seen[n]=1; st.push(n);
+          }
+        }
+      }
+    }
+    if(snap && dirBad(indices)>=before){                 // no better: hand back what we had
+      for(let q=0;q<snap.length;q++)indices[q]=snap[q];
+    } else if(flipped){
+      vol=facing(indices);
+      if(vol<0){ for(let q=0;q<indices.length;q+=3){const t2=indices[q+1];indices[q+1]=indices[q+2];indices[q+2]=t2;} vol=-vol; }
+    }
+  }
+  /* Say which way this was built. Two hollowing paths now exist and they fair an open edge
+     differently — the field path lands exactly on the solid body's width, the vertex-offset
+     path pulls in about 0.4mm — so "did the outside move?" only has a sharp answer once you
+     know which one ran. It also lets the app tell someone why a 1.5mm wall behaves unlike a
+     6mm one on the same model, instead of leaving it as a mystery. */
+  /* WELD COINCIDENT VERTICES — BUT ONLY WITHIN ONE SHEET.
+     A dual contour places one vertex per cell, and where a surface passes exactly through a
+     grid plane two neighbouring cells can put theirs at the same point. The triangles between
+     them then have zero area: 94 of them on a raised badge here, from 47 duplicated
+     positions, 43 on the x=0 boundary. They carry no normal and an exact-STEP export will
+     refuse them.
+     Welding blindly is worse than the problem. A hollow shell has an outer skin and an inner
+     wall, and where the wall pinches they can put vertices at the same point WITHOUT being
+     the same surface — merging those pinches the two sheets together and makes a non-manifold
+     edge, which is the fin problem in another guise (measured: 8 non-manifold edges on a
+     thin-walled model). So a pair is only welded when the two vertices already share a
+     triangle edge: that proves they are neighbours on ONE sheet, and a zero-area triangle
+     between them is exactly that case. Two sheets that merely touch share no edge and are
+     left alone. */
+  {
+    const q = Math.min(hx,hy,hz)*1e-3;
+    const key=i=>Math.round(positions[i*3]/q)+"_"+Math.round(positions[i*3+1]/q)+"_"+Math.round(positions[i*3+2]/q);
+    // which vertices sit at the same point at all
+    const at=new Map();
+    for(let i=0;i<positions.length/3;i++){
+      const k=key(i); let L=at.get(k); if(!L){L=[];at.set(k,L);} L.push(i);
+    }
+    let anyDup=false; for(const L of at.values()) if(L.length>1){anyDup=true;break;}
+    if(anyDup){
+      // of those, which pairs are joined by an edge of some triangle (same sheet)
+      const mate=new Int32Array(positions.length/3);
+      for(let i=0;i<mate.length;i++)mate[i]=i;
+      const find=x=>{while(mate[x]!==x)x=mate[x]=mate[mate[x]];return x;};
+      for(let t=0;t<indices.length;t+=3){
+        const v=[indices[t],indices[t+1],indices[t+2]];
+        for(let e=0;e<3;e++){
+          const a2=v[e], b2=v[(e+1)%3];
+          if(a2!==b2 && key(a2)===key(b2)){ const ra=find(a2), rb=find(b2); if(ra!==rb)mate[ra]=rb; }
+        }
+      }
+      // compact, keeping the first survivor of each welded group
+      const remap=new Int32Array(mate.length).fill(-1);
+      const out=[];
+      for(let i=0;i<mate.length;i++){
+        const r=find(i);
+        if(remap[r]<0){ remap[r]=out.length/3; out.push(positions[r*3],positions[r*3+1],positions[r*3+2]); }
+        remap[i]=remap[r];
+      }
+      if(out.length/3 < positions.length/3){
+        const tris=[];
+        for(let t=0;t<indices.length;t+=3){
+          const a2=remap[indices[t]], b2=remap[indices[t+1]], c2=remap[indices[t+2]];
+          if(a2===b2||b2===c2||c2===a2)continue;   // collapsed onto a point: gone, and it bounded nothing
+          tris.push(a2,b2,c2);
+        }
+        positions=new Float32Array(out); indices=tris;
+      }
+    }
+  }
+  /* Which features the grid could not resolve. Reported rather than fixed: a finer grid is
+     the only real remedy and it is cubic in cost, so the choice belongs to the person. The
+     bar is a cell and a half across — below that the two sides of the footprint fall in the
+     same cell and the mesher has nothing to interpolate between. */
+  const tooSmall=[];
+  { const cell=Math.max(hx,hy,hz);
+    /* Which quality step WOULD resolve it — the difference between a dead end and a decision.
+       The cell scales inversely with the resolution actually built, so a step that reaches
+       resolution r gives a cell of cell*res/r. Only steps finer than the current one are
+       offered, and only when they would genuinely be enough. */
+    const order=["fast","normal","fine"];
+    const cur=order.indexOf(p.hullQuality&&QUAL[p.hullQuality]?p.hullQuality:"normal");
+    const wouldFix=span=>{
+      for(let i=cur+1;i<order.length;i++){
+        const q2=QUAL[order[i]];
+        const r2=Math.max(20,Math.min(q2.cap,Math.round((p.hullRes||Math.max(p.stations||48,40))*q2.k)));
+        if(r2<=res)continue;                       // no finer than we already are
+        if(span >= cell*(res/r2)*1.5) return order[i];
+      }
+      return null;
+    };
+    for(const f of feats){
+      if(!f||!(f.span>0))continue;
+      if(f.span < cell*1.5) tooSmall.push({name:f.name, span:f.span, cell:cell, fixedBy:wouldFix(f.span)});
+    }
+  }
+  /* REPAIR THE INVERTED FACETS AROUND A CARVED RIM.
+     "Cut into the shape" meshes features as prisms in the field, so every pocket brings a
+     sharp concave edge. A dual contour puts ONE vertex in a cell, which cannot represent a
+     sharp step, and the facets around each rim invert. Measured on a real traced car with 153
+     pockets, counting adjacent triangles whose normals disagree by more than 134 degrees:
+
+         no features, either mode      187      <- the model's own baseline
+         press on the surface, 153     196      <- stamp never makes a sharp edge
+         cut into the shape, 153      2530      <- 13x, and this is what "looks awful" is
+
+     It is NOT resolution: measured at res 108/139/165 the count tracks the triangle count and
+     the RATE stays flat at about 2%, while the build goes from 7s to 140s. It is not the wall
+     either (a 4mm wall on the same pockets is worse, not better). It scales with the pockets
+     themselves — 0/38/76/153 features gives 187/1304/2151/2530 — so the tears are AT the rims.
+
+     The existing winding pass cannot see this: it fixes which way a facet faces, not where its
+     vertices are, and an inverted facet here is correctly wound around badly placed points.
+
+     So relax only the vertices that actually carry an inversion, toward the average of their
+     neighbours, capped at half a cell so a rim cannot be rounded away. Same technique already
+     used to fair the underside opening's edge, and for the same reason.
+
+         3 passes, cap 0.5 cells:   2530 -> 465 torn, 88% of the feature-induced tearing gone
+         watertight throughout:     0 boundary edges, 0 non-manifold
+         the OUTSIDE does not move: bbox L 199.503 -> 199.454, W and H unchanged to 3 decimals
+
+     Bounded at three passes on purpose. One pass already takes 2530 to 742; the third is worth
+     277 more and the fourth would start trading crispness for a number. */
+  {
+    const SPIKE_PASSES = 3, SPIKE_CAP = cell * 0.5;
+    const nT = indices.length / 3;
+    const triN = t => {
+      const a = indices[t*3]*3, b = indices[t*3+1]*3, c = indices[t*3+2]*3;
+      const ux = positions[b]-positions[a], uy = positions[b+1]-positions[a+1], uz = positions[b+2]-positions[a+2];
+      const vx = positions[c]-positions[a], vy = positions[c+1]-positions[a+1], vz = positions[c+2]-positions[a+2];
+      let X = uy*vz-uz*vy, Y = uz*vx-ux*vz, Z = ux*vy-uy*vx;
+      const L = Math.hypot(X,Y,Z) || 1; return [X/L, Y/L, Z/L];
+    };
+    const ek = (a,b) => a<b ? a+"_"+b : b+"_"+a;
+    /* TOPOLOGY IS BUILT ONCE. Relaxing moves vertices; it never changes which triangle owns
+       which index, so the edge map and the vertex adjacency are identical on every pass. The
+       first cut of this rebuilt both inside the loop and cost 16.7s against 7.0s for the same
+       model — nearly all of it re-deriving maps that had not changed. */
     const em = new Map();
-    for (let t = 0; t < nT; t++) {
-      const v = [I[t*3], I[t*3+1], I[t*3+2]];
-      for (let k = 0; k < 3; k++) {
-        const a = v[k], b = v[(k+1)%3], key = a < b ? a+"_"+b : b+"_"+a;
-        let L = em.get(key); if (!L) { L = []; em.set(key, L); }
-        L.push([t, a < b ? 0 : 1]);
+    for (let q=0,t=0; q<indices.length; q+=3,t++) {
+      const T = [indices[q],indices[q+1],indices[q+2]];
+      for (const [u,v] of [[T[0],T[1]],[T[1],T[2]],[T[2],T[0]]]) {
+        const k = ek(u,v); let a2 = em.get(k); if(!a2){a2=[];em.set(k,a2);} a2.push(t); }
+    }
+    const adj = new Map();
+    for (let q=0; q<indices.length; q+=3) {
+      const T = [indices[q],indices[q+1],indices[q+2]];
+      for (const [u,v] of [[T[0],T[1]],[T[1],T[2]],[T[2],T[0]]]) {
+        if(!adj.has(u))adj.set(u,new Set()); if(!adj.has(v))adj.set(v,new Set());
+        adj.get(u).add(v); adj.get(v).add(u); }
+    }
+    for (let pass=0; pass<SPIKE_PASSES; pass++) {
+      const N = []; for (let t=0;t<nT;t++) N.push(triN(t));
+      const bad = new Set();
+      for (const ts of em.values()) {
+        if (ts.length !== 2) continue;
+        const [a,b] = ts;
+        if (N[a][0]*N[b][0] + N[a][1]*N[b][1] + N[a][2]*N[b][2] < -0.7)
+          for (const t of [a,b]) for (const k of [indices[t*3],indices[t*3+1],indices[t*3+2]]) bad.add(k);
+      }
+      if (!bad.size) break;                       // nothing inverted: a plain body pays nothing
+      const orig = new Float32Array(positions);
+      for (const k of bad) {
+        const nb = adj.get(k); if (!nb || nb.size < 3) continue;
+        let sx=0, sy=0, sz=0;
+        for (const j of nb) { sx+=orig[j*3]; sy+=orig[j*3+1]; sz+=orig[j*3+2]; }
+        let dx = sx/nb.size - orig[k*3], dy = sy/nb.size - orig[k*3+1], dz = sz/nb.size - orig[k*3+2];
+        const L = Math.hypot(dx,dy,dz);
+        if (L > SPIKE_CAP) { dx *= SPIKE_CAP/L; dy *= SPIKE_CAP/L; dz *= SPIKE_CAP/L; }
+        positions[k*3] = orig[k*3]+dx; positions[k*3+1] = orig[k*3+1]+dy; positions[k*3+2] = orig[k*3+2]+dz;
       }
     }
-    let bad = 0;
-    for (const L of em.values()) {
-      if (L.length !== 2) continue;
-      if (!uni(L[0][0], L[1][0], L[0][1] === L[1][1] ? 1 : 0)) bad++;
-    }
-    return bad;
-  };
-  const badDirected = g => {
-    const I = g.indices, d = new Map();
-    for (let q = 0; q < I.length; q += 3) {
-      const t = [I[q], I[q+1], I[q+2]];
-      for (const [u, v] of [[t[0],t[1]],[t[1],t[2]],[t[2],t[0]]])
-        d.set(u+">"+v, (d.get(u+">"+v) || 0) + 1);
-    }
-    let bad = 0;
-    for (const [k, n] of d) {
-      const i = k.indexOf(">");
-      if (n > 1 || !d.has(k.slice(i+1) + ">" + k.slice(0, i))) bad++;
-    }
-    return bad;
-  };
+  }
+  return {positions,indices,volume:Math.abs(vol),hollow:(hollow&&wall>0),openBottom:openedBottom,
+          thinWallFallback,
+          tooSmall:tooSmall.length?tooSmall:null,
+          fieldHollow,hullRes:res};
+}
+function checkManifold(indices){
+  const m=new Map(),key=(a,b)=>a<b?a+"_"+b:b+"_"+a;
+  for(let k=0;k<indices.length;k+=3){
+    const a=indices[k],b=indices[k+1],c=indices[k+2];
+    for(const[u,v]of[[a,b],[b,c],[c,a]]){const kk=key(u,v);m.set(kk,(m.get(kk)||0)+1);}
+  }
+  let boundary=0,nonman=0;
+  for(const v of m.values()){if(v===1)boundary++;else if(v>2)nonman++;}
+  return {boundary,nonman,watertight:boundary===0&&nonman===0};
+}
 
-  let HF = null;
-  try { HF = JSON.parse(fs.readFileSync(new URL("./fixture-hollow.json", import.meta.url), "utf8")); }
-  catch {}
+/* binary STL */
+function toSTL(positions,indices){
+  const n=indices.length/3, buf=new ArrayBuffer(84+n*50), dv=new DataView(buf);
+  dv.setUint32(80,n,true); let o=84;
+  for(let k=0;k<indices.length;k+=3){
+    const a=indices[k]*3,b=indices[k+1]*3,c=indices[k+2]*3;
+    const ux=positions[b]-positions[a],uy=positions[b+1]-positions[a+1],uz=positions[b+2]-positions[a+2];
+    const vx=positions[c]-positions[a],vy=positions[c+1]-positions[a+1],vz=positions[c+2]-positions[a+2];
+    let nx=uy*vz-uz*vy,ny=uz*vx-ux*vz,nz=ux*vy-uy*vx;const l=Math.hypot(nx,ny,nz)||1;nx/=l;ny/=l;nz/=l;
+    dv.setFloat32(o,nx,true);dv.setFloat32(o+4,ny,true);dv.setFloat32(o+8,nz,true);o+=12;
+    for(const idx of[a,b,c]){dv.setFloat32(o,positions[idx],true);dv.setFloat32(o+4,positions[idx+1],true);dv.setFloat32(o+8,positions[idx+2],true);o+=12;}
+    dv.setUint16(o,0,true);o+=2;
+  }
+  return new Blob([buf],{type:"model/stl"});
+}
 
-  t("no fins: a hollow shell can be consistently wound, at every wall", () => {
-    ok(HF, "fixture-hollow.json present"); if (!HF) return;
-    for (const wt of [1.8, 4.2, 8, 12]) {
-      const g = API.makeVisualHull({ ...HF, features:null, hullHollow:true, wallThickness:wt });
-      ok(orientable(g) === 0,
-         `wall ${wt}: no consistent winding exists — the shell has folded onto itself`);
+/* =========================================================================
+   POINT CLOUDS — .PLY / .XYZ / .PCD, import and export.
+   A point cloud is just the vertices, no faces. Two ways to make one from a model:
+   dedupeVerts() keeps the mesh's own corners (compact, exact); samplePointCloud() scatters
+   extra points across every triangle so a downstream tool that reconstructs a surface has
+   enough density to follow the shape. Import returns the same flat [x,y,z,...] soup the STL
+   path uses, plus optional per-point RGB, so a scan drops straight into the workshop as a
+   display mesh (rebuilt as points) and can be traced against.
+   All pure and headless-testable — no DOM, no THREE. Coordinates are the studio's own mm,
+   model-Z up; the display layer applies the same -90° X rotation STL meshes get.
+   ========================================================================= */
+
+// Collapse triangle-soup vertices to unique points (quantized weld) → {pts:Float32Array, n}.
+// A mesh corner shared by k triangles appears once, so an STL's 3N verts become the real V.
+function dedupeVerts(positions, weld){
+  const q = weld || 1e-4;                 // mm grid the weld snaps to (0.1µm default = essentially exact)
+  const seen = new Map(), out = [];
+  /* `index` maps each ORIGINAL vertex to its welded one. Point-cloud export never needed it —
+     it only wants the distinct points — but welding a MESH does, because the triangles have
+     to be re-pointed at the survivors. Returned alongside the old fields so every existing
+     caller is untouched. */
+  const index = new Int32Array(positions.length/3);
+  for(let i=0;i<positions.length;i+=3){
+    const x=positions[i],y=positions[i+1],z=positions[i+2];
+    const key = Math.round(x/q)+"_"+Math.round(y/q)+"_"+Math.round(z/q);
+    const hit = seen.get(key);
+    if(hit!==undefined){ index[i/3]=hit; continue; }
+    const at = out.length/3;
+    seen.set(key,at); index[i/3]=at; out.push(x,y,z);
+  }
+  return { pts:new Float32Array(out), n:out.length/3, index };
+}
+
+// Scatter `target` points across the surface, density proportional to triangle area, so a
+// reconstruction (Poisson, ball-pivot) has enough to work with. Includes every original
+// vertex first, then fills the rest by area-weighted barycentric sampling. Deterministic.
+function samplePointCloud(positions, indices, target){
+  const base = dedupeVerts(positions);
+  const want = Math.max(base.n, target|0 || base.n);
+  const extra = want - base.n;
+  const out = Array.from(base.pts);
+  if(extra>0 && indices && indices.length){
+    // cumulative areas for area-weighted face pick
+    const nt = indices.length/3, area = new Float64Array(nt); let tot=0;
+    for(let t=0;t<nt;t++){
+      const a=indices[t*3]*3,b=indices[t*3+1]*3,c=indices[t*3+2]*3;
+      const ux=positions[b]-positions[a],uy=positions[b+1]-positions[a+1],uz=positions[b+2]-positions[a+2];
+      const vx=positions[c]-positions[a],vy=positions[c+1]-positions[a+1],vz=positions[c+2]-positions[a+2];
+      const cx=uy*vz-uz*vy,cy=uz*vx-ux*vz,cz=ux*vy-uy*vx;
+      area[t]=0.5*Math.hypot(cx,cy,cz); tot+=area[t];
     }
-  });
-
-  t("no fins: and the winding it ends up with is the consistent one", () => {
-    ok(HF, "fixture-hollow.json present"); if (!HF) return;
-    for (const wt of [4.2, 8]) {
-      const g = API.makeVisualHull({ ...HF, features:null, hullHollow:true, wallThickness:wt });
-      ok(badDirected(g) === 0, `wall ${wt}: ${badDirected(g)} edges wound the same way twice`);
+    const cum=new Float64Array(nt); let acc=0; for(let t=0;t<nt;t++){acc+=area[t];cum[t]=acc;}
+    // deterministic low-discrepancy sequence (no Math.random, so builds are reproducible)
+    let s=0.5;
+    const rnd=()=>{ s=(s+0.6180339887498949)%1; return s; };
+    for(let e=0;e<extra;e++){
+      const pick=rnd()*tot; let lo=0,hi=nt-1;
+      while(lo<hi){const mid=(lo+hi)>>1; if(cum[mid]<pick)lo=mid+1; else hi=mid;}
+      const a=indices[lo*3]*3,b=indices[lo*3+1]*3,c=indices[lo*3+2]*3;
+      let r1=rnd(), r2=rnd(); if(r1+r2>1){r1=1-r1;r2=1-r2;} const r0=1-r1-r2;
+      out.push(
+        positions[a]*r0+positions[b]*r1+positions[c]*r2,
+        positions[a+1]*r0+positions[b+1]*r1+positions[c+1]*r2,
+        positions[a+2]*r0+positions[b+2]*r1+positions[c+2]*r2);
     }
-  });
+  }
+  return { pts:new Float32Array(out), n:out.length/3 };
+}
 
-  t("no fins: a solid body was never the problem and must stay that way", () => {
-    ok(HF, "fixture-hollow.json present"); if (!HF) return;
-    const g = API.makeVisualHull({ ...HF, features:null, hullHollow:false });
-    ok(orientable(g) === 0, "solid body must be orientable");
-    ok(badDirected(g) === 0, "solid body must be consistently wound");
-  });
+// ---- EXPORT ----
+
+// .XYZ — plain text, one point per line "x y z" (+ " r g b" when colors given, 0..255).
+function toXYZ(pts, colors){
+  const n=pts.length/3, rows=new Array(n);
+  for(let i=0;i<n;i++){
+    let s=pts[i*3].toFixed(4)+" "+pts[i*3+1].toFixed(4)+" "+pts[i*3+2].toFixed(4);
+    if(colors) s+=" "+(colors[i*3]|0)+" "+(colors[i*3+1]|0)+" "+(colors[i*3+2]|0);
+    rows[i]=s;
+  }
+  return new Blob([rows.join("\n")+"\n"],{type:"text/plain"});
+}
+
+// .PLY — ascii or binary_little_endian. Stores points; RGB as uchar when colors given.
+function toPLY(pts, colors, binary){
+  const n=pts.length/3, hasC=!!colors;
+  let head="ply\n"+(binary?"format binary_little_endian 1.0\n":"format ascii 1.0\n")
+    +"comment LEE3D point cloud\n"
+    +"element vertex "+n+"\n"
+    +"property float x\nproperty float y\nproperty float z\n"
+    +(hasC?"property uchar red\nproperty uchar green\nproperty uchar blue\n":"")
+    +"end_header\n";
+  if(!binary){
+    const rows=new Array(n);
+    for(let i=0;i<n;i++){
+      let s=pts[i*3]+" "+pts[i*3+1]+" "+pts[i*3+2];
+      if(hasC)s+=" "+(colors[i*3]|0)+" "+(colors[i*3+1]|0)+" "+(colors[i*3+2]|0);
+      rows[i]=s;
+    }
+    return new Blob([head+rows.join("\n")+"\n"],{type:"model/ply"});
+  }
+  const stride = 12 + (hasC?3:0);
+  const hb = new TextEncoder().encode(head);
+  const buf = new ArrayBuffer(hb.length + n*stride);
+  const u8 = new Uint8Array(buf); u8.set(hb,0);
+  const dv = new DataView(buf); let o=hb.length;
+  for(let i=0;i<n;i++){
+    dv.setFloat32(o,pts[i*3],true); dv.setFloat32(o+4,pts[i*3+1],true); dv.setFloat32(o+8,pts[i*3+2],true); o+=12;
+    if(hasC){ u8[o]=colors[i*3]|0; u8[o+1]=colors[i*3+1]|0; u8[o+2]=colors[i*3+2]|0; o+=3; }
+  }
+  return new Blob([buf],{type:"model/ply"});
+}
+
+// .PCD — Point Cloud Library ascii format. RGB packed into a single float field (PCL convention).
+function toPCD(pts, colors){
+  const n=pts.length/3, hasC=!!colors;
+  let head="# .PCD v0.7 - Point Cloud Data file format\nVERSION 0.7\n"
+    +(hasC?"FIELDS x y z rgb\nSIZE 4 4 4 4\nTYPE F F F F\nCOUNT 1 1 1 1\n":"FIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nCOUNT 1 1 1\n")
+    +"WIDTH "+n+"\nHEIGHT 1\nVIEWPOINT 0 0 0 1 0 0 0\nPOINTS "+n+"\nDATA ascii\n";
+  const rows=new Array(n), f32=new Float32Array(1), u32=new Uint32Array(f32.buffer);
+  for(let i=0;i<n;i++){
+    let s=pts[i*3]+" "+pts[i*3+1]+" "+pts[i*3+2];
+    if(hasC){ u32[0]=((colors[i*3]|0)<<16)|((colors[i*3+1]|0)<<8)|(colors[i*3+2]|0); s+=" "+f32[0]; }
+    rows[i]=s;
+  }
+  return new Blob([head+rows.join("\n")+"\n"],{type:"text/plain"});
+}
+
+// ---- IMPORT ----
+// Every parser returns { pts:Float32Array (x,y,z soup), colors:Uint8Array|null, n }.
+
+function parseXYZ(text){
+  const pts=[], cols=[]; let anyC=false;
+  const lines=text.split(/\r?\n/);
+  for(const ln of lines){
+    const t=ln.trim(); if(!t||t[0]==="#"||t[0]==="/")continue;
+    const p=t.split(/[\s,]+/).map(Number);
+    if(p.length<3||!isFinite(p[0])||!isFinite(p[1])||!isFinite(p[2]))continue;
+    pts.push(p[0],p[1],p[2]);
+    if(p.length>=6&&isFinite(p[3])){ anyC=true; cols.push(p[3]|0,p[4]|0,p[5]|0); }
+    else cols.push(0,0,0);
+  }
+  return { pts:new Float32Array(pts), colors:anyC?new Uint8Array(cols):null, n:pts.length/3 };
+}
+
+function parsePLY(buf){
+  // header is always ascii; body may be ascii or binary_little_endian
+  const bytes = buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf;
+  const headEnd = (()=>{ const marker="end_header"; const txt=new TextDecoder().decode(bytes.subarray(0,Math.min(bytes.length,65536)));
+    const i=txt.indexOf(marker); if(i<0)throw new Error("not a PLY (no end_header)");
+    // byte offset just after the newline following end_header
+    let b=new TextEncoder().encode(txt.slice(0,i+marker.length)).length;
+    while(b<bytes.length && bytes[b]!==0x0a) b++; return b+1; })();
+  const header=new TextDecoder().decode(bytes.subarray(0,headEnd));
+  const ascii=/format\s+ascii/i.test(header);
+  const mV=header.match(/element\s+vertex\s+(\d+)/i); const nV=mV?+mV[1]:0;
+  // property order within a vertex
+  const props=[]; let inV=false;
+  for(const ln of header.split(/\r?\n/)){
+    const t=ln.trim();
+    if(/^element\s+vertex/i.test(t)){inV=true;continue;}
+    if(/^element\s/i.test(t)){inV=false;continue;}
+    if(inV){ const m=t.match(/^property\s+(\S+)\s+(\S+)/i); if(m)props.push({type:m[1].toLowerCase(),name:m[2].toLowerCase()}); }
+  }
+  const ix=props.findIndex(p=>p.name==="x"), iy=props.findIndex(p=>p.name==="y"), iz=props.findIndex(p=>p.name==="z");
+  const ir=props.findIndex(p=>p.name==="red"||p.name==="r"), ig=props.findIndex(p=>p.name==="green"||p.name==="g"), ib=props.findIndex(p=>p.name==="blue"||p.name==="b");
+  const hasC = ir>=0&&ig>=0&&ib>=0;
+  const pts=new Float32Array(nV*3), cols=hasC?new Uint8Array(nV*3):null;
+  const tSize=t=>({char:1,uchar:1,int8:1,uint8:1,short:2,ushort:2,int16:2,uint16:2,int:4,uint:4,int32:4,uint32:4,float:4,float32:4,double:8,float64:8}[t]||4);
+  if(ascii){
+    const txt=new TextDecoder().decode(bytes.subarray(headEnd));
+    const lines=txt.split(/\r?\n/); let vi=0;
+    for(const ln of lines){
+      if(vi>=nV)break; const t=ln.trim(); if(!t)continue;
+      const f=t.split(/\s+/).map(Number);
+      if(f.length<props.length)continue;
+      pts[vi*3]=f[ix]; pts[vi*3+1]=f[iy]; pts[vi*3+2]=f[iz];
+      if(hasC){ cols[vi*3]=f[ir]|0; cols[vi*3+1]=f[ig]|0; cols[vi*3+2]=f[ib]|0; }
+      vi++;
+    }
+    return { pts, colors:hasC?cols:null, n:vi };
+  }
+  // binary little-endian
+  const dv=new DataView(bytes.buffer, bytes.byteOffset);
+  const read=(t,o)=>{ switch(t){
+    case"float":case"float32":return dv.getFloat32(o,true);
+    case"double":case"float64":return dv.getFloat64(o,true);
+    case"uchar":case"uint8":case"char":case"int8":return bytes[o];
+    case"short":case"int16":return dv.getInt16(o,true);
+    case"ushort":case"uint16":return dv.getUint16(o,true);
+    case"int":case"int32":return dv.getInt32(o,true);
+    case"uint":case"uint32":return dv.getUint32(o,true);
+    default:return dv.getFloat32(o,true);
+  }};
+  let o=headEnd;
+  const rowSize=props.reduce((s,p)=>s+tSize(p.type),0);
+  for(let v=0;v<nV;v++){
+    let off=o; const vals=new Array(props.length);
+    for(let k=0;k<props.length;k++){ vals[k]=read(props[k].type,off); off+=tSize(props[k].type); }
+    pts[v*3]=vals[ix]; pts[v*3+1]=vals[iy]; pts[v*3+2]=vals[iz];
+    if(hasC){ cols[v*3]=vals[ir]|0; cols[v*3+1]=vals[ig]|0; cols[v*3+2]=vals[ib]|0; }
+    o+=rowSize;
+  }
+  return { pts, colors:hasC?cols:null, n:nV };
+}
+
+function parsePCD(text){
+  const lines=text.split(/\r?\n/);
+  let fields=[], n=0, dataMode="ascii", hi=0;
+  for(let i=0;i<lines.length;i++){
+    const t=lines[i].trim();
+    if(/^FIELDS/i.test(t)) fields=t.split(/\s+/).slice(1);
+    else if(/^POINTS/i.test(t)) n=+t.split(/\s+/)[1];
+    else if(/^WIDTH/i.test(t) && !n) n=+t.split(/\s+/)[1];
+    else if(/^DATA/i.test(t)){ dataMode=(t.split(/\s+/)[1]||"ascii").toLowerCase(); hi=i+1; break; }
+  }
+  const ix=fields.indexOf("x"), iy=fields.indexOf("y"), iz=fields.indexOf("z");
+  const irgb=fields.indexOf("rgb")>=0?fields.indexOf("rgb"):fields.indexOf("rgba");
+  const pts=[], cols=[]; let anyC=false;
+  const f32=new Float32Array(1), u32=new Uint32Array(f32.buffer);
+  for(let i=hi;i<lines.length;i++){
+    const t=lines[i].trim(); if(!t)continue;
+    const f=t.split(/\s+/);
+    if(f.length<3)continue;
+    const x=+f[ix],y=+f[iy],z=+f[iz];
+    if(!isFinite(x)||!isFinite(y)||!isFinite(z))continue;
+    pts.push(x,y,z);
+    if(irgb>=0 && f[irgb]!=null){ f32[0]=+f[irgb]; const p=u32[0]; cols.push((p>>16)&255,(p>>8)&255,p&255); anyC=true; }
+    else cols.push(0,0,0);
+    if(pts.length/3>=n && n) break;
+  }
+  return { pts:new Float32Array(pts), colors:anyC?new Uint8Array(cols):null, n:pts.length/3 };
+}
+
+// dispatch on filename/extension → {pts,colors,n}. buf may be ArrayBuffer or string.
+function parsePointCloud(name, buf){
+  const ext=(name||"").toLowerCase().split(".").pop();
+  const asText=()=> typeof buf==="string" ? buf : new TextDecoder().decode(buf instanceof ArrayBuffer?new Uint8Array(buf):buf);
+  if(ext==="xyz"||ext==="pts"||ext==="txt") return parseXYZ(asText());
+  if(ext==="pcd") return parsePCD(asText());
+  if(ext==="ply"){ const ab = typeof buf==="string" ? new TextEncoder().encode(buf).buffer : buf; return parsePLY(ab); }
+  // sniff if extension is unknown
+  const head = asText().slice(0,64);
+  if(/^ply/i.test(head)) { const ab = typeof buf==="string" ? new TextEncoder().encode(buf).buffer : buf; return parsePLY(ab); }
+  if(/^#\s*\.PCD/i.test(head)) return parsePCD(asText());
+  return parseXYZ(asText());
 }
 
 
-// =====================================================================================
-// A TRACED OUTLINE IS DATA, NOT A SUGGESTION.
-//
-// A DXF arrives with x,y already plotted — those are the file's own exact coordinates, and
-// the only thing this app is meant to add is z. So thinning an outline to fit a budget must
-// never MOVE it. The old resamplePoly took every (N-1)th point by INDEX, and index position
-// has nothing to do with shape: a corner survived or was dropped by where it happened to
-// fall in the list. On a 240-point rectangle it missed the true corners by 3.33mm.
-// =====================================================================================
-{
-  const rect = () => {
-    const pts = [], corners = [[0,0],[100,0],[100,40],[0,40]];
-    for (let c = 0; c < 4; c++) {
-      const a = corners[c], b = corners[(c+1)%4];
-      for (let i = 0; i < 60; i++) { const t = i/60; pts.push([a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t]); }
+/* =========================================================================
+   PROFILE MODEL  (the editable state -> shared JSON schema)
+   ========================================================================= */
+const DEFAULT_LEN=200;   // standard body length (mm) used when no real-world scale is set
+const FRONT_AT=0.2, REAR_AT=0.8;   // where front/rear cross-sections sit along the length
+const PRESETS={
+  hotrod:{len:180,nose:28,cowl:40,roof:60,roofPos:.55,tail:30,sill:8, nw:14,mw:38,wp:.45,tw:22,round:1.4},
+  coupe :{len:200,nose:24,cowl:38,roof:54,roofPos:.6 ,tail:34,sill:7, nw:18,mw:44,wp:.5 ,tw:30,round:1.6},
+  sedan :{len:230,nose:30,cowl:44,roof:62,roofPos:.52,tail:46,sill:9, nw:22,mw:46,wp:.5 ,tw:40,round:1.8},
+  suv   :{len:210,nose:38,cowl:56,roof:84,roofPos:.5 ,tail:74,sill:14,nw:26,mw:52,wp:.5 ,tw:48,round:2.2},
+};
+const S={...PRESETS.hotrod, wall:1.8, st:72, seg:56, opacity:.55, mode:"projection", carveMode:"field", quality:"normal", sepBottom:true, shape:"loft", revShape:"sphere", revSize:50, widMM:0, hgtMM:0, widK:1, hgtK:1, hullCrisp:0.5,
+  wallTop:1.8, wallSide:1.8, wallBottom:1.8, wallPerFace:false, noDetail:false, openArches:false, hullHollow:true /* a frame is always a shell */};
+// NOTE: revolve primitives (sphere/cylinder/dome/cone) are retired from the UI — this tool
+// is for IMPORTED shapes. makeRevolve() stays so old saved files still load.
+let traced={top:null,bottom:null,width:null,widthBot:null,section:null,sections:null,frontHull:null,rearHull:null,sidePoly:null,sidePolyR:null,topPoly:null,frontPoly:null,bottomPoly:null,natWid:null,natHgt:null};
+let _lastRoundHint=null;   // the plan the round-object hint was last shown for
+let features=[];   // [{view,poly:[[u,v]…],depth,soft,name}] // mm-space / normalized profiles when traced
+
+function buildTop(){
+  if(traced.top)return traced.top;
+  const rp=S.roofPos;
+  return [[0,S.nose],[0.16,S.cowl],[clamp(rp-0.1,0.2,0.7),S.roof*0.94],
+          [rp,S.roof],[clamp(rp+0.13,0.3,0.85),S.roof*0.9],[0.85,lerp(S.roof,S.tail,0.7)],[1,S.tail]];
+}
+function buildBottom(){
+  if(traced.bottom)return traced.bottom;
+  return [[0,S.sill+1.5],[0.2,S.sill],[0.5,Math.max(1,S.sill-1)],[0.8,S.sill],[1,S.sill+1.5]];
+}
+function buildWidth(){
+  if(traced.width)return traced.width;
+  return [[0,S.nw],[0.16,S.mw*0.82],[S.wp,S.mw],[0.85,S.tw],[1,S.tw*0.8]];
+}
+function buildSection(){
+  // normalized cross-section: [[xf 0..1 across width, zNorm 0..1 height]]. null = parametric arc.
+  return traced.section&&traced.section.length>1?traced.section:null;
+}
+// Serialize a canvas/image view to a compact JPEG dataURL (native res so trace points stay aligned)
+function imgToDataURL(im){try{
+  if(!im)return null;
+  if(im instanceof HTMLCanvasElement)return im.toDataURL("image/jpeg",0.72);
+  const w=im.naturalWidth||im.width, h=im.naturalHeight||im.height; if(!w||!h)return null;
+  const c=document.createElement("canvas");c.width=w;c.height=h;c.getContext("2d").drawImage(im,0,0);
+  return c.toDataURL("image/jpeg",0.72);
+}catch(_){return null;}}
+// Full editable tracing state: raw points, scale, and the reference image per view
+function buildTrace(){
+  const out={};
+  for(const v of ["side","sideR","top","bottom","front","rear"]){
+    const V0=V[v]; if(!V0)continue;
+    const hasPts=(V0.A&&V0.A.length)||(V0.B&&V0.B.length);
+    if(hasPts||V0.img){
+      out[v]={A:(V0.A||[]).map(p=>({x:p.x,y:p.y})),B:(V0.B||[]).map(p=>({x:p.x,y:p.y})),
+              scale:V0.scale||null, img:V0.img?imgToDataURL(V0.img):null};
     }
-    return { pts, corners };
+  }
+  return Object.keys(out).length?out:null;
+}
+// The drawing decides the SHAPE; the size sliders decide the MEASUREMENTS. Scaling happens
+// here, on the way out to the model — the traced points themselves are never altered, so
+// nudging a size never costs you a re-trace.
+function sizedProfiles(){
+  let topP=buildTop(), botP=buildBottom(), widP=buildWidth();
+  if(traced.natHgt>0 && S.hgtMM>0){
+    const k=S.hgtMM/traced.natHgt;
+    if(Math.abs(k-1)>1e-6){topP=topP.map(p=>[p[0],p[1]*k]); botP=botP.map(p=>[p[0],p[1]*k]);}
+  }
+  let widBotP=traced.widthBot||null;
+  if(traced.natWid>0 && S.widMM>0){
+    const k=S.widMM/traced.natWid;
+    if(Math.abs(k-1)>1e-6){widP=widP.map(p=>[p[0],p[1]*k]); if(widBotP)widBotP=widBotP.map(p=>[p[0],p[1]*k]);}
+  }
+  return {topP,botP,widP,widBotP};
+}
+// While a slider is actually moving you want to SEE the change, not wait for it. So the
+// any-shape solid is built coarse mid-drag and rebuilt properly the moment you let go.
+// Nothing about the result changes — only how long you stare at it.
+let qFast=false;
+// A fixed "coarse" number is a guess: this machine, a laptop and a phone are worlds apart.
+// So aim at a frame budget and let the detail find its own level within a few frames.
+let hullDragRes=44;
+const HULL_BUDGET_MS=11;
+function hullTune(ms){
+  if(!qFast)return;
+  if(ms>HULL_BUDGET_MS*1.35 && hullDragRes>20)hullDragRes-=4;        // struggling: back off
+  else if(ms<HULL_BUDGET_MS*0.55 && hullDragRes<60)hullDragRes+=4;   // room to spare: sharpen
+}
+document.addEventListener("pointerdown",e=>{ if(e.target&&e.target.type==="range")qFast=true; },true);
+["pointerup","pointercancel"].forEach(ev=>document.addEventListener(ev,()=>{
+  if(qFast){qFast=false;requestRebuild();} },true));
+document.addEventListener("keyup",e=>{ if(qFast&&e.target&&e.target.type==="range"){qFast=false;requestRebuild();} },true);
+function currentProfile(){
+  const SZ=sizedProfiles();
+  return {
+    schema:"lee3d.profile/v1", units:"mm", name:projName.value||"untitled-object", category:(projCat.value||"uncategorized").trim(),
+    length:S.len, stations:S.st, arcSegments:S.seg, roofFlatness:S.round,
+    /* The real size is kept alongside the model size, not instead of it. `length` stays what
+       every builder reads, so a profile saved without a scale loads and builds identically —
+       the car's path is untouched. These two are written only when the user asked for a scale,
+       so an ordinary profile carries neither key and looks exactly as it always did. */
+    ...(S.scaleOn ? {realLength:(+(document.getElementById("nReal")||{}).value||0)*1000,
+                     modelScale:Math.max(1,+(document.getElementById("nScale")||{}).value||1)} : {}),
+    wallThickness:S.wall, wallPerFace:S.wallPerFace, noDetail:!!S.noDetail, openArches:!!S.openArches, openUnderside:!!S.openArches,   /* openArches is the older name, kept so models saved before this still load; both are written */ hullHollow:true,
+    wallTop:S.wallPerFace?S.wallTop:S.wall, wallSide:S.wallPerFace?S.wallSide:S.wall, wallBottom:S.wallPerFace?S.wallBottom:S.wall,
+    topProfile:SZ.topP, bottomProfile:SZ.botP, widthProfile:SZ.widP, widthBottomProfile:SZ.widBotP,
+    section:buildSection(),
+    sections:(traced.sections&&traced.sections.length?traced.sections:null),
+    mode:S.mode, frontHull:(S.mode==="projection"?traced.frontHull:null), sepBottom:S.sepBottom,
+    // bottomPoly is written because applyProfile already reads it back (its keep() fallback
+    // for outlines the trace points can't re-derive). It never was written, so that fallback
+    // was dead: a profile handed over WITHOUT its trace points — a DXF traced elsewhere, or
+    // one published to the library — silently lost its underside outline on load, and
+    // closedBottom then recomputed false and levelled a base that shouldn't have been.
+    sidePoly:traced.sidePoly, sidePolyR:traced.sidePolyR, topPoly:traced.topPoly, frontPoly:traced.frontPoly, bottomPoly:traced.bottomPoly, hullCrisp:S.hullCrisp,
+    carveMode:S.carveMode,   // which engine cuts the details; saved with the model so it reloads the same
+    hullQuality:S.quality,   // how fine a grid; saved too, so a part reopens the size it was built
+
+    plainFrame:!!S.noDetail,
+    closedBottom:!!traced.bottomPoly,
+    hullRes:(qFast?hullDragRes:null), hullFast:qFast,   // self-tuning mid-drag, full on release
+    sculpt:(SC.off && SC.off.length)?Array.from(SC.off):null,
+    sculptStrokes:(SC.strokes && SC.strokes.length)?SC.strokes.map(s=>({x:s.x,y:s.y,z:s.z,r:s.r,amt:s.amt,mode:s.mode})):null,
+    features:features.length?features.map(f=>{const o={...f}; if(o.kind==="text")delete o.mask; return o;}):null,
+    shape:S.shape, revShape:S.revShape, revSize:S.revSize, widMM:S.widMM, hgtMM:S.hgtMM,
+    revProfile:(S.shape==="revolve"?buildRevProfile():null), revLen:(S.shape==="revolve"?revLenFor():null),
+    /* A turned object carries its own radius profile and its own height. Without them a saved
+       fountain reloads as whatever `sidePoly` happens to mean to another builder, and the
+       height would fall back to `length` — which for a fountain is its DIAMETER, so it would
+       come back squat. Written only for a lathe, so nothing else gains a key. */
+    ...(S.shape==="lathe" ? {
+      revProfileV: revProfileFromElevation(traced.sidePoly, S.len),
+      revHeight: Math.max(1, sampleProfile(buildTop(), 0.5) * 2 || S.len)
+    } : {}),
   };
-  const devOf = (pts, out) => {          // worst distance from an original point to the kept outline
-    let dev = 0;
-    for (const q of pts) {
-      let best = Infinity;
-      for (let i = 0; i < out.length; i++) {
-        const a = out[i], b = out[(i+1)%out.length];
-        const dx = b[0]-a[0], dy = b[1]-a[1], L2 = dx*dx+dy*dy;
-        let t = L2 ? ((q[0]-a[0])*dx + (q[1]-a[1])*dy)/L2 : 0; t = t<0?0:t>1?1:t;
-        const d = Math.hypot(a[0]+dx*t-q[0], a[1]+dy*t-q[1]);
-        if (d < best) best = d;
-      }
-      if (best > dev) dev = best;
-    }
-    return dev;
-  };
+}
+// Heavy profile for SAVE/EXPORT only: adds the full editable tracing state (points + images).
+// Kept out of currentProfile() so it isn't JPEG-encoded on every live rebuild.
+function fullProfile(){ const p=currentProfile(); p.trace=buildTrace(); return p; }
 
-  t("outline: thinning to a budget keeps every corner the file drew", () => {
-    const { pts, corners } = rect();
-    const out = API.resamplePoly(pts, 32);
-    ok(out.length <= 32, `must meet the budget (got ${out.length})`);
-    for (const c of corners) {
-      let best = Infinity;
-      for (const q of out) { const d = Math.hypot(q[0]-c[0], q[1]-c[1]); if (d < best) best = d; }
-      ok(best < 0.01, `corner (${c}) must survive, nearest kept point is ${best.toFixed(2)}mm away`);
-    }
-  });
+/* =========================================================================
+   THREE.JS VIEWPORT  (custom orbit controller, no external deps)
+   ========================================================================= */
+const glCanvas=document.getElementById("gl");
+let renderer,scene,camera,bodyMesh,wireMesh,bottomMesh,grid,refGroup;
+let target=new THREE.Vector3(0,0,0);
+let cam={az:-0.7,pol:1.15,rad:300};
+let wireOn=false, refOn=false;
+// Default framing — the view "Recenter" lands on. The 3D pane is tall and narrow and the
+// only controls are orbit + zoom (no pan), so this has to compose a good shot on its own.
+//   FRAME_FILL — how tightly the model fills the frame. 1.0 ≈ fills it with a hair of
+//                margin; LOWER zooms IN (bigger model), HIGHER pulls back (more margin).
+//   FRAME_LIFT — raises the model in the frame, as a fraction of its own height. The camera
+//                aims a touch below the model's middle so more of it shows up top. 0 = dead
+//                centre; higher = model sits higher; NEGATIVE = model sits lower.
+const FRAME_FILL=1.1, FRAME_LIFT=0.16;
 
-  t("outline: thinning never moves the shape off what was drawn", () => {
-    const { pts } = rect();
-    for (const budget of [8, 16, 32, 64]) {
-      const out = API.resamplePoly(pts, budget);
-      ok(devOf(pts, out) < 0.01,
-         `budget ${budget}: outline drifted ${devOf(pts, out).toFixed(3)}mm from the drawing`);
-    }
-  });
+function initThree(){
+  renderer=new THREE.WebGLRenderer({canvas:glCanvas,antialias:true,alpha:true,powerPreference:"high-performance"});
+  renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));   // cap: big win on weak GPUs
+  scene=new THREE.Scene();
+  camera=new THREE.PerspectiveCamera(42,1,1,5000);
 
-  t("outline: an outline already inside its budget is returned untouched", () => {
-    const p = [[0,0],[10,0],[10,5],[0,5]];
-    const out = API.resamplePoly(p, 64);
-    ok(out.length === p.length, "no points dropped");
-    for (let i = 0; i < p.length; i++)
-      ok(out[i][0] === p[i][0] && out[i][1] === p[i][1], `point ${i} unchanged, to the bit`);
-  });
+  const hemi=new THREE.HemisphereLight(0xbcd6ff,0x0a0e14,0.85);scene.add(hemi);
+  const key=new THREE.DirectionalLight(0xfff0e0,1.0);key.position.set(120,200,140);scene.add(key);
+  const rim=new THREE.DirectionalLight(0x5fa8ff,0.5);rim.position.set(-160,60,-120);scene.add(rim);
 
-  t("outline: a curve keeps enough points to stay a curve", () => {
-    // a circle has no corners to latch onto, so this is the case where a shape-blind
-    // thinning does most damage: it must still track the arc, not cut across it.
-    const pts = [];
-    for (let i = 0; i < 200; i++) { const a = i/200*Math.PI*2; pts.push([50*Math.cos(a), 50*Math.sin(a)]); }
-    const out = API.resamplePoly(pts, 40);
-    ok(out.length <= 40, "meets the budget");
-    ok(devOf(pts, out) < 1.5, `circle deviated ${devOf(pts, out).toFixed(2)}mm — it is cutting the corner`);
-  });
+  grid=new THREE.GridHelper(600,40,0x21507a,0x16314a);
+  grid.material.opacity=0.5;grid.material.transparent=true;scene.add(grid);
+  const axis=new THREE.AxesHelper(40);axis.position.y=0.2;scene.add(axis);
+
+  refGroup=new THREE.Group();scene.add(refGroup);
+  resize();updateCam();animate();
+}
+function disposeMesh(m){if(m){m.geometry.dispose();if(m.material.map)m.material.map.dispose();m.material.dispose();scene.remove(m);}}
+function texFrom(src){
+  const t = (src instanceof HTMLCanvasElement) ? new THREE.CanvasTexture(src) : new THREE.Texture(src);
+  t.needsUpdate=true; return t;
+}
+// place the traced drawings as reference planes around the model (world: x=length, y=up, z=-width)
+function makeRefPlanes(bb){
+  if(refGroup){refGroup.traverse(o=>{if(o.material){if(o.material.map)o.material.map.dispose();o.material.dispose();}if(o.geometry)o.geometry.dispose();});refGroup.clear();}
+  if(!refOn||!bb)return;
+  const Lx=bb.max.x-bb.min.x, Ly=bb.max.y-bb.min.y, Lz=bb.max.z-bb.min.z;
+  const cX=(bb.min.x+bb.max.x)/2, cW=(bb.min.y+bb.max.y)/2, cH=(bb.min.z+bb.max.z)/2;
+  const m=Math.max(Lx,Ly,Lz)*0.06, wMax=Math.max(Math.abs(bb.min.y),Math.abs(bb.max.y));
+  const mat=src=>new THREE.MeshBasicMaterial({map:texFrom(src),transparent:true,opacity:0.9,side:THREE.DoubleSide});
+  if(V.side.img){const mesh=new THREE.Mesh(new THREE.PlaneGeometry(Lx,Lz),mat(V.side.img));
+    mesh.position.set(cX,cH,-(wMax+m));refGroup.add(mesh);}                 // length×height, off to the side
+  if(V.top.img){const mesh=new THREE.Mesh(new THREE.PlaneGeometry(Lx,Ly),mat(V.top.img));
+    mesh.rotation.x=-Math.PI/2;mesh.position.set(cX,bb.min.z-m,-cW);refGroup.add(mesh);}  // plan as a floor
+  if(V.front.img){const mesh=new THREE.Mesh(new THREE.PlaneGeometry(Ly,Lz),mat(V.front.img));
+    mesh.rotation.y=Math.PI/2;mesh.position.set(bb.min.x-m,cH,-cW);refGroup.add(mesh);}    // front cross-section
+  if(V.rear.img){const mesh=new THREE.Mesh(new THREE.PlaneGeometry(Ly,Lz),mat(V.rear.img));
+    mesh.rotation.y=Math.PI/2;mesh.position.set(bb.max.x+m,cH,-cW);refGroup.add(mesh);}    // rear cross-section
 }
 
+function rebuild(){
+  requestRender();
+  const prof=currentProfile();
+  const t0=performance.now();
+  const lastBuild=makeBody(prof);
+  const {positions,indices,volume,hollow}=lastBuild;
 
-// =====================================================================================
-// FACE-LOCALITY — a feature may only touch what its own view can see.
-//
-// This is the test that was missing. A front-view pocket 2.5mm deep was carving material at
-// EVERY x from 0 to 200 on a 200mm body, and the suite passed 217/217 while it did. The
-// cause: the carve looked for the nearest surface along its cut axis, but a body with open
-// wheel arches is several separate runs of material along that axis — profile_7 at wheel
-// height is solid at x 1..32, 85..106 and 174..200 — so a point inside an arch pillar has a
-// surface millimetres away that no front view can see past.
-//
-// The body here is deliberately shaped like that problem: a saddle, high at both ends and
-// low in the middle, so a top view sees two different surfaces at two different heights.
-// =====================================================================================
-{
-  const BOX = [[0,0],[1,0],[1,1],[0,1]];
-  const SADDLE = [[0,0],[1,0],[1,1],[0.62,1],[0.62,0.35],[0.38,0.35],[0.38,1],[0,1]];
-  const body = extra => ({ mode:"projection", length:120, stations:52, hullCrisp:1, hullRes:60,
-    sidePoly:SADDLE, topPoly:BOX, frontPoly:BOX, topProfile:[[0,60]], widthProfile:[[0,40]],
-    hullHollow:false, closedBottom:true, features:null, ...extra });
+  const geo=new THREE.BufferGeometry();
+  geo.setAttribute("position",new THREE.Float32BufferAttribute(positions,3));
+  geo.setIndex(indices);geo.computeVertexNormals();geo.computeBoundingBox();
 
-  // highest material on the line (x,y) — the roof a top view sees at that spot
-  const roofAt = (g, x, y) => {
-    const P = g.positions, I = g.indices;
-    let best = -Infinity, found = false;
-    for (let q = 0; q < I.length; q += 3) {
-      const A=I[q]*3, B=I[q+1]*3, C=I[q+2]*3;
-      const au=P[A], av=P[A+1], bu=P[B], bv=P[B+1], cu=P[C], cv=P[C+1];
-      const den=(bv-cv)*(au-cu)+(cu-bu)*(av-cv); if (Math.abs(den) < 1e-12) continue;
-      const w0=((bv-cv)*(x-cu)+(cu-bu)*(y-cv))/den, w1=((cv-av)*(x-cu)+(au-cu)*(y-cv))/den, w2=1-w0-w1;
-      if (w0<-1e-9 || w1<-1e-9 || w2<-1e-9) continue;
-      const h = w0*P[A+2] + w1*P[B+2] + w2*P[C+2];
-      if (h > best) { best = h; found = true; }
-    }
-    return found ? best : null;
-  };
+  disposeMesh(bodyMesh);disposeMesh(wireMesh);
+  const mat=new THREE.MeshStandardMaterial({color:0x9fb0c4,metalness:0.1,roughness:0.62,
+    flatShading:false,side:THREE.DoubleSide});
+  bodyMesh=new THREE.Mesh(geo,mat);scene.add(bodyMesh);
 
-  t("face-local: a top-view pocket cuts every roof it can see, from that roof", () => {
-    const D = 3;
-    const plain = API.makeVisualHull(body({}));
-    const cut = API.makeVisualHull(body({
-      features:[{ kind:"poly", view:"top", poly:BOX, depth:-D, soft:0.02, name:"skim" }] }));
-    /* The saddle floor sits 39mm below the high roof. Both are visible from above, so both
-       must be cut — each measured from ITSELF, not from whichever surface happens to be
-       nearest in 3D and not from the top of the bounding box. */
-    for (const [x, where] of [[10,"front deck"], [60,"saddle floor"], [110,"rear deck"]]) {
-      const a = roofAt(plain, x, 0), b = roofAt(cut, x, 0);
-      ok(a !== null && b !== null, `${where}: both builds must have a roof at x=${x}`);
-      near(a - b, D, 1.1, `${where} (x=${x}) should lose ${D}mm from its own surface`);
-    }
-  });
+  const wmat=new THREE.MeshBasicMaterial({color:0xff7a2f,wireframe:true,transparent:true,opacity:0.28});
+  wireMesh=new THREE.Mesh(geo,wmat);wireMesh.visible=wireOn;scene.add(wireMesh);
 
-  t("face-local: a pocket may not reach past its own depth", () => {
-    /* The failure this exists for: material moving far from the face the feature was drawn
-       on. Nothing anywhere may move by more than the depth asked for, plus a grid cell. */
-    const D = 3, cell = 120/60;
-    const plain = API.makeVisualHull(body({}));
-    const cut = API.makeVisualHull(body({
-      features:[{ kind:"poly", view:"top", poly:BOX, depth:-D, soft:0.02, name:"skim" }] }));
-    /* Measured DOWNWARD only. A "highest material" probe is not a depth gauge at a vertical
-       step: shortening the saddle wall by 3mm moves the step sideways, so one column that used
-       to read the low floor now reads the high deck and the difference reads as a 33mm jump
-       UPWARD. That is the wall being cut correctly, not material moving 33mm — the giveaway is
-       the sign. A pocket may only ever take material away, so only downward movement is a
-       depth, and a column that gained height is a step that shifted. */
-    let worst = 0, at = 0;
-    for (let x = 4; x <= 116; x += 2) {
-      const a = roofAt(plain, x, 0), b = roofAt(cut, x, 0);
-      if (a === null || b === null) continue;
-      const lost = a - b;                        // positive = material removed here
-      if (lost > worst) { worst = lost; at = x; }
-    }
-    ok(worst <= D + cell,
-       `nothing may lose more than ${D}mm + a cell; worst was ${worst.toFixed(2)}mm at x=${at}`);
-    /* And the step may only ever move INTO the pocket, never outward — a column that gains
-       height by more than the depth would mean the carve had built something. */
-    let gained = 0;
-    for (let x = 4; x <= 116; x += 2) {
-      const a = roofAt(plain, x, 0), b = roofAt(cut, x, 0);
-      if (a === null || b === null) continue;
-      const g2 = b - a;
-      if (g2 > gained) gained = g2;
-    }
-    ok(gained <= (roofAt(plain, 10, 0) - roofAt(plain, 60, 0)) + D + cell,
-       `no column may rise more than the saddle step allows (rose ${gained.toFixed(2)}mm)`);
-  });
-
-  t("face-local: depth is measured from the face, not from the bounding box", () => {
-    /* The distinction that took longest to get right. A body is not a solid block: at wheel
-       height this saddle is two separate runs of material along the cut axis. The face a view
-       sees is the OUTERMOST material on each line — so a surface standing proud deep inside
-       the bounding box is still visible and still gets cut, while a surface hiding behind
-       another one does not, however close it is.
-       Checked here on the low middle: it sits 39mm inside the box from above, and must be cut
-       exactly as much as the roof that stands at the box's own top. Measuring from the box
-       would leave it untouched; measuring from the nearest surface in any direction would cut
-       things the view cannot see. */
-    const D = 3;
-    const plain = API.makeVisualHull(body({}));
-    const cut = API.makeVisualHull(body({
-      features:[{ kind:"poly", view:"top", poly:BOX, depth:-D, soft:0.02, name:"skim" }] }));
-    const roof = roofAt(plain, 10, 0), floor = roofAt(plain, 60, 0);
-    ok(roof - floor > 30, `the fixture must actually have a saddle (${(roof-floor).toFixed(1)}mm)`);
-    const cutRoof = roof - roofAt(cut, 10, 0), cutFloor = floor - roofAt(cut, 60, 0);
-    ok(Math.abs(cutRoof - cutFloor) < 0.8,
-       `both surfaces must lose the same amount: roof ${cutRoof.toFixed(2)}mm vs floor ${cutFloor.toFixed(2)}mm`);
-  });
-
-  t("face-local: a flat surface at the drawing's own height is found exactly", () => {
-    /* A surface is where the field is ZERO, and a roof built to the drawing's own height puts
-       samples exactly on it. A scan testing `v < 0` walks straight past that and reports the
-       face half a step low, which made a 3mm pocket cut 3.99mm — while a saddle a few
-       millimetres lower came out at a correct 3.00mm. That difference between two surfaces on
-       the same model is the signature, so it is pinned here directly. */
-    const D = 3;
-    const plain = API.makeVisualHull(body({}));
-    const cut = API.makeVisualHull(body({
-      features:[{ kind:"poly", view:"top", poly:BOX, depth:-D, soft:0.02, name:"skim" }] }));
-    // topProfile says 60, so the roof sits exactly on a round number: the awkward case
-    near(roofAt(plain, 30, 0), 60, 0.3, "the fixture's roof should sit at its drawn height");
-    near(roofAt(plain, 30, 0) - roofAt(cut, 30, 0), D, 0.5,
-         "a pocket on a roof at the drawn height must cut the depth asked for");
-  });
-
-  t("face-local: a pocket removes material, it never adds any", () => {
-    // 153 pockets on the real model once made it HEAVIER, because the carve was reaching
-    // surfaces the view could not see and the shell grew lining around them.
-    const vol = g => { let V=0; const P=g.positions, I=g.indices;
-      for (let q=0;q<I.length;q+=3){ const a=I[q]*3,b=I[q+1]*3,c=I[q+2]*3;
-        V += (P[a]*(P[b+1]*P[c+2]-P[c+1]*P[b+2]) - P[a+1]*(P[b]*P[c+2]-P[c]*P[b+2])
-            + P[a+2]*(P[b]*P[c+1]-P[c]*P[b+1]))/6; }
-      return Math.abs(V); };
-    const plain = vol(API.makeVisualHull(body({})));
-    const cut = vol(API.makeVisualHull(body({
-      features:[{ kind:"poly", view:"top", poly:BOX, depth:-3, soft:0.02, name:"skim" }] })));
-    ok(cut < plain, `a pocket must remove material (${(plain/1000).toFixed(1)} -> ${(cut/1000).toFixed(1)} cm3)`);
-    ok(cut > plain * 0.8, "but it must not gut the body");
-  });
-}
-
-
-// =====================================================================================
-// A POCKET IN A SHELL MUST NOT THIN THE WALL UNDER IT.
-//
-// Carving a hollow part is where a detail turns into a weak spot. If the outer skin is
-// pushed in and the cavity left where it was, the wall under the pocket is thinner by the
-// pocket's depth — and nothing in a watertight check or a volume total shows it. Measured on
-// a 5mm-wall box with a 3mm pocket: the vertex-push path left 2.5mm of wall under the pocket
-// while reporting a 5.00mm median everywhere else, because the thin patch is a small part of
-// a big surface. The field carve keeps 5.1mm because the cavity follows the pocket down.
-//
-// This also explains why a carved shell holds MORE material, which looks wrong until you see
-// where it goes: the pocket's own lining is new wall. A shell that gets LIGHTER when you
-// carve it has taken the material out of its wall.
-// =====================================================================================
-{
-  const BOX = [[0,0],[1,0],[1,1],[0,1]];
-  const PATCH = [[0.25,0.30],[0.75,0.30],[0.75,0.70],[0.25,0.70]];
-  const WALL = 5, DEPTH = 3;
-  const blk = extra => ({ length:120, topProfile:[[0,60],[1,60]], widthProfile:[[0,40],[1,40]],
-    sidePoly:BOX, topPoly:BOX, frontPoly:BOX, hullCrisp:1, wallThickness:WALL,
-    hullHollow:true, closedBottom:true, hullRes:64, mode:"projection", features:null, ...extra });
-
-  // every z the surface is crossed on the way straight down through (x,y)
-  const columnAt = (g, x, y) => {
-    const P = g.positions, I = g.indices, hits = [];
-    for (let q = 0; q < I.length; q += 3) {
-      const A=I[q]*3, B=I[q+1]*3, C=I[q+2]*3;
-      const au=P[A], av=P[A+1], bu=P[B], bv=P[B+1], cu=P[C], cv=P[C+1];
-      const den=(bv-cv)*(au-cu)+(cu-bu)*(av-cv); if (Math.abs(den) < 1e-12) continue;
-      const w0=((bv-cv)*(x-cu)+(cu-bu)*(y-cv))/den, w1=((cv-av)*(x-cu)+(au-cu)*(y-cv))/den, w2=1-w0-w1;
-      if (w0<-1e-9 || w1<-1e-9 || w2<-1e-9) continue;
-      hits.push(w0*P[A+2] + w1*P[B+2] + w2*P[C+2]);
-    }
-    hits.sort((a,b) => a-b);
-    const keep = [];
-    for (const h of hits) if (!keep.length || h - keep[keep.length-1] > 1e-3) keep.push(h);
-    return keep;
-  };
-
-  t("carved shell: the wall under a pocket is still the wall you asked for", () => {
-    const g = API.makeVisualHull(blk({
-      features:[{ kind:"poly", view:"top", poly:PATCH, depth:-DEPTH, soft:0.02, name:"dish" }] }));
-    const col = columnAt(g, 60, 0);          // straight down the middle of the pocket
-    ok(col.length >= 4, `expected floor, cavity, skin: got crossings [${col.map(v=>v.toFixed(1))}]`);
-    const skin = col[col.length-1], cavity = col[col.length-2];
-    const under = skin - cavity;
-    ok(under > WALL * 0.8,
-       `the wall under the pocket is ${under.toFixed(2)}mm, asked for ${WALL}mm ` +
-       `(skin ${skin.toFixed(1)}, cavity roof ${cavity.toFixed(1)})`);
-  });
-
-  t("carved shell: the pocket is the depth drawn, measured on the outside", () => {
-    const plain = API.makeVisualHull(blk({}));
-    const g = API.makeVisualHull(blk({
-      features:[{ kind:"poly", view:"top", poly:PATCH, depth:-DEPTH, soft:0.02, name:"dish" }] }));
-    const outside = columnAt(plain, 60, 0), inside = columnAt(g, 60, 0);
-    near(outside[outside.length-1] - inside[inside.length-1], DEPTH, 0.6,
-         "the pocket must be as deep as it was drawn");
-  });
-
-  t("carved shell: carving does not make the shell lighter", () => {
-    /* The counter-intuitive one, and the reason it is written down. A pocket removes material
-       from the OUTSIDE, but a uniform wall following it adds the pocket's lining — so a
-       correctly carved shell weighs slightly MORE, not less. A shell that gets lighter has
-       taken the difference out of its own wall thickness. */
-    const vol = g => { let V=0; const P=g.positions, I=g.indices;
-      for (let q=0;q<I.length;q+=3){ const a=I[q]*3,b=I[q+1]*3,c=I[q+2]*3;
-        V += (P[a]*(P[b+1]*P[c+2]-P[c+1]*P[b+2]) - P[a+1]*(P[b]*P[c+2]-P[c]*P[b+2])
-            + P[a+2]*(P[b]*P[c+1]-P[c]*P[b+1]))/6; }
-      return Math.abs(V); };
-    const plain = vol(API.makeVisualHull(blk({})));
-    const carved = vol(API.makeVisualHull(blk({
-      features:[{ kind:"poly", view:"top", poly:PATCH, depth:-DEPTH, soft:0.02, name:"dish" }] })));
-    ok(carved > plain * 0.995,
-       `a carved shell must not lose material from its wall (${(plain/1000).toFixed(1)} -> ${(carved/1000).toFixed(1)} cm3)`);
-    ok(carved < plain * 1.10, "but the lining should be a small addition, not a filled body");
-  });
-}
-
-
-// =====================================================================================
-// TWO CARVING ENGINES, SELECTABLE. Neither is going away yet.
-//
-// "field" (default): features are prisms in the distance field, meshed together with the
-//   body. Exact depths, and the cavity follows a pocket so the wall under it survives.
-// "stamp": the original. Mesh the plain body, then push the vertices under each outline.
-//   Much faster on a heavily-featured model, and the only path the exact-STEP backend has
-//   ever seen, so it stays reachable.
-//
-// Measured on the real 153-feature model: field 10.1s / wall p10 3.87mm, stamp 3.1s / wall
-// p10 2.21mm, against a 4.2mm request. That is the trade, and it is the user's to make on
-// real parts — so the job of these tests is to keep BOTH paths honest, not to pick one.
-// =====================================================================================
-{
-  const BOX = [[0,0],[1,0],[1,1],[0,1]];
-  const PATCH = [[0.25,0.30],[0.75,0.30],[0.75,0.70],[0.25,0.70]];
-  const blk = extra => ({ length:120, topProfile:[[0,60],[1,60]], widthProfile:[[0,40],[1,40]],
-    sidePoly:BOX, topPoly:BOX, frontPoly:BOX, hullCrisp:1, wallThickness:5,
-    hullHollow:true, closedBottom:true, hullRes:64, mode:"projection", features:null, ...extra });
-  const DISH = [{ kind:"poly", view:"top", poly:PATCH, depth:-3, soft:0.02, name:"dish" }];
-
-  const column = (g, x, y) => {
-    const P = g.positions, I = g.indices, hits = [];
-    for (let q = 0; q < I.length; q += 3) {
-      const A=I[q]*3, B=I[q+1]*3, C=I[q+2]*3;
-      const au=P[A], av=P[A+1], bu=P[B], bv=P[B+1], cu=P[C], cv=P[C+1];
-      const den=(bv-cv)*(au-cu)+(cu-bu)*(av-cv); if (Math.abs(den) < 1e-12) continue;
-      const w0=((bv-cv)*(x-cu)+(cu-bu)*(y-cv))/den, w1=((cv-av)*(x-cu)+(au-cu)*(y-cv))/den, w2=1-w0-w1;
-      if (w0<-1e-9 || w1<-1e-9 || w2<-1e-9) continue;
-      hits.push(w0*P[A+2] + w1*P[B+2] + w2*P[C+2]);
-    }
-    hits.sort((a,b) => a-b);
-    const keep = [];
-    for (const h of hits) if (!keep.length || h - keep[keep.length-1] > 1e-3) keep.push(h);
-    return keep;
-  };
-
-  t("carve mode: the field engine is the default", () => {
-    const dflt = API.makeVisualHull(blk({ features:DISH }));
-    const field = API.makeVisualHull(blk({ features:DISH, carveMode:"field" }));
-    ok(dflt.indices.length === field.indices.length, "an unset carveMode must mean field");
-    const stamp = API.makeVisualHull(blk({ features:DISH, carveMode:"stamp" }));
-    ok(stamp.indices.length !== field.indices.length || stamp.volume !== field.volume,
-       "stamp must actually be a different engine, not an alias");
-  });
-
-  t("carve mode: both engines cut a pocket where it was drawn", () => {
-    const plain = API.makeVisualHull(blk({}));
-    const roof = column(plain, 60, 0).slice(-1)[0];
-    for (const carveMode of ["field", "stamp"]) {
-      const g = API.makeVisualHull(blk({ features:DISH, carveMode }));
-      const c = column(g, 60, 0);
-      const cut = roof - c[c.length-1];
-      ok(cut > 1.5, `${carveMode}: the pocket must be visible (cut ${cut.toFixed(2)}mm)`);
-      ok(cut <= 3 + 1, `${carveMode}: and no deeper than drawn (cut ${cut.toFixed(2)}mm)`);
-      watertight(g, `carveMode ${carveMode}`);
-      // and it must not disturb the far side of the body
-      const edge = column(g, 8, 0);
-      near(edge[edge.length-1], roof, 0.6, `${carveMode}: material away from the pocket must not move`);
-    }
-  });
-
-  t("carve mode: neither engine may run twice", () => {
-    /* Both engines active at once builds every feature twice — a real bug this project
-       shipped, where a 2mm badge stood 4.40mm proud. Selecting one must silence the other,
-       so a raise stands exactly as proud as it was asked to. */
-    const RAISE = [{ kind:"poly", view:"top", poly:PATCH, depth:2, soft:0.02, name:"pad" }];
-    const plain = API.makeVisualHull(blk({}));
-    const roof = column(plain, 60, 0).slice(-1)[0];
-    for (const carveMode of ["field", "stamp"]) {
-      const g = API.makeVisualHull(blk({ features:RAISE, carveMode }));
-      /* Highest vertex, not a ray cast. A ray through one point can land on a degenerate
-         sliver and come back NaN, which then reads as a failure of the thing being tested
-         rather than of the probe — it did exactly that here while both engines were in fact
-         building the raise correctly. The tallest point is the boss top by definition. */
-      let top = -Infinity;
-      for (let i = 2; i < g.positions.length; i += 3)
-        if (g.positions[i] > top) top = g.positions[i];
-      const proud = top - roof;
-      ok(proud === proud, `${carveMode}: the mesh must have a finite top (got ${proud})`);
-      ok(proud > 2 * 0.5, `${carveMode}: a 2mm raise must actually stand proud (${proud.toFixed(2)}mm)`);
-      ok(proud <= 2 * 1.75,
-         `${carveMode}: a 2mm raise stands ${proud.toFixed(2)}mm — near double means both engines ran`);
-    }
-  });
-
-  t("carve mode: the field engine keeps the wall under a pocket", () => {
-    /* The reason field is the default. Both are watertight and both report a healthy MEDIAN
-       wall, because a thin patch is a small part of a big surface — so the difference only
-       shows if you look underneath the pocket specifically. */
-    const under = carveMode => {
-      const g = API.makeVisualHull(blk({ features:DISH, carveMode }));
-      const c = column(g, 60, 0);
-      return c[c.length-1] - c[c.length-2];
-    };
-    const f = under("field"), st = under("stamp");
-    ok(f > 5 * 0.8, `field must keep the 5mm wall under the pocket (got ${f.toFixed(2)}mm)`);
-    ok(f > st + 1, `and must beat the stamp path there (field ${f.toFixed(2)} vs stamp ${st.toFixed(2)})`);
-  });
-
-  t("carve mode: every coordinate the mesher emits is a number", () => {
-    /* NaN in a mesh is not a rounding problem, it is a file no slicer can open — and nothing
-       else in this suite would notice, because a NaN vertex still counts as a vertex and the
-       edge bookkeeping still balances. It happened here: `look` clamped its table coordinates
-       only when asked to GROW, so a sample from the padding ring kept a negative index,
-       `T.d[-3]` came back undefined, and undefined arithmetic is NaN. 8,644 poisoned field
-       nodes, 1,488 NaN coordinates in the finished mesh.
-       It showed on RAISES only, because a raise enlarges the grid padding to make room for
-       the boss and pushes sampling further outside the tables than a plain body ever goes —
-       which is why it survived until a test built a raise on a hollow shell. */
-    const RAISE = [{ kind:"poly", view:"top", poly:PATCH, depth:2, soft:0.02, name:"pad" }];
-    for (const carveMode of ["field", "stamp"]) {
-      for (const feats of [null, DISH, RAISE]) {
-        const g = API.makeVisualHull(blk({ features:feats, carveMode }));
-        let bad = 0;
-        for (let i = 0; i < g.positions.length; i++)
-          if (!(g.positions[i] === g.positions[i])) bad++;
-        ok(bad === 0,
-           `${carveMode}, ${feats ? (feats[0].depth > 0 ? "raise" : "pocket") : "plain"}: ` +
-           `${bad} non-finite coordinates in the mesh`);
-      }
-    }
-  });
-
-  t("carve mode: a pocket never makes the body taller", () => {
-    // a carve removes material, so nothing may end up outside the plain body's envelope.
-    // The rim of a pocket is where a dual contour is most tempted to place a vertex high.
-    const plain = API.makeVisualHull(blk({}));
-    let top = -Infinity;
-    for (let i = 2; i < plain.positions.length; i += 3)
-      if (plain.positions[i] > top) top = plain.positions[i];
-    for (const carveMode of ["field", "stamp"]) {
-      const g = API.makeVisualHull(blk({ features:DISH, carveMode }));
-      let t2 = -Infinity;
-      for (let i = 2; i < g.positions.length; i += 3)
-        if (g.positions[i] > t2) t2 = g.positions[i];
-      ok(t2 <= top + 1.0,
-         `${carveMode}: carved body reaches ${t2.toFixed(2)}mm, plain body ${top.toFixed(2)}mm`);
-    }
-  });
-
-  t("carve mode: with no features at all the engines agree exactly", () => {
-    const a = API.makeVisualHull(blk({ carveMode:"field" }));
-    const b = API.makeVisualHull(blk({ carveMode:"stamp" }));
-    ok(a.indices.length === b.indices.length, "same triangle count on a plain body");
-    near(a.volume, b.volume, 1, "and the same material");
-  });
-}
-
-
-// =====================================================================================
-// THE MESH ITSELF MUST BE SOUND — not just closed.
-//
-// "Watertight" is a low bar. A mesh can have every edge shared by exactly two faces and still
-// be unfit to print: coordinates that are not numbers, faces with no area, or two separate
-// sheets welded together at a point. Each of those has shipped in this project at least once,
-// and none of them is caught by boundary/non-manifold counts:
-//   - 1,488 NaN coordinates rode through every existing check (a NaN vertex still balances).
-//   - 94 zero-area faces from a dual contour placing two cells' vertices on the same point.
-//   - and the fix for THOSE, welding blindly, merged the outer skin to the inner wall on a
-//     thin-walled shell and made 8 non-manifold edges — the fin problem wearing a hat.
-// So this block checks the mesh as an object, on a spread of models, in both carve engines.
-// =====================================================================================
-{
-  const BOX = [[0,0],[1,0],[1,1],[0,1]];
-  const PATCH = [[0.25,0.30],[0.75,0.30],[0.75,0.70],[0.25,0.70]];
-  const shapes = {
-    "plain block": {},
-    "thin wall":   { wallThickness:1.5 },
-    "thick wall":  { wallThickness:9 },
-    "solid":       { hullHollow:false },
-    "open bottom": { closedBottom:false },
-  };
-  const feats = {
-    "no features": null,
-    "pocket": [{ kind:"poly", view:"top", poly:PATCH, depth:-3, soft:0.02, name:"dish" }],
-    "raise":  [{ kind:"poly", view:"top", poly:PATCH, depth:2,  soft:0.02, name:"pad" }],
-  };
-  const blk = extra => ({ length:120, topProfile:[[0,60],[1,60]], widthProfile:[[0,40],[1,40]],
-    sidePoly:BOX, topPoly:BOX, frontPoly:BOX, hullCrisp:1, wallThickness:5,
-    hullHollow:true, closedBottom:true, hullRes:56, mode:"projection", features:null, ...extra });
-
-  const audit = g => {
-    const P = g.positions, I = g.indices;
-    let nonFinite = 0, zeroArea = 0, collapsed = 0;
-    for (let i = 0; i < P.length; i++) if (!Number.isFinite(P[i])) nonFinite++;
-    for (let q = 0; q < I.length; q += 3) {
-      const a = I[q], b = I[q+1], c = I[q+2];
-      if (a === b || b === c || c === a) { collapsed++; continue; }
-      const A = a*3, B = b*3, C = c*3;
-      const ux=P[B]-P[A], uy=P[B+1]-P[A+1], uz=P[B+2]-P[A+2];
-      const vx=P[C]-P[A], vy=P[C+1]-P[A+1], vz=P[C+2]-P[A+2];
-      if (0.5*Math.hypot(uy*vz-uz*vy, uz*vx-ux*vz, ux*vy-uy*vx) < 1e-9) zeroArea++;
-    }
-    // edges, for the closure check
-    const seen = new Map();
-    for (let q = 0; q < I.length; q += 3) {
-      const t = [I[q], I[q+1], I[q+2]];
-      for (let k = 0; k < 3; k++) {
-        const a = t[k], b = t[(k+1)%3], key = a < b ? a+"_"+b : b+"_"+a;
-        seen.set(key, (seen.get(key)||0) + 1);
-      }
-    }
-    let boundary = 0, nonMani = 0;
-    for (const c of seen.values()) { if (c === 1) boundary++; else if (c > 2) nonMani++; }
-    return { nonFinite, zeroArea, collapsed, boundary, nonMani, tris: I.length/3 };
-  };
-
-  for (const [sName, sExtra] of Object.entries(shapes)) {
-    t(`mesh audit: ${sName} is sound in both engines, with and without features`, () => {
-      for (const carveMode of ["field", "stamp"]) {
-        for (const [fName, f] of Object.entries(feats)) {
-          const g = API.makeVisualHull(blk({ ...sExtra, features:f, carveMode }));
-          const r = audit(g);
-          const who = `${sName} / ${fName} / ${carveMode}`;
-          ok(r.tris > 0, `${who}: produced no triangles at all`);
-          ok(r.nonFinite === 0, `${who}: ${r.nonFinite} non-finite coordinates`);
-          ok(r.collapsed === 0, `${who}: ${r.collapsed} faces with a repeated corner`);
-          ok(r.zeroArea === 0, `${who}: ${r.zeroArea} faces with no area`);
-          ok(r.boundary === 0, `${who}: ${r.boundary} open edges — the solid has a hole`);
-          ok(r.nonMani === 0, `${who}: ${r.nonMani} non-manifold edges — sheets are welded together`);
-        }
-      }
-    });
+  // separate BOTTOM PLATE part (keeps the shell hollow; assembles into a closed object)
+  disposeMesh(bottomMesh); bottomMesh=null;
+  // a lathe closes its own base and has no traced floor to plate — same as revolve
+  if(S.sepBottom && S.shape!=="revolve" && S.shape!=="lathe" && S.mode!=="projection"){
+    const bp=makeBottom(prof);
+    const bgeo=new THREE.BufferGeometry();
+    bgeo.setAttribute("position",new THREE.Float32BufferAttribute(bp.positions,3));
+    bgeo.setIndex(bp.indices);bgeo.computeVertexNormals();
+    const bmat=new THREE.MeshStandardMaterial({color:0x46b7d9,metalness:0.1,roughness:0.6,side:THREE.DoubleSide});
+    bottomMesh=new THREE.Mesh(bgeo,bmat);bottomMesh.rotation.set(-Math.PI/2,0,0);scene.add(bottomMesh);
   }
 
-  t("mesh audit: welding may not merge the inner wall into the outer skin", () => {
-    /* The specific trap. Coincident vertices are welded so a dual contour's duplicate points
-       do not leave zero-area faces — but on a thin shell the outer skin and the inner wall
-       can put vertices at the SAME point without being the same surface. Welding those pinches
-       the shell into a non-manifold edge. A shell must stay two closed sheets. */
-    for (const wallThickness of [1.5, 2.5, 5, 9]) {
-      const g = API.makeVisualHull(blk({ wallThickness }));
-      const r = audit(g);
-      ok(r.nonMani === 0, `wall ${wallThickness}: ${r.nonMani} non-manifold edges after welding`);
-      ok(r.boundary === 0, `wall ${wallThickness}: ${r.boundary} open edges after welding`);
-      ok(r.zeroArea === 0, `wall ${wallThickness}: ${r.zeroArea} zero-area faces survived`);
-    }
-  });
-}
 
+  // axis convention -> view: model uses X=length, Y=width, Z=up.
+  // Three's grid is XZ plane with Y up. Rotate the whole body so model-Z -> world-Y.
+  bodyMesh.rotation.set(-Math.PI/2,0,0);
+  wireMesh.rotation.set(-Math.PI/2,0,0);
 
-// =====================================================================================
-// THE MESH ITSELF MUST BE SOUND — not just closed.
-//
-// "Watertight" is a low bar. A mesh can have every edge shared by exactly two faces and still
-// be unfit to print: coordinates that are not numbers, faces with no area, or two separate
-// sheets welded together at a point. Each of those has shipped in this project at least once,
-// and none of them is caught by boundary/non-manifold counts:
-//   - 1,488 NaN coordinates rode through every existing check (a NaN vertex still balances).
-//   - 94 zero-area faces from a dual contour placing two cells' vertices on the same point.
-//   - and the fix for THOSE, welding blindly, merged the outer skin to the inner wall on a
-//     thin-walled shell and made 8 non-manifold edges — the fin problem wearing a hat.
-// So this block checks the mesh as an object, on a spread of models, in both carve engines.
-// =====================================================================================
-{
-  const BOX = [[0,0],[1,0],[1,1],[0,1]];
-  const PATCH = [[0.25,0.30],[0.75,0.30],[0.75,0.70],[0.25,0.70]];
-  const shapes = {
-    "plain block": {},
-    "thin wall":   { wallThickness:1.5 },
-    "thick wall":  { wallThickness:9 },
-    "solid":       { hullHollow:false },
-    "open bottom": { closedBottom:false },
-  };
-  const feats = {
-    "no features": null,
-    "pocket": [{ kind:"poly", view:"top", poly:PATCH, depth:-3, soft:0.02, name:"dish" }],
-    "raise":  [{ kind:"poly", view:"top", poly:PATCH, depth:2,  soft:0.02, name:"pad" }],
-  };
-  const blk = extra => ({ length:120, topProfile:[[0,60],[1,60]], widthProfile:[[0,40],[1,40]],
-    sidePoly:BOX, topPoly:BOX, frontPoly:BOX, hullCrisp:1, wallThickness:5,
-    hullHollow:true, closedBottom:true, hullRes:56, mode:"projection", features:null, ...extra });
-
-  const audit = g => {
-    const P = g.positions, I = g.indices;
-    let nonFinite = 0, zeroArea = 0, collapsed = 0;
-    for (let i = 0; i < P.length; i++) if (!Number.isFinite(P[i])) nonFinite++;
-    for (let q = 0; q < I.length; q += 3) {
-      const a = I[q], b = I[q+1], c = I[q+2];
-      if (a === b || b === c || c === a) { collapsed++; continue; }
-      const A = a*3, B = b*3, C = c*3;
-      const ux=P[B]-P[A], uy=P[B+1]-P[A+1], uz=P[B+2]-P[A+2];
-      const vx=P[C]-P[A], vy=P[C+1]-P[A+1], vz=P[C+2]-P[A+2];
-      if (0.5*Math.hypot(uy*vz-uz*vy, uz*vx-ux*vz, ux*vy-uy*vx) < 1e-9) zeroArea++;
-    }
-    // edges, for the closure check
-    const seen = new Map();
-    for (let q = 0; q < I.length; q += 3) {
-      const t = [I[q], I[q+1], I[q+2]];
-      for (let k = 0; k < 3; k++) {
-        const a = t[k], b = t[(k+1)%3], key = a < b ? a+"_"+b : b+"_"+a;
-        seen.set(key, (seen.get(key)||0) + 1);
-      }
-    }
-    let boundary = 0, nonMani = 0;
-    for (const c of seen.values()) { if (c === 1) boundary++; else if (c > 2) nonMani++; }
-    return { nonFinite, zeroArea, collapsed, boundary, nonMani, tris: I.length/3 };
-  };
-
-  for (const [sName, sExtra] of Object.entries(shapes)) {
-    t(`mesh audit: ${sName} is sound in both engines, with and without features`, () => {
-      for (const carveMode of ["field", "stamp"]) {
-        for (const [fName, f] of Object.entries(feats)) {
-          const g = API.makeVisualHull(blk({ ...sExtra, features:f, carveMode }));
-          const r = audit(g);
-          const who = `${sName} / ${fName} / ${carveMode}`;
-          ok(r.tris > 0, `${who}: produced no triangles at all`);
-          ok(r.nonFinite === 0, `${who}: ${r.nonFinite} non-finite coordinates`);
-          ok(r.collapsed === 0, `${who}: ${r.collapsed} faces with a repeated corner`);
-          ok(r.zeroArea === 0, `${who}: ${r.zeroArea} faces with no area`);
-          ok(r.boundary === 0, `${who}: ${r.boundary} open edges — the solid has a hole`);
-          ok(r.nonMani === 0, `${who}: ${r.nonMani} non-manifold edges — sheets are welded together`);
-        }
-      }
-    });
+  // Sit the model ON the axis. After the -90° tilt, world = (modelX, modelZ, -modelY), so
+  // centre it in length & width and rest model-Z's floor on the ground plane (world Y=0). This
+  // runs in every mode (smooth, follow-my-drawing, revolve), and the camera pivot is pinned to
+  // the model's vertical middle so orbit and zoom always turn around it — nothing drifts off.
+  { const gb=geo.boundingBox;
+    const offX=-(gb.min.x+gb.max.x)/2, offGround=-gb.min.z, offZ=(gb.min.y+gb.max.y)/2;
+    bodyMesh.position.set(offX,offGround,offZ);
+    wireMesh.position.set(offX,offGround,offZ);
+    if(bottomMesh)bottomMesh.position.set(offX,offGround,offZ);
+    refGroup.position.set(offX,offGround,offZ);
+    const worldH=gb.max.z-gb.min.z;
+    target.set(0, worldH*(0.5-FRAME_LIFT), 0); updateCam();
   }
 
-  t("mesh audit: welding may not merge the inner wall into the outer skin", () => {
-    /* The specific trap. Coincident vertices are welded so a dual contour's duplicate points
-       do not leave zero-area faces — but on a thin shell the outer skin and the inner wall
-       can put vertices at the SAME point without being the same surface. Welding those pinches
-       the shell into a non-manifold edge. A shell must stay two closed sheets. */
-    for (const wallThickness of [1.5, 2.5, 5, 9]) {
-      const g = API.makeVisualHull(blk({ wallThickness }));
-      const r = audit(g);
-      ok(r.nonMani === 0, `wall ${wallThickness}: ${r.nonMani} non-manifold edges after welding`);
-      ok(r.boundary === 0, `wall ${wallThickness}: ${r.boundary} open edges after welding`);
-      ok(r.zeroArea === 0, `wall ${wallThickness}: ${r.zeroArea} zero-area faces survived`);
+  // readouts
+  const tri=indices.length/3;
+  const man=checkManifold(indices);
+  const bb=geo.boundingBox;
+  makeRefPlanes(bb);
+  const dx=(bb.max.x-bb.min.x), dy=(bb.max.y-bb.min.y), dz=(bb.max.z-bb.min.z);
+  rLen.textContent=fmtLen(S.len);
+  rTris.textContent=tri.toLocaleString();
+  // A signed volume is only EXACT over a closed surface — flag it, don't fake it. And say
+  // WHAT it measures: a hollow frame (no closed bottom) reports its WALL MATERIAL — the outer
+  // skin minus an inner copy set one wall-thickness in — not the space it encloses.
+  //
+  // A HOLLOW FIGURE IS ALWAYS APPROXIMATE, WATERTIGHT OR NOT, so it always carries the "≈".
+  // This used to show a bare number and a tooltip reading "Exact for this wall thickness" and
+  // "This is the real material of the frame". Both halves were exactly wrong in the one place
+  // it matters: somebody estimates filament off this. The signed volume IS exact for the
+  // surface on screen — but that surface's INNER wall is meshed at grid resolution against
+  // what the exact build offsets smoothly, and the bumps add area, and area times wall is
+  // material. Measured on Collin's own car against the kernel's 89.73 cm3:
+  //     fast   res  50  cell 4.00mm   130.76 cm3   +45.7%
+  //     normal res  72  cell 2.78mm   117.37 cm3   +30.8%
+  //     fine   res 108  cell 1.85mm   110.98 cm3   +23.7%
+  // Monotonic in the cell size, which is what says it is faceting and not a geometry error.
+  // NO CORRECTION FACTOR IS APPLIED. Those percentages are one model, the bias depends on how
+  // much inner surface a body has, and this file's standing answer to a discretisation gap is
+  // resolution plus reporting rather than a fudge. So the number stays what the mesh says and
+  // stops claiming to be what prints.
+  rVol.textContent=((man.watertight&&!hollow)?"":"≈")+(volume/1000).toFixed(1)+" cm³";
+  if(hollow){
+    const w=fmtLen(S.wall);
+    rVol.title=`Hollow shell — the frame's WALL MATERIAL only: the outer surface minus an inner copy set ${w} inward, not the space it encloses. ${man.watertight?"":"The surface isn't fully closed, so it is rougher still. "}An OVER-ESTIMATE: the preview meshes the inner wall in facets where the exact build offsets it smoothly, and the extra area reads as extra material. It tightens as you raise build quality, and the STEP export is the accurate one — don't quote filament off this figure.`;
+  } else {
+    rVol.title=man.watertight?"Solid — the volume enclosed by the surface (exact).":"Approximate — the surface has defects, so the volume can't be measured exactly.";
+  }
+  { let sa=0;                                             // total surface area, for material estimates
+    for(let q=0;q<indices.length;q+=3){
+      const A=indices[q]*3,B=indices[q+1]*3,C=indices[q+2]*3;
+      const ux=positions[B]-positions[A],uy=positions[B+1]-positions[A+1],uz=positions[B+2]-positions[A+2];
+      const vx2=positions[C]-positions[A],vy2=positions[C+1]-positions[A+1],vz2=positions[C+2]-positions[A+2];
+      sa+=Math.hypot(uy*vz2-uz*vy2, uz*vx2-ux*vz2, ux*vy2-uy*vx2)*0.5;
     }
-  });
-}
+    const el=document.getElementById("rArea");
+    if(el){el.textContent=(sa/100).toFixed(1)+" cm²";el.title="Total surface area — paint, plating, or wrap estimates.";}
+  }
 
-
-// =====================================================================================
-// THE WALL SAFETY GATE — for parts that have to hold, not just look right.
-//
-// A percentile cannot see a local thin patch, and that is exactly the failure that matters.
-// Measured on a 5mm-wall box with one 3mm pocket: the vertex-push carve leaves 2.5mm of wall
-// under the pocket and the MEDIAN still reads 5.00mm, because the thin patch is a small share
-// of a big surface. `min` is no better — it is a single reading, so it swings with the sample
-// count (4.91mm at 300 samples, 3.76mm at 2000, on a shell that is genuinely fine).
-//
-// So the gate clusters under-spec readings by proximity and reports the worst REGION with its
-// position: "a 2.5mm patch, here", which is something a person can act on. A lone reading is
-// noise — a ray grazing a fold — so a cluster needs at least three.
-// =====================================================================================
-{
-  const BOX = [[0,0],[1,0],[1,1],[0,1]];
-  const PATCH = [[0.25,0.30],[0.75,0.30],[0.75,0.70],[0.25,0.70]];
-  const blk = extra => ({ length:120, topProfile:[[0,60],[1,60]], widthProfile:[[0,40],[1,40]],
-    sidePoly:BOX, topPoly:BOX, frontPoly:BOX, hullCrisp:1, wallThickness:5,
-    hullHollow:true, closedBottom:true, hullRes:64, mode:"projection", features:null, ...extra });
-  const DISH = [{ kind:"poly", view:"top", poly:PATCH, depth:-3, soft:0.02, name:"dish" }];
-  const gate = (p, wall) => {
-    const g = API.makeVisualHull(blk(p));
-    return API.shellWallStats(g.positions, g.indices, { wall, samples:1200 });
-  };
-
-  t("wall gate: a healthy shell is not flagged, at any wall", () => {
-    /* A gate that cries wolf gets switched off, so the false-positive case is tested first
-       and on a spread — a thin wall, a thick one, an open underside and a solid body. */
-    for (const [label, extra, wall] of [
-      ["wall 5", {}, 5], ["wall 9", { wallThickness:9 }, 9], ["wall 3", { wallThickness:3 }, 3],
-      ["open bottom", { closedBottom:false }, 5], ["solid", { hullHollow:false }, 5],
-    ]) {
-      const s = gate(extra, wall);
-      ok(!s.worstPatch,
-         `${label}: flagged ${s.worstPatch && s.worstPatch.min.toFixed(2)}mm over ` +
-         `${s.worstPatch && s.worstPatch.n} readings on a shell that is fine`);
-    }
-  });
-
-  t("wall gate: a thin patch under a pocket is found, and located", () => {
-    const s = gate({ features:DISH, carveMode:"stamp" }, 5);
-    ok(s.worstPatch, "the 2.5mm patch under the pocket must be reported");
-    ok(s.worstPatch.min < 5 * 0.75,
-       `and reported as thin: ${s.worstPatch.min.toFixed(2)}mm against a 5mm wall`);
-    ok(s.worstPatch.n >= 3, "a patch is several readings, not one stray");
-    // the pocket is centred on the body, x 30..90 of 120, and near the roof
-    const [x, , z] = s.worstPatch.at;
-    ok(x > 25 && x < 95, `the patch should be under the pocket, got x=${x.toFixed(0)}`);
-    ok(z > 40, `and near the roof it was carved into, got z=${z.toFixed(0)}`);
-  });
-
-  t("wall gate: the median would have missed it entirely", () => {
-    /* Pinning WHY the gate exists. If this ever starts failing because the median moved, the
-       gate can be simplified — but until then a percentile is not a safety check. */
-    const s = gate({ features:DISH, carveMode:"stamp" }, 5);
-    near(s.median, 5, 0.4, "the median reads healthy on a shell with a 2.5mm patch");
-    ok(s.worstPatch && s.worstPatch.min < s.median - 1.5,
-       "which is exactly why the patch is reported separately");
-  });
-
-  t("wall gate: the field engine leaves no thin patch where the stamp does", () => {
-    // the reason field is the default: the cavity follows the pocket, so the wall survives
-    const f = gate({ features:DISH, carveMode:"field" }, 5);
-    const st = gate({ features:DISH, carveMode:"stamp" }, 5);
-    ok(st.worstPatch, "stamp must still flag (if not, this test has lost its subject)");
-    ok(!f.worstPatch,
-       `field should leave no thin patch, got ${f.worstPatch && f.worstPatch.min.toFixed(2)}mm`);
-  });
-}
-
-
-// =====================================================================================
-// CARVING FROM ANY ANGLE — the bridge to building from photographs.
-//
-// The engine already carves the intersection of what the outlines allow: material only where
-// a point lands inside side AND top AND front. Nothing in that rule needs the views to be
-// axis-aligned, so `p.extraViews` accepts silhouettes from arbitrary directions and folds
-// them into the same intersection.
-//
-// This is the shape of the photo problem. Current image-to-3D pipelines work by generating
-// several consistent ORTHOGRAPHIC views and reconstructing from those — which is exactly this
-// input. Three axis views is a person tracing; N arbitrary views is a camera.
-//
-// The test is a sphere, because a sphere is a circle from EVERY direction, so the right
-// answer is known in closed form and every view is the same outline. Three orthogonal views
-// of a sphere do not give a sphere: they give the intersection of three cylinders, which is
-// 8(2-sqrt2)r^3 — about 12% too fat. Adding views must shrink it monotonically toward
-// 4/3 pi r^3 and never past it. One number checks the whole projection.
-// =====================================================================================
-{
-  const R = 40;
-  const ring = (n, r) => Array.from({length:n}, (_, i) => {
-    const a = i/n*Math.PI*2; return [Math.cos(a)*r, Math.sin(a)*r];
-  });
-  const unitRing = n => Array.from({length:n}, (_, i) => {
-    const a = i/n*Math.PI*2; return [0.5 + Math.cos(a)*0.5, 0.5 + Math.sin(a)*0.5];
-  });
-  // evenly spread directions (golden angle), so added views are not clustered on one side
-  const spread = n => Array.from({length:n}, (_, i) => {
-    const y = 1 - (i + 0.5)/n*2;
-    const r = Math.sqrt(Math.max(0, 1 - y*y));
-    const th = Math.PI*(1 + Math.sqrt(5))*i;
-    return [Math.cos(th)*r, y, Math.sin(th)*r];
-  });
-  const ball = extra => ({
-    mode:"projection", length:2*R, stations:52, hullCrisp:1, hullRes:60,
-    sidePoly:unitRing(64), topPoly:unitRing(64), frontPoly:unitRing(64),
-    topProfile:[[0,2*R]], widthProfile:[[0,R]],
-    hullHollow:false, closedBottom:true, features:null, ...extra });
-  const vol = g => { let V=0; const P=g.positions, I=g.indices;
-    for (let q=0;q<I.length;q+=3){ const a=I[q]*3,b=I[q+1]*3,c=I[q+2]*3;
-      V += (P[a]*(P[b+1]*P[c+2]-P[c+1]*P[b+2]) - P[a+1]*(P[b]*P[c+2]-P[c]*P[b+2])
-          + P[a+2]*(P[b]*P[c+1]-P[c]*P[b+1]))/6; }
-    return Math.abs(V)/1000; };
-  const SPHERE = 4/3*Math.PI*R*R*R/1000;
-
-  t("any-angle: with no extra views nothing changes at all", () => {
-    const a = API.makeVisualHull(ball({}));
-    const b = API.makeVisualHull(ball({ extraViews:[] }));
-    ok(a.indices.length === b.indices.length, "an empty view list must be a no-op");
-    // and a malformed view must be ignored rather than throwing or carving nonsense
-    const c = API.makeVisualHull(ball({ extraViews:[{ dir:[0,0,0], poly:ring(8,R) }, { poly:null }] }));
-    ok(c.indices.length === a.indices.length, "a view with no direction or no outline is skipped");
-  });
-
-  t("any-angle: extra views only ever remove material", () => {
-    /* A silhouette says where the object CANNOT be. Carving with one more can only take
-       material away — if a build ever grows, the projection has put the outline in the wrong
-       place and the intersection has become a union somewhere. */
-    let prev = Infinity;
-    for (const n of [0, 4, 10]) {
-      const v = vol(API.makeVisualHull(ball({
-        extraViews: spread(n).map(d => ({ dir:d, poly:ring(48, R) })) })));
-      ok(v <= prev + 0.5, `${n} views gave ${v.toFixed(1)}cm3, more than the ${prev.toFixed(1)}cm3 before it`);
-      prev = v;
-    }
-  });
-
-  t("any-angle: more views converge on the true sphere", () => {
-    const none = vol(API.makeVisualHull(ball({})));
-    const many = vol(API.makeVisualHull(ball({
-      extraViews: spread(14).map(d => ({ dir:d, poly:ring(48, R) })) })));
-    /* Three axis views give the three-cylinder solid, ~12% fat. That is not a defect — it is
-       the most three silhouettes can know. */
-    ok(none > SPHERE*1.05,
-       `3 axis views should be visibly fat (${none.toFixed(1)} vs sphere ${SPHERE.toFixed(1)}cm3)`);
-    ok(Math.abs(many - SPHERE) < SPHERE*0.03,
-       `14 views should land within 3% of a sphere (${many.toFixed(1)} vs ${SPHERE.toFixed(1)}cm3)`);
-    ok(many < none, "and be tighter than three views alone");
-  });
-
-  t("any-angle: a carve from many angles is still a printable solid", () => {
-    const g = API.makeVisualHull(ball({
-      extraViews: spread(12).map(d => ({ dir:d, poly:ring(48, R) })) }));
-    watertight(g, "sphere carved from 15 directions");
-    for (let i = 0; i < g.positions.length; i++)
-      ok(Number.isFinite(g.positions[i]), "every coordinate must be a number");
-  });
-
-  t("perspective: a camera far enough away IS an orthographic view", () => {
-    /* The cheapest check that the perspective divide is even wired: push the lens away and
-       the cone becomes a slab, so the answer must walk onto the orthographic one. If the
-       divide were missing this would be wrong at every distance; if the image distance were
-       not scaled back to millimetres it would drift as the camera moves. */
-    const dirs = spread(12);
-    const ortho = vol(API.makeVisualHull(ball({
-      extraViews: dirs.map(d => ({ dir:d, poly:ring(48, R) })) })));
-    const far = vol(API.makeVisualHull(ball({
-      extraViews: dirs.map(u => {
-        const D = 20000;
-        return { from:[u[0]*D,u[1]*D,u[2]*D], dir:[-u[0],-u[1],-u[2]],
-                 poly: ring(48, R/Math.sqrt(D*D - R*R)) };
-      }) })));
-    ok(Math.abs(far - ortho) < 0.5,
-       `a lens 20m away should match the orthographic carve (${far.toFixed(2)} vs ${ortho.toFixed(2)} cm3)`);
-  });
-
-  t("perspective: the silhouette is the tangent cone, not the naive radius", () => {
-    /* The mistake this exists to catch. A sphere of radius r at distance D does NOT project to
-       a circle of radius r/D — the silhouette is where the TANGENT cone touches, giving
-       sin(theta)=r/D and an image radius of tan(asin(r/D)) = r/sqrt(D^2-r^2), always larger.
-       Fed the correct radius the carve lands on the sphere; fed r/D it comes out 14% small at
-       close range. Both are checked, because only the pair proves the divide is right rather
-       than the tolerance being loose. */
-    const D = 120;
-    const cams = radius => spread(14).map(u => ({
-      from:[u[0]*D,u[1]*D,u[2]*D], dir:[-u[0],-u[1],-u[2]], poly: ring(48, radius) }));
-    const right = vol(API.makeVisualHull(ball({ extraViews: cams(R/Math.sqrt(D*D - R*R)) })));
-    const wrong = vol(API.makeVisualHull(ball({ extraViews: cams(R/D) })));
-    ok(Math.abs(right - SPHERE) < SPHERE*0.03,
-       `tangent-cone silhouettes should give a sphere (${right.toFixed(1)} vs ${SPHERE.toFixed(1)} cm3)`);
-    ok(wrong < SPHERE*0.93,
-       `and the naive r/D should visibly under-carve (${wrong.toFixed(1)} cm3) — if it does not, ` +
-       `the perspective divide is not doing anything`);
-  });
-
-  t("perspective: material behind the lens is never kept", () => {
-    /* A silhouette cone opens FORWARD from the lens. Points behind the camera project to the
-       same image coordinates as points in front of it — a divide by a negative depth flips
-       the sign — so without an explicit check a camera placed inside the model would carve a
-       mirror image of the silhouette out the back of it. */
-    const g = API.makeVisualHull(ball({ extraViews:[{
-      from:[0,0,-10], dir:[0,0,1], poly: ring(24, 0.35) }] }));
-    watertight(g, "camera close in front of the body");
-    let behind = 0;
-    for (let i = 0; i < g.positions.length; i += 3)
-      if (g.positions[i+2] < -R - 5) behind++;   // material well behind the lens
-    ok(behind === 0, `${behind} vertices were kept behind the camera`);
-  });
-
-  t("any-angle: the outline is read in the view's own frame, not the world's", () => {
-    /* A HALF-width outline from one direction must flatten the ball along THAT direction and
-       leave the perpendicular alone. If the projection axes were wrong, the flattening would
-       land on some other axis — which a bounding box catches immediately. */
-    const squash = { dir:[0,0,1], poly:ring(48, R).map(([u,v]) => [u*0.5, v]) };
-    const g = API.makeVisualHull(ball({ extraViews:[squash] }));
-    const mn = [1e9,1e9,1e9], mx = [-1e9,-1e9,-1e9];
-    for (let i = 0; i < g.positions.length; i += 3)
-      for (let k = 0; k < 3; k++) {
-        if (g.positions[i+k] < mn[k]) mn[k] = g.positions[i+k];
-        if (g.positions[i+k] > mx[k]) mx[k] = g.positions[i+k];
+  /* THIN-WALL WARNING — the half of the safety gate the person actually sees.
+     A hollow frame can be watertight, report a healthy volume, and still have a patch of wall
+     too thin to survive being handled. The median cannot show it (5.00mm on a shell with a
+     2.5mm patch, because the patch is a small share of a big surface), so shellWallStats
+     clusters the under-spec readings and reports the worst REGION with its position.
+     Only shown when there is something to say. Skipped entirely on solid bodies, which have
+     no wall to be thin, and during a drag, where the mesh is provisional and a warning that
+     flickers is worse than none. */
+  try{
+    const warn=document.getElementById("thinWarn");
+    if(warn){
+      let patch=null;
+      if(hollow && S.wall>0 && !prof.hullFast){   // prof carries the drag flag; S does not
+        const r=shellWallStats(positions,indices,{wall:S.wall,samples:900});
+        patch=r&&r.worstPatch;
       }
-    const size = [mx[0]-mn[0], mx[1]-mn[1], mx[2]-mn[2]];
-    // looking down z, the view's own u axis is squashed; z itself must be untouched
-    ok(size[2] > R*1.8, `the look direction must NOT be flattened (z spans ${size[2].toFixed(1)}mm)`);
-    const flattened = Math.min(size[0], size[1]);
-    ok(flattened < R*1.4, `one perpendicular axis must be squashed (smallest span ${flattened.toFixed(1)}mm)`);
-  });
-}
-
-
-// =====================================================================================
-// A DETAIL TOO SMALL FOR THE GRID — say so, rather than hand back the wrong shape.
-//
-// A dual contour places one vertex per cell. A feature narrower than a voxel has no grid
-// point inside it, so the mesher has nothing to place a surface from and extrapolates.
-// Measured on a 200mm body at res 70 (2.86mm cells), asking for a 6mm-tall badge:
-//     20mm wide -> 6.00mm proud     correct
-//     10mm wide -> 6.00mm proud     correct
-//      4mm wide -> 6.00mm proud     correct
-//      2mm wide -> 9.29mm proud     WRONG, and silently so
-//      1mm wide -> 0.15mm proud     effectively gone
-// A finer grid is the only real remedy and it is cubic in cost, so the choice belongs to the
-// person — but they can only choose if they are told.
-// =====================================================================================
-{
-  const BOX = [[0,0],[1,0],[1,1],[0,1]];
-  const sq = f => [[0.5-f/2,0.5-f/2],[0.5+f/2,0.5-f/2],[0.5+f/2,0.5+f/2],[0.5-f/2,0.5+f/2]];
-  const blk = extra => ({ length:200, topProfile:[[0,80],[1,80]], widthProfile:[[0,50],[1,50]],
-    sidePoly:BOX, topPoly:BOX, frontPoly:BOX, hullCrisp:1, wallThickness:4,
-    hullHollow:true, closedBottom:true, hullRes:70, mode:"projection", features:null, ...extra });
-  const badge = f => [{ kind:"poly", view:"front", poly:sq(f), depth:6, soft:0.03, name:"badge" }];
-
-  t("too small: a detail the grid can resolve is not flagged", () => {
-    /* False positives first. Warning about a detail that came out perfectly would teach
-       someone to ignore the banner, which is worse than not having it. */
-    for (const f of [0.40, 0.20, 0.08]) {
-      const g = API.makeVisualHull(blk({ features:badge(f) }));
-      ok(!g.tooSmall, `a ${(f*50).toFixed(0)}mm badge builds correctly and must not be flagged`);
+      /* Features the grid could not resolve. A detail narrower than a voxel has no grid point
+         inside it, so the mesher extrapolates and the result is visibly wrong — a 2mm badge on
+         a 2.86mm grid built 9.29mm proud of a 6mm ask, and a 1mm one nearly vanished. The
+         person cannot tell that from looking at it, and no amount of care in the drawing fixes
+         it: the remedy is a finer grid or a bigger detail, and both are their call. */
+      const tiny=(!prof.hullFast && lastBuild && lastBuild.tooSmall) || null;
+      const thin=(!prof.hullFast && lastBuild && lastBuild.thinWallFallback) || null;
+      const msgs=[];
+      if(thin){
+        /* The one that matters most, because the shape is WRONG and nothing else says so. At
+           this wall the grid cannot carry two surfaces, so the build falls back to pushing the
+           mesh inward — and on a thin section that welds the two sides into a flat shelf with
+           open air under it. */
+        msgs.push(`A ${fmtLen(thin.wall)} wall is thinner than this build can hollow properly `
+          +`(it needs about ${fmtLen(thin.cell*1.45)} at this size). Thin sections may come out `
+          +`as a flat shelf instead of a hollow box. Use a thicker wall, or a bigger model.`);
+      }
+      if(patch){
+        /* Say the consequence, not the statistic. "0.55mm of 4.2mm" means nothing to someone
+           who has not been staring at this; "may snap" is the decision they have to make. */
+        const pct=Math.round(100*patch.min/S.wall);
+        msgs.push(`Thin wall: ${fmtLen(patch.min)} where you asked for ${fmtLen(S.wall)}`
+          +` (${pct}%). This spot may snap when printed or handled.`);
+      }
+      if(tiny){
+        const one=tiny[0];
+        const who=tiny.length>1?`${tiny.length} details are`:(one.name?`“${one.name}” is`:"A detail is");
+        /* Naming the way out is the whole point. Before Build quality existed this could only
+           say "you cannot have this"; now it can say which step would, and stays honest when
+           no step is enough rather than sending someone round a loop. */
+        const fix=one.fixedBy
+          ? ` Set Build quality to ${one.fixedBy[0].toUpperCase()+one.fixedBy.slice(1)} to build it.`
+          : ` No quality setting can resolve it — make the detail bigger, or the model bigger.`;
+        msgs.push(`${who} too small for this size of model — ${fmtLen(one.span)} across, `
+          +`under the ${fmtLen(one.cell*1.5)} this build can resolve.`
+          +` It will come out the wrong shape.${fix}`);
+      }
+      if(msgs.length){
+        warn.querySelector(".tw-t").textContent=msgs.join(" ");
+        warn.hidden=false;
+        /* The Show me button only means something for a thin patch, which has a place. A
+           feature that is too small is wrong everywhere it appears, so hide the button
+           rather than send the camera somewhere arbitrary. */
+        const btn=document.getElementById("thinShow");
+        if(btn) btn.hidden=!patch;
+        if(patch) warn.dataset.at=patch.at.join(",");
+        else delete warn.dataset.at;
+      } else {
+        warn.hidden=true;
+        delete warn.dataset.at;
+      }
     }
-    ok(!API.makeVisualHull(blk({})).tooSmall, "a model with no features has nothing to flag");
-  });
-
-  t("too small: a detail narrower than the grid IS flagged, with its size", () => {
-    const g = API.makeVisualHull(blk({ features:badge(0.04) }));   // 2mm on a 2.86mm grid
-    ok(g.tooSmall && g.tooSmall.length === 1, "the 2mm badge must be reported");
-    const one = g.tooSmall[0];
-    ok(one.name === "badge", `and named, so it can be found (got ${JSON.stringify(one.name)})`);
-    ok(one.span < one.cell*1.5, `span ${one.span.toFixed(2)}mm must be under the ${(one.cell*1.5).toFixed(2)}mm bar`);
-    ok(one.cell > 0, "and the cell size reported, so the message can say what would fix it");
-  });
-
-  t("too small: the bar is the cell, not a number of millimetres", () => {
-    /* What decides this is the detail measured against the CELL, and the cell divides the
-       model — so scaling the whole thing changes nothing, and only the detail's share of the
-       body matters. Two things worth knowing, both learned by getting this test wrong twice:
-       raising hullRes cannot rescue a small detail (resolution is capped at 80), and shrinking
-       the model cannot either (the cell shrinks with it). The only remedies are a bigger
-       detail or a coarser one, which is why this is reported rather than fixed. */
-    const mk = (f, len) => API.makeVisualHull(blk({ features:badge(f), length:len,
-      topProfile:[[0,len*0.4],[1,len*0.4]], widthProfile:[[0,len*0.25],[1,len*0.25]] }));
-    // same fraction of the body, wildly different absolute sizes: the verdict must agree
-    const a = mk(0.04, 200), b = mk(0.04, 40);
-    ok(!!a.tooSmall === !!b.tooSmall,
-       "the same detail as a fraction of the body must get the same verdict at any scale");
-    // and the verdict must turn over when the detail's SHARE grows
-    const wide = mk(0.20, 200);
-    ok(a.tooSmall && !wide.tooSmall,
-       "a bigger share of the same body must clear the bar that a smaller share failed");
-    // the reported cell is what the message needs to say what would fix it
-    if (a.tooSmall) ok(a.tooSmall[0].cell > 0 && a.tooSmall[0].span < a.tooSmall[0].cell*1.5,
-       "the report carries both the detail's size and the cell it must beat");
-  });
-
-  t("too small: it survives the path the app actually calls", () => {
-    // the readout reads this off makeBody, not makeVisualHull, so the field has to travel
-    const g = API.makeBody(blk({ features:badge(0.04) }));
-    ok(g.tooSmall && g.tooSmall.length === 1, "makeBody must pass the report through");
-  });
+  }catch(e){ /* a warning must never be the thing that breaks a build */ }
+  const uf=UNIT_MM[displayUnit], ud=(displayUnit==="mm"||displayUnit==="px")?0:1;
+  const buildMs=performance.now()-t0; hullTune(buildMs);
+  dims.textContent=`bbox  L ${(dx/uf).toFixed(ud)} × W ${(dy/uf).toFixed(ud)} × H ${(dz/uf).toFixed(ud)} ${displayUnit}${hollow?`  ·  hollow shell · ${fmtLen(S.wall)} wall`:""}  ·  ${buildMs.toFixed(0)} ms`;
+  const stamp=document.getElementById("stamp");
+  if(man.watertight){stamp.classList.remove("warn");
+    stamp.querySelector(".t").textContent="SOLID SHAPE";
+    stamp.querySelector(".d").textContent="sealed ✓ watertight ✓";}
+  else{stamp.classList.add("warn");
+    stamp.querySelector(".t").textContent="HAS GAPS";
+    const parts=[]; if(man.boundary)parts.push(man.boundary+" open");
+    if(man.nonman)parts.push(man.nonman+" pinched");
+    stamp.title=`${parts.join(" and ")} edge${(man.boundary+man.nonman)>1?"s":""}. Usually a feature finer than the mesh can resolve — raise Detail in Advanced, or make the feature bigger.`;
+    stamp.querySelector(".d").textContent=parts.join(" · ")+" edges — the shape is not sealed";}
+  updateViewDots();
 }
 
+function resize(){
+  const v=document.getElementById("viewThree");
+  const w=v.clientWidth||800,h=v.clientHeight||600;
+  renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix();requestRender();
+}
+/* "Show me" — put the thin spot in the middle of the screen. A warning that says a wall is
+   thin somewhere is only half an answer on a model with a hundred surfaces; the person needs
+   to see it to judge whether it matters. Reads the mesh-space position recorded when the
+   warning was raised and applies the same placement the body mesh got, so it stays correct
+   whatever the model's own origin is. */
+function showThinSpot(){
+  const warn=document.getElementById("thinWarn");
+  if(!warn || warn.hidden || !warn.dataset.at || !bodyMesh) return;
+  const a=warn.dataset.at.split(",").map(Number);
+  if(a.length!==3 || a.some(v=>!isFinite(v))) return;
+  const p=bodyMesh.position;
+  // field is (x, y, z-up); the scene is y-up, matching how the mesh itself was built
+  target.set(a[0]+p.x, a[2]+p.y, a[1]+p.z);
+  cam.rad=Math.max(8, S.len*0.45);          // close enough to see a wall, not so close it is abstract
+  updateCam();
+}
+function updateCam(){
+  cam.pol=clamp(cam.pol,0.15,Math.PI-0.15);cam.rad=clamp(cam.rad,Math.max(5,S.len*0.12),S.len*14);
+  const x=target.x+cam.rad*Math.sin(cam.pol)*Math.cos(cam.az);
+  const y=target.y+cam.rad*Math.cos(cam.pol);
+  const z=target.z+cam.rad*Math.sin(cam.pol)*Math.sin(cam.az);
+  camera.position.set(x,y,z);camera.lookAt(target);requestRender();
+}
+// Distance at which `box` just fills the current viewport at the current orbit angle.
+// Works for ANY aspect (the pane is portrait) by measuring the box's real spread across
+// the camera's right/up axes and fitting each against the matching field of view, rather
+// than guessing from the largest dimension. The *1.06 leaves room for the near corners,
+// which loom larger under perspective.
+function frameFitRadius(box){
+  const dir=new THREE.Vector3(-Math.sin(cam.pol)*Math.cos(cam.az),-Math.cos(cam.pol),-Math.sin(cam.pol)*Math.sin(cam.az)).normalize();
+  const right=new THREE.Vector3().crossVectors(dir,new THREE.Vector3(0,1,0)).normalize();
+  const up=new THREE.Vector3().crossVectors(right,dir).normalize();
+  const c=box.getCenter(new THREE.Vector3()), v=new THREE.Vector3();
+  let halfW=1e-3, halfH=1e-3;
+  for(let i=0;i<8;i++){
+    v.set(i&1?box.max.x:box.min.x, i&2?box.max.y:box.min.y, i&4?box.max.z:box.min.z).sub(c);
+    halfW=Math.max(halfW,Math.abs(v.dot(right)));
+    halfH=Math.max(halfH,Math.abs(v.dot(up)));
+  }
+  const vfov=camera.fov*Math.PI/180, hfov=2*Math.atan(Math.tan(vfov/2)*(camera.aspect||1));
+  return Math.max(halfH/Math.tan(vfov/2), halfW/Math.tan(hfov/2))*1.06;
+}
+function frameModel(){
+  const fallback=()=>{target.set(0,0,0);cam.rad=S.len*1.7;cam.az=-0.7;cam.pol=1.12;updateCam();};
+  if(!bodyMesh){fallback();return;}
+  const b=new THREE.Box3().setFromObject(bodyMesh);
+  if(!isFinite(b.min.x)){fallback();return;}
+  cam.az=-0.7; cam.pol=1.05;                            // fixed 3/4 angle
+  target.copy(b.getCenter(new THREE.Vector3()));        // pivot ON the model so orbit never flings it off
+  target.y-=(b.max.y-b.min.y)*FRAME_LIFT;               // aim a little low -> model rides higher in the frame
+  cam.rad=frameFitRadius(b)*FRAME_FILL;                 // fill the frame for the actual (portrait) pane
+  updateCam();
+}
+let raf, dirtyUntil=0;
+// Render ONLY when something changed (idle = zero GPU work). Any change opens a short
+// render window, which also covers async updates (image loads, debounced rebuilds).
+function requestRender(ms){dirtyUntil=Math.max(dirtyUntil, performance.now()+(ms||220));}
+document.addEventListener("visibilitychange",()=>{if(!document.hidden){requestRender();if(typeof wsRequestRender==="function")wsRequestRender();}});
+function animate(){
+  raf=requestAnimationFrame(animate);
+  if(document.hidden)return;                       // tab in background: stop entirely
+  if(performance.now()>dirtyUntil)return;          // nothing changed: skip the frame
+  renderer.render(scene,camera);
+}
 
-// =====================================================================================
-// BUILD QUALITY — the way out of "this detail is too small".
-//
-// Cell size decides the smallest detail that can exist: a feature narrower than about one and
-// a half cells has no grid point inside it, so the mesher extrapolates and hands back the
-// wrong shape. Before this setting there was NO way to build a 2mm badge on a 200mm car at
-// any setting the app allowed, and the warning could only say so.
-//
-// Quality scales the resolution REQUEST as well as the cap. Scaling the cap alone would do
-// nothing for most models — profile_7 asks for 72 and is capped at 80, so a higher cap leaves
-// it exactly where it was.
-// =====================================================================================
-{
-  const BOX = [[0,0],[1,0],[1,1],[0,1]];
-  const sq = f => [[0.5-f/2,0.5-f/2],[0.5+f/2,0.5-f/2],[0.5+f/2,0.5+f/2],[0.5-f/2,0.5+f/2]];
-  const blk = extra => ({ length:200, topProfile:[[0,80],[1,80]], widthProfile:[[0,50],[1,50]],
-    sidePoly:BOX, topPoly:BOX, frontPoly:BOX, hullCrisp:1, wallThickness:4,
-    hullHollow:true, closedBottom:true, hullRes:70, mode:"projection", features:null, ...extra });
-  const badge = f => [{ kind:"poly", view:"front", poly:sq(f), depth:6, soft:0.03, name:"badge" }];
-  const proud = (f, q) => {
-    const g = API.makeVisualHull(blk({ features:badge(f), hullQuality:q }));
-    const b = API.makeVisualHull(blk({ hullQuality:q }));
-    let m = -1e9, n = -1e9;
-    for (let i = 0; i < g.positions.length; i += 3) if (g.positions[i] > m) m = g.positions[i];
-    for (let i = 0; i < b.positions.length; i += 3) if (b.positions[i] > n) n = b.positions[i];
-    return m - n;
+/* orbit / pan / zoom — mouse AND touch.
+   On a mouse: drag orbits, right-drag (or shift) pans, wheel zooms.
+   On a phone none of that exists: there is no right button and no wheel, so panning and
+   zooming were simply unreachable. One finger orbits (or paints, in Sculpt); TWO fingers
+   pan and pinch to zoom, which is what every map and photo app has already taught people. */
+(function(){
+  let mode=0,px=0,py=0;
+  const pts=new Map();                       // every finger currently down
+  let pinch=null;                            // {dist, cx, cy} while two are down
+  const mid=()=>{const a=[...pts.values()];
+    return {x:(a[0].x+a[1].x)/2, y:(a[0].y+a[1].y)/2, d:Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y)};};
+  const panBy=(dx,dy)=>{
+    const s=cam.rad*0.0016;
+    const fwd=new THREE.Vector3().subVectors(target,camera.position).normalize();
+    const right=new THREE.Vector3().crossVectors(fwd,camera.up).normalize();
+    const up=new THREE.Vector3().crossVectors(right,fwd).normalize();
+    target.addScaledVector(right,-dx*s); target.addScaledVector(up,dy*s);
   };
-
-  t("quality: the default is Normal, and Normal is exactly today's build", () => {
-    /* The setting must be free to exist. Anything that changes an unset build changes every
-       saved model at once. */
-    const a = API.makeVisualHull(blk({ features:badge(0.20) }));
-    const b = API.makeVisualHull(blk({ features:badge(0.20), hullQuality:"normal" }));
-    ok(a.indices.length === b.indices.length, "an unset quality must mean Normal");
-    near(a.volume, b.volume, 1, "and produce the same material");
-    const junk = API.makeVisualHull(blk({ features:badge(0.20), hullQuality:"enormous" }));
-    ok(junk.indices.length === a.indices.length, "an unrecognised value falls back to Normal");
-  });
-
-  t("quality: the steps really are coarser and finer", () => {
-    const n = f => API.makeVisualHull(blk({ features:badge(0.20), hullQuality:f })).indices.length;
-    ok(n("fast") < n("normal"), "Fast must build a lighter mesh than Normal");
-    ok(n("fine") > n("normal"), "and Fine a heavier one");
-  });
-
-  t("quality: Fine builds a detail that Normal cannot", () => {
-    /* The reason the setting exists. A 2mm badge on a 200mm body is under Normal's cell, so
-       the mesher extrapolates: measured, 9.29mm proud of a 6mm ask. At Fine it is resolvable
-       and comes out right. */
-    const atNormal = proud(0.04, "normal"), atFine = proud(0.04, "fine");
-    ok(Math.abs(atNormal - 6) > 1.5,
-       `Normal should get this visibly wrong (${atNormal.toFixed(2)}mm for a 6mm ask) — ` +
-       `if it does not, this test has lost its subject`);
-    ok(Math.abs(atFine - 6) < 1.0,
-       `Fine should build it correctly (${atFine.toFixed(2)}mm for a 6mm ask)`);
-  });
-
-  t("quality: the report names the step that would fix it, and only when one would", () => {
-    const flagged = API.makeVisualHull(blk({ features:badge(0.04) }));
-    ok(flagged.tooSmall, "a 2mm badge is still flagged at Normal");
-    ok(flagged.tooSmall[0].fixedBy === "fine",
-       `and must name Fine as the way out (got ${JSON.stringify(flagged.tooSmall[0].fixedBy)})`);
-    /* And it must not promise a rescue that does not exist. A detail small enough that no step
-       reaches it has to say so, or someone follows the advice and is told the same thing
-       again. */
-    const hopeless = API.makeVisualHull(blk({ features:badge(0.015) }));
-    ok(hopeless.tooSmall, "a 0.75mm badge is flagged");
-    ok(!hopeless.tooSmall[0].fixedBy,
-       "and must NOT name a step, because none of them is enough");
-    const atFine = API.makeVisualHull(blk({ features:badge(0.015), hullQuality:"fine" }));
-    ok(atFine.tooSmall && !atFine.tooSmall[0].fixedBy,
-       "still flagged at Fine, with nothing finer to offer");
-  });
-
-  t("quality: every step still builds a sound solid", () => {
-    for (const q of ["fast", "normal", "fine"]) {
-      const g = API.makeVisualHull(blk({ features:badge(0.20), hullQuality:q }));
-      watertight(g, `quality ${q}`);
-      for (let i = 0; i < g.positions.length; i++)
-        ok(Number.isFinite(g.positions[i]), `quality ${q}: every coordinate must be a number`);
+  glCanvas.addEventListener("pointerdown",e=>{
+    glCanvas.setPointerCapture(e.pointerId);
+    pts.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(pts.size===2){                        // a second finger: stop whatever one was doing
+      if(mode===3)commitSculpt();
+      mode=0; pinch=mid(); return;
     }
+    px=e.clientX;py=e.clientY;
+    if(SC.on && e.button===0 && !e.shiftKey){ sculptCache(); if(sculptDab(e)){mode=3;return;} }
+    mode=(e.button===2||e.shiftKey)?2:1;
   });
-}
-
-
-// =====================================================================================
-// ADAPTIVE WALL — retired, and pinned so it cannot come back by accident.
-//
-// The idea was to thin the wall where a section is too thin to hold two walls plus a cavity,
-// so something hollow survives instead of the section going solid. Measured across ten
-// geometries (heights 20/26/40/60/90mm, walls 4 and 8mm):
-//     wall 4mm — saved 0.0% every time. It never acted.
-//     wall 8mm — saved 1.6-4.3%, and opened a thin patch EVERY time, down to 0.00mm.
-// Not one clean win. That is not a trade between material and strength, it is a few percent
-// of filament for a hole in the wall. The case it was written for is already handled: field
-// hollow leaves a too-thin section solid by construction, which is the right answer.
-//
-// The flag is still honoured so an old saved file loads unchanged. These tests exist so that
-// if anyone turns it back on, they find out what it does before a customer does.
-// =====================================================================================
-{
-  const BOX = [[0,0],[1,0],[1,1],[0,1]];
-  const body = (h, wall, extra) => ({ length:160, topProfile:[[0,h],[1,h]], widthProfile:[[0,50],[1,50]],
-    sidePoly:BOX, topPoly:BOX, frontPoly:BOX, hullCrisp:1, wallThickness:wall,
-    hullHollow:true, closedBottom:true, hullRes:64, mode:"projection", features:null, ...extra });
-  const column = (g, x, y) => {
-    const P = g.positions, I = g.indices, hits = [];
-    for (let q = 0; q < I.length; q += 3) {
-      const A=I[q]*3, B=I[q+1]*3, C=I[q+2]*3;
-      const au=P[A], av=P[A+1], bu=P[B], bv=P[B+1], cu=P[C], cv=P[C+1];
-      const den=(bv-cv)*(au-cu)+(cu-bu)*(av-cv); if (Math.abs(den) < 1e-12) continue;
-      const w0=((bv-cv)*(x-cu)+(cu-bu)*(y-cv))/den, w1=((cv-av)*(x-cu)+(au-cu)*(y-cv))/den, w2=1-w0-w1;
-      if (w0<-1e-9 || w1<-1e-9 || w2<-1e-9) continue;
-      hits.push(w0*P[A+2] + w1*P[B+2] + w2*P[C+2]);
+  glCanvas.addEventListener("pointermove",e=>{
+    if(pts.has(e.pointerId))pts.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(pts.size>=2){                         // two fingers: pan with the middle, pinch to zoom
+      if(!pinch){pinch=mid();return;}
+      const m=mid();
+      panBy(m.x-pinch.x, m.y-pinch.y);
+      if(pinch.d>4&&m.d>4)cam.rad*=pinch.d/m.d;
+      cam.rad=Math.max(1,cam.rad);
+      pinch=m; updateCam(); return;
     }
-    hits.sort((a,b) => a-b);
-    const keep = [];
-    for (const h of hits) if (!keep.length || h - keep[keep.length-1] > 1e-3) keep.push(h);
-    return keep;
+    if(!mode){ if(SC.on)scShowRing(scHitAt(e)); return; }     // hover: show the brush
+    const dx=e.clientX-px,dy=e.clientY-py;px=e.clientX;py=e.clientY;
+    if(mode===3){scShowRing(scHitAt(e));sculptDab(e);return;}
+    if(mode===1){cam.az-=dx*0.008;cam.pol-=dy*0.008;}
+    else panBy(dx,dy);
+    updateCam();
+  });
+  const lift=e=>{
+    pts.delete(e.pointerId);
+    if(pts.size<2)pinch=null;
+    if(pts.size===0){ if(mode===3)commitSculpt(); mode=0; }
   };
+  glCanvas.addEventListener("pointerup",lift);
+  glCanvas.addEventListener("pointercancel",lift);
+  glCanvas.addEventListener("pointerleave",e=>{lift(e);scShowRing(null);});
+  glCanvas.addEventListener("wheel",e=>{e.preventDefault();cam.rad*=(1+Math.sign(e.deltaY)*0.09);updateCam();},{passive:false});
+  glCanvas.addEventListener("contextmenu",e=>e.preventDefault());
+})();
+window.addEventListener("resize",()=>{resize();});
 
-  t("adaptive wall: it is off unless a saved file explicitly asks for it", () => {
-    const off = API.makeVisualHull(body(40, 8, {}));
-    const explicit = API.makeVisualHull(body(40, 8, { adaptiveWall:false }));
-    ok(off.indices.length === explicit.indices.length, "the default must be off");
-    const on = API.makeVisualHull(body(40, 8, { adaptiveWall:true }));
-    ok(on.indices.length !== off.indices.length || on.volume !== off.volume,
-       "and an old file that asks for it must still get it, not be silently ignored");
-  });
+/* =========================================================================
+   2D REFERENCE / TRACE
+   ========================================================================= */
+const traceCanvas=document.getElementById("trace");
+const tctx=traceCanvas.getContext("2d");
+/* The trace view can be zoomed and panned. Without it, the smallest thing you can trace is
+   whatever a fingertip covers at fit-to-screen — which is fine for a wheel arch and hopeless
+   for a badge. z is the zoom over fit-to-screen, px/py the pan in screen pixels. */
+let fit={s:1,ox:0,oy:0,z:1,px:0,py:0};
+// Per-view tracing state. side: A=roof/top edge, B=sill/lower edge.
+//                          top:  A=left edge,     B=right edge.
+/* Six views, the standard orthographic set: Left, Right, Top, Bottom, Front, Rear. The
+   first side keeps the internal name "side" so every model saved before this still loads;
+   what changed is that it is now LABELLED Left, and a Right joined it. Left/Right rather
+   than driver/passenger because this has to describe a bracket and a building as readily as
+   a car. Leave Right untraced and the body is symmetric about its centreline, which is what
+   almost everything wants. */
+const V={ side:{img:null,imgRaw:null,inv:null,scale:null,A:[],B:[]}, sideR:{img:null,imgRaw:null,inv:null,scale:null,A:[],B:[]}, top:{img:null,imgRaw:null,inv:null,scale:null,A:[],B:[]}, front:{img:null,imgRaw:null,inv:null,scale:null,A:[],B:[]}, rear:{img:null,imgRaw:null,inv:null,scale:null,A:[],B:[]}, bottom:{img:null,imgRaw:null,inv:null,scale:null,A:[],B:[]} };
+/* What a view is CALLED, as opposed to what it is keyed by. The keys are frozen — "side" is
+   in every model anyone has already saved — but nobody should ever be shown "sideR". One map,
+   used everywhere a view name reaches the screen, so the two can never drift apart. */
+const VIEW_NAME={side:"Left side", sideR:"Right side", top:"Top", bottom:"Bottom",
+                 front:"Front", rear:"Rear", ignore:"Ignore"};
+const viewName=v=>VIEW_NAME[v]||v;
+let activeView="side";
+let traceMode="trace";          // 'trace' (outline) | 'cal'
+let calPts=[];                   // canvas px
+const cv=()=>V[activeView];
 
-  t("adaptive wall: a thick body keeps its full wall", () => {
-    /* The bug that retired it, and the one thing that MUST stay fixed regardless. `reach()`
-       marches for the far side of a section and used to return its own march limit when it
-       did not find one — described in the code as making "thick" the safe default. It is the
-       opposite: the caller adds two opposing reaches and thins when the sum is small, so a
-       small stand-in for an unknown makes a THICK section read thin. A point 2.5mm under the
-       roof of a 90mm body reported 11.25mm to the far side instead of 87.5, and the wall was
-       cut from 8mm to 5mm on a body with nothing thin about it. Infinity is the honest answer
-       for "further than I looked". */
-    const g = API.makeVisualHull(body(90, 8, { adaptiveWall:true }));
-    const c = column(g, 80, 0);
-    ok(c.length >= 4, `expected floor, cavity, roof: got [${c.map(v=>v.toFixed(1))}]`);
-    const floor = c[1] - c[0], roof = c[c.length-1] - c[c.length-2];
-    ok(floor > 8*0.9, `floor wall must survive on a 90mm body (${floor.toFixed(2)}mm of 8mm)`);
-    ok(roof  > 8*0.9, `roof wall must survive on a 90mm body (${roof.toFixed(2)}mm of 8mm)`);
-  });
-
-  t("adaptive wall: turning it on is still not free, and the gate says so", () => {
-    /* Pinning WHY it is retired. If this ever stops failing to find a patch, adaptive wall has
-       become safe and can be reconsidered — but it should be a deliberate finding, not a
-       silent drift. */
-    const on = API.makeVisualHull(body(26, 8, { adaptiveWall:true }));
-    const s = API.shellWallStats(on.positions, on.indices, { wall:8, samples:1200 });
-    ok(s.worstPatch,
-       "adaptive wall is expected to open a thin patch — if it no longer does, re-measure the " +
-       "sweep in STATUS and reconsider retiring it");
-  });
-
-  t("adaptive wall: the plain build it replaced is clean", () => {
-    // the comparison that makes retiring it the right call rather than a shrug
-    for (const h of [26, 40, 90]) {
-      const g = API.makeVisualHull(body(h, 8, {}));
-      const s = API.shellWallStats(g.positions, g.indices, { wall:8, samples:1200 });
-      ok(!s.worstPatch,
-         `a ${h}mm body without adaptive wall must have no thin patch ` +
-         `(found ${s.worstPatch && s.worstPatch.min.toFixed(2)}mm)`);
-    }
-  });
+// linear interpolate a sorted-by-x polyline at a given px x
+function interpY(sorted,xpx){
+  if(xpx<=sorted[0].x)return sorted[0].y;
+  if(xpx>=sorted[sorted.length-1].x)return sorted[sorted.length-1].y;
+  for(let i=0;i<sorted.length-1;i++){const a=sorted[i],b=sorted[i+1];
+    if(xpx>=a.x&&xpx<=b.x){const t=(b.x-a.x)?(xpx-a.x)/(b.x-a.x):0;return a.y+(b.y-a.y)*t;}}
+  return sorted[sorted.length-1].y;
+}
+// one traced edge (px) -> [[xf, mm]] using a vertical datum (lowest point = 0)
+function edgeToProfile(pts,scale,datumY,minX,span){
+  return [...pts].sort((a,b)=>a.x-b.x).map(p=>[clamp((p.x-minX)/span,0,1),(datumY-p.y)/scale]);
+}
+// two top-view edges -> half-width curve [[xf, halfWidth_mm]]
+function deriveWidth(A,B,scale){
+  if(A.length<2||B.length<2)return null;
+  const all=[...A,...B];
+  const minX=Math.min(...all.map(p=>p.x)),maxX=Math.max(...all.map(p=>p.x)),span=Math.max(1,maxX-minX);
+  const sa=[...A].sort((p,q)=>p.x-q.x), sb=[...B].sort((p,q)=>p.x-q.x);
+  const out=[],K=28;
+  for(let i=0;i<=K;i++){const xf=i/K,xpx=minX+xf*span;
+    out.push([xf,Math.max(0.5,Math.abs(interpY(sb,xpx)-interpY(sa,xpx))/scale/2)]);}
+  return out;
+}
+// a front-view upper outline -> normalized cross-section [[xf 0..1, zNorm 0..1]],
+// anchored so the sides drop to the sill (a closed canopy). pts: array of [x,y] px.
+function sectionFromTopEdge(pts,base,peak){
+  const s=[...pts].sort((a,b)=>a[0]-b[0]);
+  if(s.length<2)return null;
+  const minX=s[0][0],maxX=s[s.length-1][0],span=Math.max(1,maxX-minX),H=Math.max(1,base-peak);
+  const N=Math.min(40,s.length),inner=[];
+  for(let i=0;i<N;i++){const k=Math.round(i*(s.length-1)/(N-1)),x=s[k][0],y=s[k][1];
+    inner.push([0.04+0.92*clamp((x-minX)/span,0,1),clamp((base-y)/H,0,1)]);}
+  return [[0,0],...inner,[1,0]];
 }
 
-
-// =====================================================================================
-// A CAVITY THAT CANNOT OPEN MUST CLOSE, not collapse into slivers.
-//
-// Where the gap between the two walls is narrower than the grid can carry, the cavity used to
-// collapse into slivers of air a fraction of a millimetre wide, hugging the inside of the
-// wall. Measured on a 200mm slab at an 8mm wall: a 6mm cavity left an 82.8mm SOLID core with
-// a 0.24mm air sliver down each side. Two things wrong with that — the part reported itself
-// hollow when it was a solid block, and the wall safety gate measured across a sliver and
-// called it a 0.28mm wall, a false alarm on a part with nothing wrong with it.
-//
-// An air cell with material on BOTH sides along any axis is a sliver, not a cavity. Bilateral
-// by design: the same distinction the adaptive wall got wrong by testing only the nearest
-// side. A real cavity is at least two cells across, so its interior cells have air neighbours
-// and survive.
-// =====================================================================================
-{
-  const BOX = [[0,0],[1,0],[1,1],[0,1]];
-  const slab = h => ({ length:200, topProfile:[[0,h],[1,h]], widthProfile:[[0,50],[1,50]],
-    sidePoly:BOX, topPoly:BOX, frontPoly:BOX, hullCrisp:1, wallThickness:8,
-    hullHollow:true, closedBottom:true, hullRes:64, mode:"projection", features:null });
-  // material/air runs straight across the width at mid-height
-  const runs = (g, x, z) => {
-    const P = g.positions, I = g.indices, hits = [];
-    for (let q = 0; q < I.length; q += 3) {
-      const A=I[q]*3, B=I[q+1]*3, C=I[q+2]*3;
-      const au=P[A], av=P[A+2], bu=P[B], bv=P[B+2], cu=P[C], cv=P[C+2];
-      const den=(bv-cv)*(au-cu)+(cu-bu)*(av-cv); if (Math.abs(den) < 1e-12) continue;
-      const w0=((bv-cv)*(x-cu)+(cu-bu)*(z-cv))/den, w1=((cv-av)*(x-cu)+(au-cu)*(z-cv))/den, w2=1-w0-w1;
-      if (w0<-1e-9 || w1<-1e-9 || w2<-1e-9) continue;
-      hits.push(w0*P[A+1] + w1*P[B+1] + w2*P[C+1]);
-    }
-    hits.sort((a,b) => a-b);
-    const k = [];
-    for (const h of hits) if (!k.length || h - k[k.length-1] > 1e-3) k.push(h);
-    const air = [];
-    for (let i = 1; i + 1 < k.length; i += 2) air.push(k[i+1] - k[i]);
-    return { crossings:k, air };
+function fitTrace(){
+  const host=document.getElementById("canvasHost");
+  let w=host.clientWidth,h=host.clientHeight;
+  /* A HOST WITH NO SIZE YET GIVES A CANVAS WITH NO PIXELS, AND A BLACK VIEW.
+     clientWidth/clientHeight are 0 while an element is display:none or before the browser has
+     laid the panel out — and switching to a view calls this immediately, so on a phone the
+     side view could come up dark every time and stay that way, because nothing recomputes it
+     until something else forces a resize. activeView starts as "side", which is why it was
+     always that one.
+     Setting a canvas to 0x0 is not a no-op: it throws the drawing away. So if the host cannot
+     say how big it is yet, keep whatever size the canvas already had and ask again on the next
+     frame, when the layout has settled. */
+  if(w<2||h<2){
+    const prevW=parseFloat(traceCanvas.style.width)||0, prevH=parseFloat(traceCanvas.style.height)||0;
+    if(prevW>=2&&prevH>=2){ w=prevW; h=prevH; }
+    else { requestAnimationFrame(()=>{ const hh=document.getElementById("canvasHost");
+             if(hh&&hh.clientWidth>=2&&hh.clientHeight>=2)fitTrace(); }); return; }
+  }
+  traceCanvas.width=w*devicePixelRatio;traceCanvas.height=h*devicePixelRatio;
+  traceCanvas.style.width=w+"px";traceCanvas.style.height=h+"px";
+  tctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+  const v=cv();
+  if(v.img){const sc=Math.min(w/v.img.width,h/v.img.height)*0.92*(fit.z||1);
+    fit.s=sc;
+    fit.ox=(w-v.img.width*sc)/2 + (fit.px||0);
+    fit.oy=(h-v.img.height*sc)/2 + (fit.py||0);}
+  drawTrace();
+}
+function traceZoom(mult){
+  const host=document.getElementById("canvasHost"); if(!host)return;
+  const w=host.clientWidth, h=host.clientHeight;
+  const before=canvas2img(w/2,h/2);          // what is in the middle right now
+  fit.z=Math.max(1,Math.min(14,(fit.z||1)*mult));
+  fitTrace();                                 // recompute scale at the new zoom
+  const after=canvas2img(w/2,h/2);
+  fit.px=(fit.px||0)+(after.x-before.x)*fit.s;   // put it back in the middle
+  fit.py=(fit.py||0)+(after.y-before.y)*fit.s;
+  fitTrace();
+  const lbl=document.getElementById("tZoomLbl"); if(lbl)lbl.textContent=Math.round(fit.z*100)+"%";
+}
+function traceZoomReset(){
+  fit.z=1; fit.px=0; fit.py=0; fitTrace();
+  const lbl=document.getElementById("tZoomLbl"); if(lbl)lbl.textContent="100%";
+}
+function img2canvas(p){return {x:fit.ox+p.x*fit.s, y:fit.oy+p.y*fit.s};}
+function canvas2img(cx,cy){return {x:(cx-fit.ox)/fit.s, y:(cy-fit.oy)/fit.s};}
+/* How many feature boxes to put on screen at once. "auto" shows them all while there are
+   few and drops to the selected ones once a drawing is dense — eighty dashed rectangles over
+   a drawing is not information, it is a curtain, and you cannot see the thing you are trying
+   to trace underneath it. The features are still drawn, faintly, so nothing disappears. */
+let featBoxMode="auto";
+const featBoxLimit=24;
+let featDragging=false;   // rebuilding every gizmo mid-drag is what made this crawl
+function drawTrace(){ if(typeof featRenderGizmos==="function" && !featDragging)setTimeout(featRenderGizmos,0);
+  const v=cv();
+  const w=traceCanvas.width/devicePixelRatio,h=traceCanvas.height/devicePixelRatio;
+  tctx.clearRect(0,0,w,h);
+  document.getElementById("dropNote").style.display=v.img?"none":"grid";
+  if(v.img){tctx.globalAlpha=S.opacity;
+    tctx.drawImage(v.img,fit.ox,fit.oy,v.img.width*fit.s,v.img.height*fit.s);tctx.globalAlpha=1;}
+  const dp=(pts,color,closed)=>{
+    if(!pts.length)return;
+    tctx.strokeStyle=color;tctx.lineWidth=2;tctx.beginPath();
+    pts.forEach((p,i)=>{const c=img2canvas(p);i?tctx.lineTo(c.x,c.y):tctx.moveTo(c.x,c.y);});
+    if(closed&&pts.length>2)tctx.closePath();                 // connect last -> first (one whole outline)
+    tctx.stroke();
+    if(closed&&pts.length>2){tctx.fillStyle=color+"18";tctx.fill();}
+    tctx.fillStyle=color;pts.forEach((p,i)=>{const c=img2canvas(p);tctx.beginPath();tctx.arc(c.x,c.y,i===0?5:4,0,7);tctx.fill();});
   };
-
-  t("narrow cavity: no sliver of air survives at any height", () => {
-    for (const h of [18, 20, 22, 26, 34, 50]) {
-      const g = API.makeVisualHull(slab(h));
-      watertight(g, `slab ${h}mm`);
-      for (const a of runs(g, 100, h/2).air)
-        ok(a > 1.0, `slab ${h}mm left a ${a.toFixed(2)}mm sliver of air — a cavity or nothing`);
+  dp(v.A,"#FF7A2F",true); if(v.B&&v.B.length)dp(v.B,"#46B7D9",true);
+  /* Features on this view, drawn back in the body outline's frame.
+     ONLY THE SELECTED ONES GET THE FULL TREATMENT. This used to draw every feature filled,
+     with a five-pixel dot on each of its points — and a face carrying three hundred shapes
+     of a hundred points each is thirty thousand dots over the drawing. You could not see
+     the drawing, let alone pick anything out of it. Everything unselected is now a single
+     thin line, which is enough to see it is there and little enough to see through. */
+  const B=(typeof featBounds==="function")?featBounds(activeView):null;
+  if(B&&typeof features!=="undefined"){
+    tctx.save();
+    features.forEach((f,i)=>{
+      if(f.view!==activeView)return;
+      const lead=(i===featSel), grp=featMulti.has(i);
+      const col=f.depth<0?"#46B7D9":"#5BD6A0";
+      if(f.poly){
+        if(lead||grp){ dp(f.poly.map(q=>({x:B.minX+q[0]*B.sx, y:B.maxY-q[1]*B.sy})), col, true); }
+        else{
+          tctx.strokeStyle=(f.depth<0?"rgba(70,183,217,.5)":"rgba(91,214,160,.5)");
+          tctx.lineWidth=1; tctx.beginPath();
+          f.poly.forEach((q,k)=>{const c=img2canvas({x:B.minX+q[0]*B.sx, y:B.maxY-q[1]*B.sy});
+            k?tctx.lineTo(c.x,c.y):tctx.moveTo(c.x,c.y);});
+          tctx.closePath(); tctx.stroke();
+        }
+      } else if(f.box){
+        const b=f.box, c0=img2canvas({x:B.minX+b[0]*B.sx,y:B.maxY-b[1]*B.sy}), c1=img2canvas({x:B.minX+b[2]*B.sx,y:B.maxY-b[3]*B.sy});
+        tctx.strokeStyle=(lead||grp)?col:(f.depth<0?"rgba(70,183,217,.5)":"rgba(91,214,160,.5)");
+        tctx.lineWidth=(lead||grp)?2:1; tctx.setLineDash([5,4]);
+        tctx.strokeRect(Math.min(c0.x,c1.x),Math.min(c0.y,c1.y),Math.abs(c1.x-c0.x),Math.abs(c1.y-c0.y));
+        tctx.setLineDash([]);
+        if(f.text&&(lead||grp)){tctx.fillStyle=col;tctx.font="600 11px Inter,sans-serif";tctx.textAlign="center";
+          tctx.fillText(f.text,(c0.x+c1.x)/2,Math.min(c0.y,c1.y)-4);}
+      }
+    });
+    tctx.restore();
+  }
+  if(featTool==="svg" && typeof svgDetails==="function"){          // what you can click
+    tctx.save(); tctx.strokeStyle="rgba(232,197,71,.85)"; tctx.lineWidth=1.5;
+    svgDetails(activeView).forEach(poly=>{
+      tctx.beginPath();
+      poly.forEach((p,i)=>{const c=img2canvas(p); i?tctx.lineTo(c.x,c.y):tctx.moveTo(c.x,c.y);});
+      tctx.closePath(); tctx.stroke();
+    });
+    tctx.restore();
+  }
+  if(featDraft&&featDraft.view===activeView){
+    if(featDraft.tool==="poly")dp(featDraft.pts,"#E8C547",featDraft.pts.length>2);
+    else{
+      dp(featDraft.pts,"#E8C547",false);
+      if(featDraft.pts.length===1){const c=img2canvas(featDraft.pts[0]);
+        tctx.strokeStyle="#E8C547";tctx.setLineDash([4,4]);tctx.strokeRect(c.x-1,c.y-1,2,2);tctx.setLineDash([]);}
     }
-  });
-
-  t("narrow cavity: a gap too small to build becomes solid, not fake-hollow", () => {
-    /* A 4mm gap on this grid cannot be meshed, so the honest answer is a solid rib. What must
-       NOT happen is a part that reports hollow while being solid with slivers in it. */
-    const g = API.makeVisualHull(slab(20));      // 20 - 8 - 8 = 4mm of intended cavity
-    const r = runs(g, 100, 10);
-    ok(r.air.length === 0 || r.air.every(a => a > 1.0),
-       `a 4mm cavity must close cleanly, got air runs [${r.air.map(a=>a.toFixed(2))}]`);
-  });
-
-  t("narrow cavity: a cavity that CAN be built still is", () => {
-    // the fix must not close cavities that were fine — 10mm and up were always clean
-    for (const h of [26, 34, 50]) {
-      const r = runs(API.makeVisualHull(slab(h)), 100, h/2);
-      ok(r.air.some(a => a > 20),
-         `slab ${h}mm must still be hollow across the middle, got [${r.air.map(a=>a.toFixed(1))}]`);
+  }
+  if(calPts.length){tctx.strokeStyle="#E5B45B";tctx.setLineDash([6,5]);tctx.lineWidth=2;
+    tctx.beginPath();calPts.forEach((p,i)=>{const c=img2canvas(p);i?tctx.lineTo(c.x,c.y):tctx.moveTo(c.x,c.y);});tctx.stroke();tctx.setLineDash([]);
+    tctx.fillStyle="#E5B45B";calPts.forEach(p=>{const c=img2canvas(p);tctx.beginPath();tctx.arc(c.x,c.y,5,0,7);tctx.fill();});}
+  /* The second outline pass that used to live here is gone: every unselected feature is now
+     drawn once, thinly, in the main pass above whatever the box mode is. Two passes meant a
+     feature could be drawn filled AND outlined at the same time, which is where the wall of
+     overlapping shapes came from. */
+}
+function tcXY(e){const r=traceCanvas.getBoundingClientRect();return {x:e.clientX-r.left,y:e.clientY-r.top};}
+function nearestPoint(v,cx,cy){
+  let best=null;
+  ["A"].forEach(edge=>v[edge].forEach((p,idx)=>{const c=img2canvas(p);const d=Math.hypot(c.x-cx,c.y-cy);if(d<12&&(!best||d<best.dist))best={edge,idx,dist:d};}));
+  return best;
+}
+let pointDrag=null;
+let tracePan=null;
+traceCanvas.addEventListener("pointerdown",e=>{
+  /* Panning has to be something a stray tap can never be, because a plain tap on this canvas
+     places a trace point. Right or middle button on a desktop, two fingers on a phone — the
+     same gestures the 3D view already uses, so there is nothing new to learn. */
+  if(e.button===2||e.button===1||(e.pointerType==="touch"&&e.isPrimary===false)){
+    e.preventDefault();
+    tracePan={x:e.clientX,y:e.clientY,px:fit.px||0,py:fit.py||0};
+    try{traceCanvas.setPointerCapture(e.pointerId);}catch(_){}
+    return;
+  }
+  if(!traceMode)return; e.preventDefault();
+  const {x:cx,y:cy}=tcXY(e);
+  if(traceMode==="cal"){calPts.push(canvas2img(cx,cy));drawTrace();if(calPts.length===2)openModal();return;}
+  const v=cv();
+  if(typeof featDeselect==="function" && (featSel>=0||featMulti.size) && !featDraft)featDeselect();
+  if(featTool==="join"){
+    const B=featBounds(activeView);
+    if(!B){toast("Trace the body outline on this view first — a join is placed against it.");return;}
+    const p=canvas2img(cx,cy);
+    const u=(p.x-B.minX)/B.sx, v=(B.maxY-p.y)/B.sy;
+    const kind=document.querySelector("#featJoinRow .seg button.on").dataset.j;
+    const nominal=Math.max(0.5,parseFloat(document.getElementById("jSize").value)||5);
+    const dia=connDiameter(kind,nominal,CONN.clearance);
+    const depth=kind==="peg"?Math.max(2,nominal*0.8):-Math.max(2,nominal*0.8);
+    features.push({kind:"poly",join:kind,nominal,view:activeView,
+      poly:connPoly(u,v,dia,B),depth,soft:0.02,
+      name:`${kind} Ø${nominal}`});
+    featSelect(features.length-1); requestRebuild(); drawTrace();
+    const w=connWarn(kind,nominal,depth,CONN.nozzle);
+    toast(kind==="peg"
+      ? `Peg Ø${nominal}mm placed — a socket at the same size will fit it.${w?" — "+w:""}`
+      : `Socket for a Ø${nominal}mm peg — cut Ø${dia.toFixed(1)} so it actually goes in.${w?" — "+w:""}`);
+    return;
+  }
+  if(featTool==="svg" && V[activeView] && V[activeView].img){
+    const p=canvas2img(cx,cy);
+    /* PICK WHAT IS UNDER YOUR FINGER, SMALLEST FIRST.
+       A badge sits inside a grille sits inside a bumper panel. The gizmo boxes are
+       rectangles, so the big panel's box covers the small badge completely and there was no
+       way to reach it — and once a face carries enough features the boxes aren't drawn at
+       all, so there was nothing to tap either. Now the drawing itself is the hit target:
+       every feature whose outline contains the point is a candidate, the smallest wins
+       because it is the most specific thing you pointed at, and tapping the same spot again
+       steps out to the next one up. Nothing is ever unreachable. */
+    const B=featBounds(activeView);
+    if(B){
+      const u=(p.x-B.minX)/B.sx, vv=(B.maxY-p.y)/B.sy;
+      const hits=featPickAt(activeView,u,vv);
+      if(hits.length){
+        const key=`${activeView}:${Math.round(u*400)}:${Math.round(vv*400)}`;
+        if(featPickCycle.key!==key)featPickCycle={key,n:0};
+        else featPickCycle.n=(featPickCycle.n+1)%hits.length;
+        const pick=hits[featPickCycle.n];
+        featSelect(pick); drawTrace();
+        const f=features[pick];
+        toast(hits.length>1
+          ? `<b>${f.name||"feature"}</b> — ${hits.length} shapes overlap here, tap again to step to the next.`
+          : `<b>${f.name||"feature"}</b> selected. Depth <b>negative</b> presses in, <b>positive</b> pops out.`);
+        return;
+      }
     }
-  });
+    const poly=svgDetailAt(activeView,p);
+    if(!poly){toast("Nothing from the drawing under there — the yellow outlines are what you can take.");return;}
+    featAddSvgPoly(activeView,poly); drawTrace(); return;
+  }
+  if(featDraft && featDraft.view===activeView){          // placing a feature, not the body
+    featDraft.pts.push(canvas2img(cx,cy)); drawTrace();
+    if(featDraft.tool!=="poly" && featDraft.pts.length>=2)featFinish();   // two corners is a box
+    return;
+  }
+  const hit=nearestPoint(v,cx,cy);                       // grab an existing point to refine
+  if(hit){pointDrag={edge:hit.edge,idx:hit.idx};try{traceCanvas.setPointerCapture(e.pointerId);}catch(_){}return;}
+  v.A.push(canvas2img(cx,cy));                           // add to the single outline
+  drawTrace();commitTrace();
+});
+traceCanvas.addEventListener("pointermove",e=>{
+  if(tracePan){ fit.px=tracePan.px+(e.clientX-tracePan.x); fit.py=tracePan.py+(e.clientY-tracePan.y);
+    fitTrace(); return; }
+  if(!pointDrag)return;const {x:cx,y:cy}=tcXY(e);
+  cv()[pointDrag.edge][pointDrag.idx]=canvas2img(cx,cy);drawTrace();
+});
+traceCanvas.addEventListener("pointerup",e=>{
+  if(tracePan){tracePan=null;return;}
+  if(pointDrag){pointDrag=null;commitTrace();}});
+traceCanvas.addEventListener("pointercancel",()=>{tracePan=null;});
+traceCanvas.addEventListener("wheel",e=>{        // desktop: wheel zooms, as everywhere else
+  if(!cv().img)return; e.preventDefault();
+  traceZoom(e.deltaY<0?1.15:1/1.15);
+},{passive:false});
+traceCanvas.addEventListener("contextmenu",e=>{
+  if(!traceMode||traceMode==="cal")return;e.preventDefault();
+  const {x:cx,y:cy}=tcXY(e);const hit=nearestPoint(cv(),cx,cy);
+  if(hit){cv()[hit.edge].splice(hit.idx,1);drawTrace();commitTrace();}
+});
+
+function syncLen(){sLen.value=S.len;vLen.textContent=S.len;syncSize();}
+// The width/height sliders only mean something once a drawing has measured them; until
+// then the shape sliders below own those dimensions, so we say so instead of pretending.
+function syncSize(){
+  const w=document.getElementById("sWid"), h=document.getElementById("sHgt");
+  const vw=document.getElementById("vWid"), vh=document.getElementById("vHgt");
+  const hint=document.getElementById("sizeHint");
+  if(!w||!h)return;
+  const okW=traced.natWid>0, okH=traced.natHgt>0;
+  w.disabled=!okW; h.disabled=!okH;
+  w.parentElement.style.opacity=okW?1:0.45; h.parentElement.style.opacity=okH?1:0.45;
+  if(okW){w.max=Math.max(400,Math.round(traced.natWid*3));w.value=Math.round(S.widMM||traced.natWid);vw.textContent=Math.round(S.widMM||traced.natWid);}
+  else vw.textContent="—";
+  if(okH){h.max=Math.max(400,Math.round(traced.natHgt*3));h.value=Math.round(S.hgtMM||traced.natHgt);vh.textContent=Math.round(S.hgtMM||traced.natHgt);}
+  else vh.textContent="—";
+  /* WHERE THIS MEASUREMENT CAME FROM.
+     A CAD file states its own dimensions, and once those are read the finished size is no
+     longer a guess — it is a ratio against a known original. Saying both, and the ratio
+     between them, is the difference between "200mm long" and "1:24, which is the scale the
+     chassis is". Lee is fitting a chassis; the ratio is the number he actually needs. */
+  const src=["side","sideR","top","bottom","front","rear"]
+    .map(k=>V[k]).find(v=>v&&v.scaleSrc==="file"&&v.srcMM>0);
+  const fin=okW?(S.lenMM||traced.natWid):0;
+  const prov = src
+    ? `<span class="tag" style="color:var(--good);border-color:rgba(91,214,160,.3)">from the file</span> `
+      + `The drawing states <b>${fmtMM(src.srcMM)}</b>${fin>0?` · finished at <b>${Math.round(fin)} mm</b> `
+        + `= <b>1:${(src.srcMM/fin).toFixed(1)}</b>`:""}. Nothing was re-measured by eye. `
+    : "";
+  if(hint)hint.innerHTML = prov + ((okW||okH)
+    ? "The finished measurements — what your drawing measured. Move them to resize; <b>your tracing is left alone</b>, and a nudge survives re-tracing."
+    : "<b>How long</b> comes from the side or top view and always works. <b>How wide</b> comes from the top view, or head-on from front/rear. <b>How tall</b> comes from the side view. Until one of those is traced, the shape sliders below set them.");
+}
+function markSil(on){
+  const e=document.getElementById("silMode");
+  if(on){e.innerHTML='Source: <span class="tag" style="color:var(--accent);border-color:var(--accent-soft)">traced (side)</span> — sliders paused.';
+    document.getElementById("clearTrace").style.display="block";}
+  else{e.innerHTML='From: <span class="tag">the sliders</span> — trace a <b>side view</b> to use your drawing instead.';
+    document.getElementById("clearTrace").style.display="none";}
+}
+function markWidth(on){
+  const e=document.getElementById("widMode");
+  if(on){e.innerHTML='From: <span class="tag" style="color:var(--accent);border-color:var(--accent-soft)">your top-view drawing</span> — sliders off.';
+    document.getElementById("clearWidth").style.display="block";}
+  else{e.innerHTML='From: <span class="tag">the sliders</span> — trace a <b>top view</b> to use your drawing instead.';
+    document.getElementById("clearWidth").style.display="none";}
+}
+function markSection(on){
+  const e=document.getElementById("secMode");if(!e)return;
+  if(on){e.innerHTML='From: <span class="tag" style="color:var(--accent);border-color:var(--accent-soft)">your front-view drawing</span> — roundness off.';
+    document.getElementById("clearSection").style.display="block";}
+  else{e.innerHTML='From: <span class="tag">the sliders</span> — trace a <b>front view</b> for the real end-on shape.';
+    document.getElementById("clearSection").style.display="none";}
 }
 
+// Robust: sample vertical slices of ONE closed outline to get its top & bottom envelope
+// at each x. Can't get top/bottom backwards (topmost screen-y is always the top). Works
+// for side (roof/sill), top (the two sides -> width), and front/rear (cross-section).
+function outlineEnvelope(pts,K){
+  K=K||44;
+  const xs=pts.map(p=>p.x),minX=Math.min(...xs),maxX=Math.max(...xs),span=Math.max(1,maxX-minX);
+  const top=[],bot=[];
+  for(let i=0;i<=K;i++){
+    const x=minX+span*i/K; let ymin=Infinity,ymax=-Infinity;
+    for(let j=0;j<pts.length;j++){const a=pts[j],b=pts[(j+1)%pts.length];
+      if(a.x===b.x)continue;
+      const lo=Math.min(a.x,b.x),hi=Math.max(a.x,b.x);
+      if(x>=lo-1e-6 && x<=hi+1e-6){const t=(x-a.x)/(b.x-a.x),y=a.y+(b.y-a.y)*t; if(y<ymin)ymin=y; if(y>ymax)ymax=y;}}
+    if(ymin===Infinity){let ny=pts[0].y,nd=Infinity;for(const p of pts){const d=Math.abs(p.x-x);if(d<nd){nd=d;ny=p.y;}}ymin=ymax=ny;}
+    top.push({x,y:ymin}); bot.push({x,y:ymax});
+  }
+  return {top,bot,minX,maxX,span};
+}
+// px-per-mm for a view. If another view already told us the real size this view's span
+// represents (anchorMM), use that — the views then CANNOT disagree, which is what caused
+// the "model comes out very wide" bug. Else fall back to this view's own calibration,
+// else to a standard length. Pure + testable.
+function anchorPxPerMm(spanPx, anchorMM, ownScale, defMM){
+  if(anchorMM>0) return spanPx/anchorMM;
+  if(ownScale>0) return ownScale;
+  return spanPx/(defMM||200);
+}
+// AUTO-TRACE — read the drawing and produce the closed outline directly, so nobody has
+// to click 40 points by hand. Reference images are normalised to dark-ink-on-light-paper
+// first (see normalizeRef), which makes "ink = darker than the Otsu threshold" reliable.
+// Uses the same vertical-slice idea as outlineEnvelope, so it cannot invert top/bottom.
+// The same principle as an SVG's paths, for a picture. In a line drawing the shapes ARE
+// the regions the lines enclose — a window is the patch of paper fenced in by ink. So:
+// split ink from paper, flood the outside away, and whatever paper is left trapped inside
+// is a shape you drew. Outlines are built with the same vertical-slice method used
+// everywhere else, so they cannot invert either.
+function otsuThreshold(lum){
+  const hist=new Array(256).fill(0); for(let i=0;i<lum.length;i++)hist[lum[i]]++;
+  const total=lum.length; let sum=0; for(let i=0;i<256;i++)sum+=i*hist[i];
+  let sumB=0,wB=0,best=-1,thr=128;
+  for(let i=0;i<256;i++){wB+=hist[i]; if(!wB)continue; const wF=total-wB; if(wF<=0)break;
+    sumB+=i*hist[i]; const mB=sumB/wB, mF=(sum-sumB)/wF, v=wB*wF*(mB-mF)*(mB-mF);
+    if(v>best){best=v;thr=i;}}
+  return thr;
+}
+function lumOf(imgData){
+  const d=imgData.data, lum=new Uint8Array(imgData.width*imgData.height);
+  for(let i=0,p=0;i<lum.length;i++,p+=4)lum[i]=(0.299*d[p]+0.587*d[p+1]+0.114*d[p+2])|0;
+  return lum;
+}
+// closed outline of one labelled region, by vertical slices (order-independent)
+function regionOutline(mark,W,H,id,K){
+  K=K||40;
+  let minX=-1,maxX=-1;
+  const colT=new Int32Array(W).fill(-1), colB=new Int32Array(W).fill(-1);
+  for(let x=0;x<W;x++){
+    let t=-1,b=-1;
+    for(let y=0;y<H;y++){ if(mark[y*W+x]===id){ if(t<0)t=y; b=y; } }
+    colT[x]=t; colB[x]=b;
+    if(t>=0){ if(minX<0)minX=x; maxX=x; }
+  }
+  if(minX<0||(maxX-minX)<2)return null;
+  const top=[],bot=[];
+  for(let i=0;i<=K;i++){
+    let x=Math.round(minX+(maxX-minX)*i/K);
+    if(colT[x]<0){for(let d=1;d<=W;d++){ if(x-d>=minX&&colT[x-d]>=0){x-=d;break;} if(x+d<=maxX&&colT[x+d]>=0){x+=d;break;} }}
+    if(colT[x]<0)continue;
+    top.push({x,y:colT[x]}); bot.push({x,y:colB[x]});
+  }
+  if(top.length<3)return null;
+  const loop=[...top,...bot.slice().reverse()];
+  return loop.filter((p,i,a)=>i===0||p.x!==a[i-1].x||p.y!==a[i-1].y);
+}
+// grow a binary mask by r pixels — closes hairline gaps in scanned / anti-aliased line-work
+// so a nearly-closed shape still fences its region in instead of leaking to the background.
+function dilateMask(src,W,H,r){
+  let a=src;
+  for(let pass=0;pass<r;pass++){ const b=new Uint8Array(a.length);
+    for(let y=0;y<H;y++)for(let x=0;x<W;x++){const i=y*W+x;
+      if(a[i]||(x>0&&a[i-1])||(x<W-1&&a[i+1])||(y>0&&a[i-W])||(y<H-1&&a[i+W]))b[i]=1;}
+    a=b; }
+  return a;
+}
+// bbox overlap ratio of two outlines, for de-duping (a colour blob that's also ink-enclosed)
+function outlineBBox(poly){let a=1e9,b=1e9,c=-1e9,d=-1e9;for(const q of poly){if(q.x<a)a=q.x;if(q.y<b)b=q.y;if(q.x>c)c=q.x;if(q.y>d)d=q.y;}return[a,b,c,d];}
+function labelBlobs(mask,W,H,minPx,maxOut){
+  const N=W*H, m=new Int32Array(N); let id=0; const sizes=[];
+  for(let i=0;i<N;i++){ if(!mask[i]||m[i])continue; id++; let count=0; const st=[i]; m[i]=id;
+    while(st.length){const j=st.pop(),x=j%W,y=(j/W)|0;count++;
+      if(x>0&&mask[j-1]&&!m[j-1]){m[j-1]=id;st.push(j-1);}
+      if(x<W-1&&mask[j+1]&&!m[j+1]){m[j+1]=id;st.push(j+1);}
+      if(y>0&&mask[j-W]&&!m[j-W]){m[j-W]=id;st.push(j-W);}
+      if(y<H-1&&mask[j+W]&&!m[j+W]){m[j+W]=id;st.push(j+W);}}
+    sizes.push({id,count}); }
+  const out=[];
+  sizes.filter(r=>r.count>=minPx).sort((a,b)=>b.count-a.count).slice(0,maxOut)
+       .forEach(r=>{const o=regionOutline(m,W,H,r.id,40); if(o)out.push(o);});
+  return out;
+}
+// Every shape a raster drawing contains. Two complementary readings, matching how people
+// actually mark features: (A) SCAN THE LINE-WORK — the regions its ink fences in (windows,
+// wheels, scoops), with the ink dilated so a hairline gap doesn't let a shape leak away;
+// (B) DIFFERENT COLOURS — a red light or a blue panel is a shape even where its outline is
+// faint, so vividly-coloured blobs (chroma off the grey axis) are picked up too.
+function rasterRegions(imgData,maxOut){
+  const W=imgData.width,H=imgData.height, N=W*H, data=imgData.data;
+  maxOut=maxOut||64;
+  const lum=lumOf(imgData), thr=otsuThreshold(lum);
+  const minPx=Math.max(20,Math.round(N*3e-5));
 
-// =====================================================================================
-// PER-FACE WALL THICKNESS — roof, sides and floor can differ.
-//
-// The studio has offered "Different thickness per face" for a long time and the EXACT builder
-// ignored it: it read wallThickness and nothing else. Asking for a 16mm floor with 6mm walls
-// built a 6mm floor, silently, in the default mode. The smooth builder honoured it all along,
-// so the same model came out two different ways depending on which mode you were in.
-//
-// It matters because it is the load-bearing control — a thick floor to bolt through with thin
-// walls elsewhere. The wall safety gate could not catch it either: a uniform 6mm wall is not
-// THIN, it is exactly what was asked on two of the three faces, and the floor is simply not
-// what the person set.
-//
-// The gradient of the body field IS the surface normal, and it is already computed where the
-// wall is applied, so this costs one blend and no extra sampling.
-// =====================================================================================
-{
-  const BOX = [[0,0],[1,0],[1,1],[0,1]];
-  const blk = extra => ({ length:160, topProfile:[[0,60],[1,60]], widthProfile:[[0,40],[1,40]],
-    sidePoly:BOX, topPoly:BOX, frontPoly:BOX, hullCrisp:1, mode:"projection",
-    hullHollow:true, closedBottom:true, hullRes:64, features:null, ...extra });
-  const vol = g => { let V=0; const P=g.positions, I=g.indices;
-    for (let q=0;q<I.length;q+=3){ const a=I[q]*3,b=I[q+1]*3,c=I[q+2]*3;
-      V += (P[a]*(P[b+1]*P[c+2]-P[c+1]*P[b+2]) - P[a+1]*(P[b]*P[c+2]-P[c]*P[b+2])
-          + P[a+2]*(P[b]*P[c+1]-P[c]*P[b+1]))/6; }
-    return Math.abs(V)/1000; };
-  const column = (g, x, y) => {
-    const P = g.positions, I = g.indices, hits = [];
-    for (let q = 0; q < I.length; q += 3) {
-      const A=I[q]*3, B=I[q+1]*3, C=I[q+2]*3;
-      const au=P[A], av=P[A+1], bu=P[B], bv=P[B+1], cu=P[C], cv=P[C+1];
-      const den=(bv-cv)*(au-cu)+(cu-bu)*(av-cv); if (Math.abs(den) < 1e-12) continue;
-      const w0=((bv-cv)*(x-cu)+(cu-bu)*(y-cv))/den, w1=((cv-av)*(x-cu)+(au-cu)*(y-cv))/den, w2=1-w0-w1;
-      if (w0<-1e-9 || w1<-1e-9 || w2<-1e-9) continue;
-      hits.push(w0*P[A+2] + w1*P[B+2] + w2*P[C+2]);
-    }
-    hits.sort((a,b) => a-b);
-    const k = [];
-    for (const h of hits) if (!k.length || h - k[k.length-1] > 1e-3) k.push(h);
-    return k;
+  /* (A) regions fenced in by the line-work. A drawing can be dark lines on pale paper OR pale
+     lines on a dark silhouette — the side elevation of a blueprint is often a filled black
+     body. Reading only "dark = ink" made the whole car one solid blob with no pockets inside
+     it, so that view reported no shapes at all. Both readings are tried and the one that
+     actually fences something in wins. */
+  const fenceRegions=(dark)=>{
+    const ink=new Uint8Array(N);
+    for(let i=0;i<N;i++) if(dark ? lum[i]<=thr : lum[i]>thr) ink[i]=1;
+    const rad=Math.max(1,Math.round(Math.max(W,H)/700));
+    const fence=dilateMask(ink,W,H,rad);
+    const mark=new Int32Array(N); for(let i=0;i<N;i++)if(fence[i])mark[i]=-1;
+    const stack=[];
+    for(let x=0;x<W;x++){ if(mark[x]===0){mark[x]=-2;stack.push(x);} const b=(H-1)*W+x; if(mark[b]===0){mark[b]=-2;stack.push(b);} }
+    for(let y=0;y<H;y++){ const l=y*W,r=y*W+W-1; if(mark[l]===0){mark[l]=-2;stack.push(l);} if(mark[r]===0){mark[r]=-2;stack.push(r);} }
+    while(stack.length){const i=stack.pop(),x=i%W,y=(i/W)|0;
+      if(x>0&&mark[i-1]===0){mark[i-1]=-2;stack.push(i-1);}
+      if(x<W-1&&mark[i+1]===0){mark[i+1]=-2;stack.push(i+1);}
+      if(y>0&&mark[i-W]===0){mark[i-W]=-2;stack.push(i-W);}
+      if(y<H-1&&mark[i+W]===0){mark[i+W]=-2;stack.push(i+W);}}
+    return labelBlobs(mark.map(v=>v===0?1:0),W,H,minPx,maxOut);
   };
-  /* NOTE ON THE WALL USED HERE: 6mm, not 2mm. A 2mm wall on this body fails the grid adequacy
-     gate and falls back to the vertex-offset path, which does not do per-face — so a 2mm
-     fixture tests nothing and looks exactly like the feature being broken. It cost me a while
-     to notice. Anything testing field-hollow behaviour needs a wall the grid can hold. */
+  const darkInk=fenceRegions(true), paleInk=fenceRegions(false);
+  const enclosed = darkInk.length>=paleInk.length ? darkInk : paleInk;
 
-  t("per-face wall: a uniform wall builds exactly as it always did", () => {
-    // the guard that makes this safe to add at all: three equal values must take the old path
-    const a = API.makeVisualHull(blk({ wallThickness:6 }));
-    const b = API.makeVisualHull(blk({ wallThickness:6, wallTop:6, wallSide:6, wallBottom:6 }));
-    ok(a.indices.length === b.indices.length, "equal per-face values must change nothing");
-    near(vol(a), vol(b), 0.5, "and produce the same material");
-  });
+  // (B) vividly-coloured regions (chroma). Higher size floor keeps JPEG edge-fringe out.
+  const col=new Uint8Array(N);
+  for(let i=0,p=0;i<N;i++,p+=4){const R=data[p],G=data[p+1],B=data[p+2];
+    if((Math.max(R,G,B)-Math.min(R,G,B))>=50 && Math.max(R,G,B)>=60) col[i]=1;}
+  const coloured=labelBlobs(col,W,H,Math.max(minPx,Math.round(N*7e-5)),maxOut);
 
-  t("per-face wall: a thicker floor is actually built thicker", () => {
-    /* The load-bearing case, and the one that was silently ignored. */
-    const plain = API.makeVisualHull(blk({ wallThickness:6 }));
-    const thick = API.makeVisualHull(blk({ wallThickness:6, wallTop:6, wallSide:6, wallBottom:16 }));
-    const c = column(thick, 80, 0);
-    ok(c.length >= 4, `expected floor, cavity, roof: got [${c.map(v=>v.toFixed(1))}]`);
-    const floor = c[1] - c[0];
-    ok(floor > 6 * 1.5, `the floor must be thicker than the 6mm walls (got ${floor.toFixed(2)}mm)`);
-    near(floor, 16, 2.5, "and about the 16mm asked for");
-    ok(vol(thick) > vol(plain), "a thicker floor must add material");
-  });
-
-  t("per-face wall: each face responds to its own setting", () => {
-    /* Thickening any ONE face must add material, and none of them may be a no-op — which is
-       what the bug was. Volume is the honest check here: a column probe reads whichever
-       surface happens to be nearest and can miss the face being changed. */
-    const base = vol(API.makeVisualHull(blk({ wallThickness:6 })));
-    for (const [name, extra] of [
-      ["roof",  { wallTop:16, wallSide:6,  wallBottom:6  }],
-      ["side",  { wallTop:6,  wallSide:16, wallBottom:6  }],
-      ["floor", { wallTop:6,  wallSide:6,  wallBottom:16 }],
-    ]) {
-      const v = vol(API.makeVisualHull(blk({ wallThickness:6, ...extra })));
-      ok(v > base * 1.05, `thickening the ${name} must add material (${v.toFixed(1)} vs ${base.toFixed(1)} cm3)`);
+  // merge, de-dupe only near-IDENTICAL outlines (the same shape found by both readings), by
+  // IoU — a small feature nested inside a big one has low IoU, so it is correctly kept.
+  const all=[...enclosed,...coloured].sort((p,q)=>polyAreaPts(q)-polyAreaPts(p));
+  const kept=[];
+  for(const poly of all){ const bb=outlineBBox(poly); let dup=false;
+    for(const k of kept){ const ox=Math.max(0,Math.min(bb[2],k.bb[2])-Math.max(bb[0],k.bb[0])),
+        oy=Math.max(0,Math.min(bb[3],k.bb[3])-Math.max(bb[1],k.bb[1])), inter=ox*oy,
+        a1=(bb[2]-bb[0])*(bb[3]-bb[1]), a2=(k.bb[2]-k.bb[0])*(k.bb[3]-k.bb[1]), uni=a1+a2-inter;
+      if(uni>0 && inter/uni>0.7){dup=true;break;} }
+    if(!dup)kept.push({poly,bb}); }
+  return kept.slice(0,maxOut).map(k=>k.poly);
+}
+function autoOutline(imgData,K){
+  K=K||48;
+  const W=imgData.width, H=imgData.height;
+  const lum=lumOf(imgData), thr=otsuThreshold(lum);   // split ink from paper, no slider needed
+  const colT=new Int32Array(W).fill(-1), colB=new Int32Array(W).fill(-1);
+  let minX=-1,maxX=-1;
+  for(let x=0;x<W;x++){
+    let t=-1,b=-1;
+    for(let y=0;y<H;y++){ if(lum[y*W+x]<=thr){ if(t<0)t=y; b=y; } }   // <= : Otsu class-0 is inclusive
+    colT[x]=t; colB[x]=b;
+    if(t>=0){ if(minX<0)minX=x; maxX=x; }
+  }
+  if(minX<0||(maxX-minX)<3)return null;                 // nothing readable
+  const top=[],bot=[];
+  for(let i=0;i<=K;i++){
+    let x=Math.round(minX+(maxX-minX)*i/K);
+    if(colT[x]<0){ for(let d=1;d<=W;d++){ if(x-d>=minX&&colT[x-d]>=0){x=x-d;break;} if(x+d<=maxX&&colT[x+d]>=0){x=x+d;break;} } }
+    if(colT[x]<0)continue;
+    top.push({x,y:colT[x]}); bot.push({x,y:colB[x]});
+  }
+  if(top.length<4)return null;
+  const loop=[...top,...bot.slice().reverse()];
+  return loop.filter((p,i,a)=>i===0||p.x!==a[i-1].x||p.y!==a[i-1].y);   // closed outline
+}
+/* VIEW ORIENTATION.
+   Everything downstream assumes the object's LENGTH runs left-to-right in the side and
+   top views. Blueprints very often draw the top view rotated 90° (car pointing up), and
+   then the length gets measured as the width and the model comes out as a flat slab.
+   rotateView turns the drawing AND the traced points together so they stay aligned. */
+function rotateView(view,dir){
+  const v=V[view]; if(!v)return false;
+  const src=v.imgRaw||v.img;
+  const w=src?(src.naturalWidth||src.width):0, h=src?(src.naturalHeight||src.height):0;
+  if(src&&w&&h){
+    const c=document.createElement("canvas"); c.width=h; c.height=w;
+    const x=c.getContext("2d");
+    if(dir>0){x.translate(h,0);x.rotate(Math.PI/2);} else {x.translate(0,w);x.rotate(-Math.PI/2);}
+    x.drawImage(src,0,0);
+    setRefImage(v,c);
+  }
+  // a point (px,py) in a w×h image lands here in the new h×w image
+  const turn=p=> dir>0 ? {x:h-p.y, y:p.x} : {x:p.y, y:w-p.x};
+  v.A=(v.A||[]).map(turn);
+  if(v.svgPolys)v.svgPolys=v.svgPolys.map(poly=>poly.map(turn));   // keep the detail lines aligned
+  if(v._shapes)v._shapes=v._shapes.map(poly=>poly.map(turn));
+  v._shapesFor=v.img;
+  v.B=[];
+  if(v.scale)v.scale=v.scale;                    // uniform rotation -> px/mm unchanged
+  return true;
+}
+// For a car the length is always the longest dimension, so the side and top views must be
+// landscape. If one comes in portrait it was drawn rotated — straighten it.
+function autoOrientView(view){
+  if(view!=="side"&&view!=="top"&&view!=="bottom")return false;   // front/rear are width × height already
+  const v=V[view]; if(!v||!v.A||v.A.length<3)return false;
+  const xs=v.A.map(p=>p.x), ys=v.A.map(p=>p.y);
+  const w=Math.max(...xs)-Math.min(...xs), h=Math.max(...ys)-Math.min(...ys);
+  if(h>w*1.15){ rotateView(view,-1); return true; }   // portrait -> length was vertical
+  return false;
+}
+/* ---- feature tracing: same clicks, different target ---- */
+let featDraft=null;                 // {view, tool, pts:[…]} while you're placing one
+let featTool="poly";                // poly | box | text
+// Render the words once into a greyscale stamp. Only the words + size are saved; the
+// stamp is rebuilt on load, so a text feature costs a few bytes instead of a bitmap.
+function rasterizeText(txt,aspect){
+  const H=128, W=Math.max(8,Math.min(1024,Math.round(H*Math.max(0.15,aspect||4))));
+  const c=document.createElement("canvas"); c.width=W; c.height=H;
+  const x=c.getContext("2d",{willReadFrequently:true});
+  x.fillStyle="#000"; x.fillRect(0,0,W,H);
+  x.fillStyle="#fff"; x.textAlign="center"; x.textBaseline="middle";
+  let fs=H*0.8; x.font=`700 ${fs}px Saira Semi Condensed, Inter, sans-serif`;
+  const wNeeded=x.measureText(txt).width||1;
+  if(wNeeded>W*0.94){fs*=W*0.94/wNeeded; x.font=`700 ${fs}px Saira Semi Condensed, Inter, sans-serif`;}
+  x.fillText(txt,W/2,H/2+fs*0.03);
+  const d=x.getImageData(0,0,W,H).data, m=new Uint8Array(W*H);
+  for(let i=0,k=0;i<d.length;i+=4,k++)m[k]=d[i];      // white letters = full depth
+  return {w:W,h:H,d:m};
+}
+function featEnsureMasks(){          // rebuild stamps for text features after a load
+  features.forEach(f=>{ if(f.kind==="text" && f.text && !f.mask){
+    const b=f.box, ar=(b&&(b[3]-b[1])>0)?((b[2]-b[0])/(b[3]-b[1])):4;
+    f.mask=rasterizeText(f.text,ar);
+  }});
+}
+function featBounds(view){
+  const A=(V[view]&&V[view].A)||[]; if(A.length<3)return null;
+  const xs=A.map(p=>p.x),ys=A.map(p=>p.y);
+  const minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);
+  const b={minX,minY,sx:Math.max(1,maxX-minX),sy:Math.max(1,maxY-minY),maxY};
+  // how many millimetres this view's frame spans, so a 5mm peg can be 5mm
+  const L=S.len||150, W=(S.widMM||traced.natWid||60), H=(S.hgtMM||traced.natHgt||60);
+  // sideR is a side view: it spans the LENGTH, not the width. Reading it as a front view
+  // made a 5mm peg drawn on the right flank come out scaled by W/L.
+  if(view==="side"||view==="sideR"){b.wMM=L;b.hMM=H;} else if(view==="top"||view==="bottom"){b.wMM=L;b.hMM=W;}
+  else {b.wMM=W;b.hMM=H;}
+  return b;
+}
+// store the region in the SAME 0..1 frame as that view's body outline, so it lands
+// exactly where you drew it once it's projected onto the model
+function featNormalize(view,pts){
+  const B=featBounds(view); if(!B)return null;
+  return pts.map(p=>[(p.x-B.minX)/B.sx, (B.maxY-p.y)/B.sy]);
+}
+// how deep anything is allowed to press: the thinnest face of the frame
+function featCap(){ return Math.max(0.2, Math.min(S.wallPerFace?S.wallTop:S.wall, S.wallPerFace?S.wallSide:S.wall, S.wallPerFace?S.wallBottom:S.wall)); }
+/* =========================================================================
+   FEATURE EDITING — on the drawing, not in the sidebar.
+   Every feature gets a box you can drag and resize, exactly like the crop boxes
+   on the import sheet. Selecting one opens a small panel that floats over the
+   model, so the thing you're adjusting stays visible while you adjust it. The
+   left rail keeps only what the whole object is: its shape and its size.
+   ========================================================================= */
+/* Selection is a SET, not one index. A car's detail comes in whole faces at a time — 36
+   vents down the front, 24 across the rear — and setting the same depth on all of them one
+   box at a time is not editing, it's data entry. featSel stays as the LEAD of the selection:
+   the one whose outline points you can pull about, and the only one when the set holds one.
+   Everything else in the set follows the sliders. */
+let featSel=-1;                       // the lead feature (index into features), -1 for none
+let featMulti=new Set();              // every selected feature, lead included
+function featSelList(){               // valid, in order, lead first
+  const out=[...featMulti].filter(i=>features[i]).sort((a,b)=>a-b);
+  return out;
+}
+/* Every feature on this view whose own outline contains the point, smallest first.
+   Smallest first because the small thing is the specific thing: if you put your finger on
+   the badge you meant the badge, not the panel it happens to sit on. */
+let featPickCycle={key:"",n:0};
+function featPickAt(view,u,v){
+  const hits=[];
+  features.forEach((f,i)=>{
+    if(f.view!==view)return;
+    let inside=false, area=0;
+    if(f.poly&&f.poly.length>2){
+      inside=ptInPolyPts(f.poly.map(q=>({x:q[0],y:q[1]})),u,v);
+      area=polyAreaPts(f.poly.map(q=>({x:q[0],y:q[1]})));
+    } else {
+      const b=featBox(f);
+      if(b){ inside=(u>=b[0]&&u<=b[2]&&v>=b[1]&&v<=b[3]); area=(b[2]-b[0])*(b[3]-b[1]); }
     }
+    if(inside)hits.push({i,area});
   });
+  return hits.sort((a,b)=>a.area-b.area).map(h=>h.i);
+}
 
-  t("per-face wall: the shell stays sound whatever the faces are set to", () => {
-    for (const extra of [
-      { wallTop:16, wallSide:6,  wallBottom:6  },
-      { wallTop:6,  wallSide:16, wallBottom:6  },
-      { wallTop:6,  wallSide:6,  wallBottom:16 },
-      { wallTop:14, wallSide:8,  wallBottom:20 },     // all three different
-    ]) {
-      const g = API.makeVisualHull(blk({ wallThickness:6, ...extra }));
-      watertight(g, `per-face ${JSON.stringify(extra)}`);
-      for (let i = 0; i < g.positions.length; i++)
-        ok(Number.isFinite(g.positions[i]), "every coordinate must be a number");
+// a feature's box in the view's 0..1 frame, whatever kind it is
+function featBox(f){
+  if(f.box)return f.box.slice();
+  if(f.poly&&f.poly.length){
+    const us=f.poly.map(q=>q[0]), vs=f.poly.map(q=>q[1]);
+    return [Math.min(...us),Math.min(...vs),Math.max(...us),Math.max(...vs)];
+  }
+  return null;
+}
+// move/scale a feature by remapping its box; the outline rides along
+function featSetBox(f,nb){
+  const ob=featBox(f); if(!ob)return;
+  const ow=Math.max(1e-6,ob[2]-ob[0]), oh=Math.max(1e-6,ob[3]-ob[1]);
+  const nw=Math.max(0.004,nb[2]-nb[0]), nh=Math.max(0.004,nb[3]-nb[1]);
+  if(f.poly)f.poly=f.poly.map(q=>[nb[0]+((q[0]-ob[0])/ow)*nw, nb[1]+((q[1]-ob[1])/oh)*nh]);
+  if(f.box)f.box=[nb[0],nb[1],nb[0]+nw,nb[1]+nh];
+}
+// 0..1 view frame  <->  pixels on screen (via the body outline's own box)
+function featToScreen(f){
+  const B=featBounds(activeView), b=featBox(f); if(!B||!b)return null;
+  const p0=img2canvas({x:B.minX+b[0]*B.sx, y:B.maxY-b[3]*B.sy});
+  const p1=img2canvas({x:B.minX+b[2]*B.sx, y:B.maxY-b[1]*B.sy});
+  return {x:Math.min(p0.x,p1.x), y:Math.min(p0.y,p1.y), w:Math.abs(p1.x-p0.x), h:Math.abs(p1.y-p0.y)};
+}
+/* One point of a feature's own outline, in screen pixels. Same mapping featToScreen uses for
+   the corners of its box, applied to a point instead — so a traced shape can be drawn as the
+   shape it is rather than as the rectangle around it. */
+function featPtToScreen(f,q){
+  const B=featBounds(activeView); if(!B||!q)return null;
+  return img2canvas({x:B.minX+q[0]*B.sx, y:B.maxY-q[1]*B.sy});
+}
+function featFromScreen(x,y,w,h){
+  const B=featBounds(activeView); if(!B)return null;
+  const a=canvas2img(x,y), c=canvas2img(x+w,y+h);
+  const u0=(a.x-B.minX)/B.sx, u1=(c.x-B.minX)/B.sx;
+  const v0=(B.maxY-c.y)/B.sy, v1=(B.maxY-a.y)/B.sy;
+  return [Math.min(u0,u1),Math.min(v0,v1),Math.max(u0,u1),Math.max(v0,v1)];
+}
+
+function featRenderGizmos(){
+  const layer=document.getElementById("featLayer"); if(!layer)return;
+  layer.innerHTML="";
+  if(!featBounds(activeView))return;
+  const onView=features.reduce((n,f)=>n+(f.view===activeView?1:0),0);
+  const quiet = featBoxMode==="sel" || (featBoxMode==="auto" && onView>featBoxLimit);
+  /* SMALLEST BOX ON TOP. These are rectangles, so a big panel's box completely covers a
+     badge sitting inside it and the badge could never be tapped. Appending in descending
+     area order puts the small ones last, which puts them on top. */
+  const order=features.map((f,i)=>i)
+    .filter(i=>features[i].view===activeView)
+    .sort((a,b)=>{ const A=featBox(features[a]), Bb=featBox(features[b]);
+      const ar=A?(A[2]-A[0])*(A[3]-A[1]):0, br=Bb?(Bb[2]-Bb[0])*(Bb[3]-Bb[1]):0;
+      return br-ar; });
+  order.forEach(i=>{
+    const f=features[i];
+    if(quiet && i!==featSel && !featMulti.has(i))return;   // drawn on the canvas instead
+    const r=featToScreen(f); if(!r||r.w<2||r.h<2)return;
+    const el=document.createElement("div");
+    el.className="fbox"+(f.depth>=0?" out":"")+(i===featSel?" sel":(featMulti.has(i)?" gsel":""));
+    el.style.cssText=`left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px;color:${f.depth<0?"#46B7D9":"#5BD6A0"}`;
+    // only the selected one gets a name tag and handles. A hundred features each shouting
+    // their name is not information, it's a wall — you couldn't see the drawing underneath.
+    el.innerHTML = (i===featSel)
+      ? `<span class="flabel">${(f.name||"feature")}${f.through?" · through":""}</span>
+         <span class="fh nw"></span><span class="fh ne"></span><span class="fh sw"></span><span class="fh se"></span>`
+      : "";
+    layer.appendChild(el);
+
+    let drag=null;
+    el.addEventListener("pointerdown",e=>{
+      e.stopPropagation(); e.preventDefault();
+      /* While a group is up, a box is something you tick, not something you shove — one
+         stray thumb would otherwise fling a feature across the drawing while you meant to
+         add it to the set. Shift/⌘/Ctrl starts a group from a single selection. */
+      const wantsToggle = featMulti.size>1 || e.shiftKey || e.metaKey || e.ctrlKey;
+      if(wantsToggle){ featSelectToggle(i); return; }
+      /* Select WITHOUT tearing the layer down. featSelect rebuilds every gizmo, which throws
+         this very element out of the document — and a removed node loses pointer capture and
+         stops receiving moves, so the box you just grabbed would sit still while your finger
+         went on without it. Freeze the layer for the length of the gesture, mark the selection
+         on the elements already there, and let the release rebuild it properly (handles and
+         outline points included). */
+      featDragging=true;
+      featMulti=new Set([i]); featSel=i;
+      layer.querySelectorAll(".fbox").forEach(b=>b.classList.remove("sel","gsel"));
+      el.classList.add("sel");
+      featPanelRender(); featSelSync(); drawTrace();
+      const h=e.target.classList.contains("fh")?[...e.target.classList].find(c=>["nw","ne","sw","se"].includes(c)):null;
+      drag={h, sx:e.clientX, sy:e.clientY, r:{...r}};
+      try{el.setPointerCapture(e.pointerId);}catch(_){}
+    });
+    el.addEventListener("pointermove",e=>{
+      if(!drag)return;
+      const dx=e.clientX-drag.sx, dy=e.clientY-drag.sy;
+      let {x,y,w,h}=drag.r;
+      if(!drag.h){ x+=dx; y+=dy; }                              // move the whole thing
+      else{                                                      // or pull one corner
+        if(drag.h.includes("w")){x+=dx; w-=dx;} else w+=dx;
+        if(drag.h.includes("n")){y+=dy; h-=dy;} else h+=dy;
+        if(w<6){w=6;} if(h<6){h=6;}
+      }
+      const nb=featFromScreen(x,y,w,h); if(!nb)return;
+      featSetBox(f,nb);
+      el.style.left=x+"px"; el.style.top=y+"px"; el.style.width=w+"px"; el.style.height=h+"px";
+      drawTrace(); requestRebuild();
+    });
+    const stop=()=>{ if(drag){drag=null; featDragging=false; featRenderGizmos();} };
+    el.addEventListener("pointerup",stop);
+    el.addEventListener("pointercancel",stop);
+
+    // The selected shape shows its own points. A box is only a starting point — drag a
+    // corner to bend it, click a line to put a new point on it, right-click a point to
+    // take it away. Same idea as the tracer, just on one feature.
+    if(i===featSel && f.poly && f.poly.length>=3){
+      const B=featBounds(activeView);
+      const toS=q=>img2canvas({x:B.minX+q[0]*B.sx, y:B.maxY-q[1]*B.sy});
+      const toN=(cx,cy)=>{const a=canvas2img(cx,cy); return [(a.x-B.minX)/B.sx,(B.maxY-a.y)/B.sy];};
+      const canvasXY=e=>{const p=tcXY(e); return [p.x,p.y];};   // same conversion as tracing
+
+      f.poly.forEach((q,k)=>{                         // midpoints: click to add a point
+        const q2=f.poly[(k+1)%f.poly.length];
+        const mp=[(q[0]+q2[0])/2,(q[1]+q2[1])/2], c=toS(mp);
+        const md=document.createElement("div"); md.className="fmid";
+        md.style.cssText=`left:${c.x}px;top:${c.y}px;color:${f.depth<0?"#46B7D9":"#5BD6A0"}`;
+        md.title="add a point here";
+        md.addEventListener("pointerdown",e=>{e.stopPropagation();e.preventDefault();
+          f.poly.splice(k+1,0,mp); featRenderGizmos(); drawTrace(); requestRebuild();});
+        layer.appendChild(md);
+      });
+      f.poly.forEach((q,k)=>{                         // the points themselves: drag to bend
+        const c=toS(q);
+        const pt=document.createElement("div"); pt.className="fpt";
+        pt.style.cssText=`left:${c.x}px;top:${c.y}px`;
+        pt.title="drag to bend · right-click to remove";
+        let moving=false;
+        pt.addEventListener("pointerdown",e=>{e.stopPropagation();e.preventDefault();
+          if(e.button===2)return; moving=true; featDragging=true;
+          try{pt.setPointerCapture(e.pointerId);}catch(_){}});
+        pt.addEventListener("pointermove",e=>{
+          if(!moving)return; e.stopPropagation();
+          const [cx,cy]=canvasXY(e); const nq=toN(cx,cy);
+          f.poly[k]=[Math.max(-0.4,Math.min(1.4,nq[0])), Math.max(-0.4,Math.min(1.4,nq[1]))];
+          const s2=toS(f.poly[k]); pt.style.left=s2.x+"px"; pt.style.top=s2.y+"px";
+          drawTrace(); requestRebuild();
+        });
+        const done=()=>{ if(moving){moving=false; featDragging=false; featRenderGizmos();} };
+        pt.addEventListener("pointerup",done);
+        pt.addEventListener("pointercancel",done);
+        pt.addEventListener("contextmenu",e=>{e.preventDefault();e.stopPropagation();
+          if(f.poly.length<=3){toast("A shape needs at least 3 points.");return;}
+          f.poly.splice(k,1); featRenderGizmos(); drawTrace(); requestRebuild();});
+        layer.appendChild(pt);
+      });
     }
-  });
-
-  t("per-face wall: the grid gate uses the THINNEST face", () => {
-    /* The gate asks whether the grid can carry the wall. With three walls it has to be the
-       thinnest that decides — if the grid cannot hold that one, the shell would eat itself
-       there even though the other faces are comfortable. */
-    const thinnest = API.makeVisualHull(blk({ wallThickness:16, wallTop:16, wallSide:1, wallBottom:16 }));
-    watertight(thinnest, "a body whose thinnest face is under the grid");
-    ok(thinnest.indices.length > 0, "and it must still build something");
   });
 }
 
-// --- report ---
-// nothing is counted until every async test has actually settled
-if (PENDING.length) await Promise.all(PENDING);
-console.log("\nLEE3D core suite — functions read live from index.html\n");
-if (MISSING.length) console.log("  (not present yet: " + MISSING.join(", ") + ")\n");
-console.log(results.join("\n"));
-console.log(`\n${pass} passed, ${fail} failed${warn ? `, ${warn} warning${warn > 1 ? "s" : ""}` : ""}`);
-console.log(fail
-  ? "RESULT: ❌ FAIL — do not ship"
-  : warn
-    ? "RESULT: ✅ PASS — geometry watertight, trace maths sound, library clean (with housekeeping notes above)"
-    : "RESULT: ✅ PASS — geometry watertight, trace maths sound, library clean");
-process.exit(fail ? 1 : 0);
+/* ---- the floating inspector: only the selected feature's own controls ---- */
+function featSelRefresh(){ featRenderGizmos(); featPanelRender(); featSelSync(); drawTrace(); }
+function featSelect(i){                       // one feature, on its own
+  featMulti=new Set([i]); featSel=i; featSelRefresh();
+}
+function featSelectMany(list){                // a whole face, or the lot
+  featMulti=new Set(list); featSel=list.length?list[0]:-1; featSelRefresh();
+}
+function featSelectToggle(i){                 // add to / take out of the group
+  if(featMulti.has(i)){
+    featMulti.delete(i);
+    if(featSel===i)featSel=featMulti.size?featSelList()[0]:-1;
+  } else { featMulti.add(i); featSel=i; }
+  featSelRefresh();
+}
+function featDeselect(){ featMulti=new Set(); featSel=-1; featSelRefresh(); }
+// which features live on a face (indices into the list you hand it)
+function featOnView(list,view){ const out=[]; (list||[]).forEach((f,i)=>{ if((f.view||"side")===view)out.push(i); }); return out; }
+/* What a group of features has in common. The sliders open at the AVERAGE rather than at
+   the first member's value, so opening the panel on a set that disagrees doesn't quietly
+   present one member's number as the group's; "mixed" is reported alongside so the panel can
+   say out loud that moving the slider will flatten a range. */
+function featGroupStats(list){
+  const n=(list||[]).length;
+  if(!n)return {n:0,depth:0,soft:0.12,mixedDepth:false,mixedSoft:false,through:0,allThrough:false};
+  const num=(f,k,d)=>{const v=+f[k]; return isFinite(v)?v:d;};
+  const dep=list.map(f=>num(f,"depth",0)), sof=list.map(f=>num(f,"soft",0.12));
+  const near=(a,b)=>Math.abs(a-b)<=1e-6;
+  const through=list.filter(f=>!!f.through).length;
+  return {
+    n,
+    depth: dep.reduce((s,v)=>s+v,0)/n,
+    soft:  sof.reduce((s,v)=>s+v,0)/n,
+    mixedDepth: dep.some(v=>!near(v,dep[0])),
+    mixedSoft:  sof.some(v=>!near(v,sof[0])),
+    through, allThrough: through===n
+  };
+}
+/* The select buttons carry their own counts, because "Face" on its own doesn't tell you
+   whether this face has three features or thirty-six. Hidden entirely until there's
+   something to select — an empty toolbar button is just clutter. */
+function featSelSync(){
+  const row=document.getElementById("featSelRow"); if(!row)return;
+  const face=featOnView(features,activeView).length, all=features.length;
+  row.style.display = all ? "inline-flex" : "none";
+  const bF=document.getElementById("featSelFace"), bA=document.getElementById("featSelAll"),
+        bN=document.getElementById("featSelNone");
+  if(bF){ bF.textContent=`Face · ${face}`; bF.style.opacity=face?"":"0.45"; }
+  if(bA) bA.textContent=`All · ${all}`;
+  if(bN) bN.style.display=featMulti.size?"":"none";
+}
+
+/* ---- the same inspector, driving a whole group ----
+   One slider, every selected feature. The slider opens at the group's AVERAGE and each row
+   says "mixed" when the members disagree, so you can see you're about to flatten a range
+   before you do it. Values are written as you drag (the readout and the box colours track),
+   but the model is only rebuilt when you let go — dragging a depth slider across 96 features
+   would otherwise queue 96-feature rebuilds every 40ms and lock the tab up. */
+function featPanelGroup(panel,body){
+  const idx=featSelList(), list=idx.map(i=>features[i]);
+  if(list.length<2){ featSel=idx.length?idx[0]:-1; featMulti=new Set(idx); featPanelRender(); return; }
+  panel.style.display="";
+  const $=id=>document.getElementById(id);
+  const st=featGroupStats(list);
+  const dAvg=st.depth, sAvg=st.soft, thruOn=st.through;
+  const cap=featCap(), anyThru=thruOn>0;
+  const mixed=k=>k==="depth"?st.mixedDepth:st.mixedSoft;
+  const byFace={}; list.forEach(f=>{const v=f.view||"side"; byFace[v]=(byFace[v]||0)+1;});
+  const faces=Object.entries(byFace).map(([v,n])=>`${viewName(v)} ${n}`).join(" · ");
+  const tag=on=>on?` <span style="opacity:.6;font-weight:400">· mixed</span>`:"";
+  $("fpTitle").textContent=`${list.length} features`;
+  body.innerHTML=`
+    <div class="hint" style="margin:0 0 7px">${faces}</div>
+    <div class="field"><label>Depth${tag(mixed("depth"))} <span class="val"><span id="gpDv"></span> mm</span></label>
+      <input type="range" id="gpDepth" min="${anyThru?-40:-cap}" max="12" step="0.1" value="${dAvg.toFixed(1)}"></div>
+    <div class="field"><label>Soft edge${tag(mixed("soft"))} <span class="val"><span id="gpSv"></span></span></label>
+      <input type="range" id="gpSoft" min="0.01" max="0.4" step="0.01" value="${sAvg.toFixed(2)}"></div>
+    <label style="display:flex;align-items:center;gap:6px;font-size:10.5px;cursor:pointer;margin:2px 0 7px">
+      <input type="checkbox" id="gpThru"${thruOn===list.length?" checked":""}> Cut clean through${thruOn&&thruOn<list.length?" <span style='opacity:.6'>· mixed</span>":""}</label>
+    <div class="hint" id="gpNote" style="margin:0 0 7px"></div>
+    <div class="hint" style="margin:0 0 7px;opacity:.7">Every slider sets <b>all ${list.length}</b> to the same value. Tap a box to take it out of the group; <b>None</b> clears it. Boxes only move when one is selected on its own.</div>
+    <button class="btn ghost" id="gpDel" style="width:100%">⌫ Delete all ${list.length}</button>`;
+  $("gpDv").textContent=dAvg.toFixed(1);
+  $("gpSv").textContent=sAvg.toFixed(2);
+  const note=()=>{
+    const el=$("gpNote"); if(!el)return;
+    const d=+$("gpDepth").value, thru=$("gpThru").checked;
+    if(thru&&d<0) el.innerHTML=(S.mode==="projection")
+      ? "<b style='color:var(--good)'>Real openings.</b> Cut clean through, all of them."
+      : "<b style='color:var(--warn)'>Smooth can only dent these.</b> Switch <b>Shape style</b> to <b>Follow my drawing</b>.";
+    else if(d<0 && Math.abs(d)>=cap-0.05) el.innerHTML=`Pressed in as far as the <b>${cap.toFixed(1)} mm</b> frame allows.`;
+    else if(d<0) el.textContent="Pressed into the surface.";
+    else if(d>0) el.textContent="Raised out of the surface.";
+    else el.textContent="No depth — these do nothing yet.";
+  };
+  const commit=()=>{ requestRebuild(); featRenderGizmos(); };
+  $("gpDepth").oninput=e=>{ const d=+e.target.value; $("gpDv").textContent=d.toFixed(1);
+    list.forEach(f=>{ f.depth=d; if(d>=0)f.through=false; }); note(); };
+  $("gpDepth").onchange=commit;
+  $("gpSoft").oninput=e=>{ const s=+e.target.value; $("gpSv").textContent=s.toFixed(2);
+    list.forEach(f=>{ f.soft=s; }); };
+  $("gpSoft").onchange=commit;
+  $("gpThru").onchange=e=>{ const on=e.target.checked;
+    list.forEach(f=>{ f.through=on && f.depth<0; });
+    $("gpDepth").min=on?-40:-featCap(); note(); commit(); };
+  /* Deleting ninety-six features on a mis-tap, with no undo behind it, is not something a
+     button should do first time it's touched. */
+  let armed=false;
+  $("gpDel").onclick=e=>{
+    if(!armed){ armed=true; e.target.textContent=`Delete ${list.length}? Tap again`;
+      setTimeout(()=>{ if(armed&&document.getElementById("gpDel")){armed=false;e.target.textContent=`⌫ Delete all ${list.length}`;} },3500); return; }
+    idx.slice().sort((a,b)=>b-a).forEach(i=>features.splice(i,1));   // high to low, or the rest shift
+    featDeselect(); featRender(); requestRebuild();
+    toast(`Deleted <b>${list.length}</b> features.`);
+  };
+  note();
+}
+
+function featPanelRender(){
+  const panel=document.getElementById("featPanel"), body=document.getElementById("fpBody");
+  if(!panel||!body)return;
+  if(featMulti.size>1){ featPanelGroup(panel,body); return; }
+  const f=features[featSel];
+  if(!f){panel.style.display="none";return;}
+  panel.style.display="";
+  document.getElementById("fpTitle").textContent=f.name||"feature";
+  const cap=featCap();
+  const isText=f.kind==="text";
+  body.innerHTML=`
+    <input class="proj-name mono" id="fpName" style="width:100%;font-size:11px;padding:3px 6px" value="">
+    ${isText?`<input class="proj-name mono" id="fpText" style="width:100%;font-size:12px;padding:3px 6px;margin-top:5px" placeholder="wording…" value="">`:""}
+    <div class="field" style="margin-top:7px"><label>Depth <span class="val"><span id="fpDv"></span> mm</span></label>
+      <input type="range" id="fpDepth" min="${f.through?-40:-cap}" max="12" step="0.1" value="${f.depth}"></div>
+    <div class="field"><label>Soft edge <span class="val"><span id="fpSv"></span></span></label>
+      <input type="range" id="fpSoft" min="0.01" max="0.4" step="0.01" value="${f.soft}"></div>
+    <label id="fpThruRow" style="display:${f.depth<0?"flex":"none"};align-items:center;gap:6px;font-size:10.5px;cursor:pointer;margin:2px 0 7px">
+      <input type="checkbox" id="fpThru"${f.through?" checked":""}> Cut clean through</label>
+    <div class="hint" id="fpNote" style="margin:0 0 7px"></div>
+    <div class="hint" style="margin:0 0 7px;opacity:.7">Drag the box to move it, a corner to resize. Drag an <b style="color:var(--accent)">orange point</b> to bend the shape, click a <b>dashed dot</b> on a line to add a point, right-click a point to remove it.</div>
+    <button class="btn ghost" id="fpDel" style="width:100%">⌫ Delete this feature</button>`;
+  const $=id=>document.getElementById(id);
+  $("fpName").value=f.name||""; $("fpName").oninput=e=>{f.name=e.target.value;document.getElementById("fpTitle").textContent=f.name||"feature";featRenderGizmos();};
+  if(isText){const t=$("fpText"); t.value=f.text||"";
+    t.oninput=e=>{f.text=e.target.value||"TEXT";
+      const b=f.box, ar=(b&&(b[3]-b[1])>0)?((b[2]-b[0])/(b[3]-b[1])):4;
+      f.mask=rasterizeText(f.text,ar); f.name=f.text.slice(0,14);
+      document.getElementById("fpTitle").textContent=f.name; requestRebuild(); featRenderGizmos();};}
+  $("fpDv").textContent=Number(f.depth).toFixed(1);
+  $("fpSv").textContent=Number(f.soft).toFixed(2);
+  $("fpDepth").oninput=e=>{f.depth=+e.target.value; $("fpDv").textContent=f.depth.toFixed(1);
+    if(f.depth>=0)f.through=false;
+    $("fpThruRow").style.display=(f.depth<0)?"flex":"none";
+    featNote(); requestRebuild(); featRenderGizmos();};
+  $("fpSoft").oninput=e=>{f.soft=+e.target.value; $("fpSv").textContent=f.soft.toFixed(2); requestRebuild();};
+  const th=$("fpThru"); if(th)th.onchange=e=>{f.through=e.target.checked;
+    $("fpDepth").min=f.through?-40:-featCap(); featNote(); requestRebuild(); featRenderGizmos();};
+  $("fpDel").onclick=()=>{features.splice(featSel,1); featDeselect(); featRender(); requestRebuild();};
+  featNote();
+}
+/* HOW PROUD THIS SHAPE CAN ACTUALLY STAND.
+   Raising is limited by how sharply the surface may bend, not by the frame — the same
+   gradient limit that stops the mesh folding over itself. A wide shape reaches whatever you
+   ask for; a narrow one cannot, because it would need near-vertical sides. Measured against
+   the builder: a 40mm badge on a 100mm face reaches the full 6mm, 25mm reaches 4.6, 15mm
+   reaches 3.4, 8mm reaches 1.7 — close enough to a fifth of its own width to say out loud.
+   Saying it beats letting the slider promise 12mm and quietly deliver 1.7. */
+function featRaiseLimit(f){
+  const B=featBounds(f.view||activeView), b=featBox(f);
+  if(!B||!b)return Infinity;
+  const spanMM=Math.min((b[2]-b[0])*(B.wMM||100),(b[3]-b[1])*(B.hMM||100));
+  return Math.max(0.2, spanMM*0.2);
+}
+// say plainly what this feature will actually do, given the mode and the frame
+function featNote(){
+  const el=document.getElementById("fpNote"), f=features[featSel]; if(!el||!f)return;
+  const cap=featCap();
+  if(f.through && f.depth<0){
+    el.innerHTML = (S.mode==="projection")
+      ? "<b style='color:var(--good)'>A real opening.</b> Cut clean through, right here."
+      : "<b style='color:var(--warn)'>Smooth can only dent this.</b> Switch <b>Shape style</b> to <b>Follow my drawing</b> for a real hole.";
+    return;
+  }
+  if(f.depth<0 && Math.abs(f.depth)>=cap-0.05)
+    el.innerHTML=`Pressed in as far as the <b>${cap.toFixed(1)} mm</b> frame allows. Thicken the frame in <b>Advanced</b> to go deeper.`;
+  else if(f.depth<0) el.textContent="Pressed into the surface.";
+  else if(f.depth>0){
+    const lim=featRaiseLimit(f);
+    el.innerHTML = `<b style='color:var(--warn)'>Pushed outward.</b> This makes the part `
+      + `<b>bigger than the drawing you traced</b> — it grows past the box it was measured in, `
+      + `so it may no longer fit what it was measured for. To make a shape stand proud without `
+      + `growing the part, set it to <b>0</b> and carve the shape <i>around</i> it instead.`
+      + (f.depth>lim+0.05 ? ` (About ${lim.toFixed(1)} mm of it will take, at this width.)` : "");
+  }
+  else el.innerHTML="<b style='color:var(--good)'>Left standing.</b> Nothing cuts this — "
+     + "anything carved around it steps down and leaves this at full height, the way a carver "
+     + "leaves the part they don't cut. Set the shape <i>around</i> it to a negative depth.";
+}
+
+/* How many shapes THIS face's drawing is offering. It has to be worked out per face and
+   cleared when you leave one: the count belongs to the drawing in front of you, and a button
+   still reading "Take all 24" on a face whose drawing holds none is a straight lie about what
+   pressing it will do. Nothing is counted while the tool is elsewhere — svgDetails scans the
+   whole image the first time it's asked, and that isn't work to do on every tab of a view. */
+function featSvgAllSync(){
+  const all=document.getElementById("featSvgAll"); if(!all)return 0;
+  if(featTool!=="svg"){ all.textContent="Take all"; return 0; }
+  const have=(typeof svgDetails==="function")?svgDetails(activeView).length:0;
+  all.textContent=have?`Take all ${have}`:"Take all";
+  return have;
+}
+// Features are numbered within their own face. A global counter meant the top view started
+// at "detail 13" because the side view happened to have twelve — a number about the model's
+// history, not about the drawing you're looking at.
+function featNextName(list,view,base){
+  let n=0; for(const f of (list||[])) if((f.view||"side")===view)n++;
+  return base+" "+(n+1);
+}
+function featRender(){
+  featRenderGizmos(); featPanelRender(); featSelSync();
+  // the repair button lives or dies by whether there is anything to repair
+  if(typeof featTidySync==="function")featTidySync();
+  const c=document.getElementById("featCount");
+  const face=featOnView(features,activeView).length;
+  if(c)c.textContent=features.length?`${features.length} on this model · ${face} on ${viewName(activeView)}`:"none yet";
+}
+// The SVG already contains every line in the drawing. The biggest path becomes the body
+// outline; everything else — windows, lights, scoops, badges — is detail sitting unused.
+// Click one and it becomes a feature, exactly as drawn, with no tracing at all.
+function ptInPolyPts(poly,x,y){
+  let ins=false;
+  for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+    const xi=poly[i].x,yi=poly[i].y,xj=poly[j].x,yj=poly[j].y;
+    if(((yi>y)!==(yj>y)) && (x<(xj-xi)*(y-yi)/((yj-yi)||1e-9)+xi))ins=!ins;
+  }
+  return ins;
+}
+function polyAreaPts(p){let a=0;for(let i=0,j=p.length-1;i<p.length;j=i++)a+=(p[j].x*p[i].y-p[i].x*p[j].y);return Math.abs(a/2);}
+// Every shape this view's drawing contains. An SVG hands them over as paths; a photo or
+// PNG gives them up as the regions its lines enclose. Same idea, same result — the file
+// type stops mattering past this point. Worked out once, then cached.
+function viewShapes(view){
+  const v=V[view]; if(!v)return [];
+  if(v.svgPolys&&v.svgPolys.length)return v.svgPolys;      // vector: exact, nothing to work out
+  if(v.dxfPolys&&v.dxfPolys.length)return v.dxfPolys;      // a CAD file's own curves
+  if(!v.img)return [];
+  if(v._shapes && v._shapesFor===v.img)return v._shapes;    // cached against this drawing
+  try{
+    const im=v.img, w=im.naturalWidth||im.width, h=im.naturalHeight||im.height;
+    const c=document.createElement("canvas"); c.width=w; c.height=h;
+    c.getContext("2d",{willReadFrequently:true}).drawImage(im,0,0,w,h);
+    v._shapes=rasterRegions(c.getContext("2d").getImageData(0,0,w,h),64);
+    v._shapesFor=v.img; v.svgArea=v.svgArea||w*h;
+  }catch(_){ v._shapes=[]; v._shapesFor=v.img; }
+  return v._shapes;
+}
+// everything except the shape already being used as the body outline
+function svgDetails(view){
+  const v=V[view]; if(!v||v.A.length<3)return [];
+  const shapes=viewShapes(view); if(!shapes.length)return [];
+  const bodyA=polyAreaPts(v.A), full=v.svgArea||Infinity;
+  return shapes.filter(p=>p.length>=3 && polyAreaPts(p)<bodyA*0.9 && polyAreaPts(p)<full*0.95
+                          && polyAreaPts(p)>full*1e-5);
+}
+// the smallest shape under the cursor -> the most specific thing you pointed at
+function svgDetailAt(view,pt){
+  let best=null,bestA=Infinity;
+  for(const poly of svgDetails(view)){
+    if(!ptInPolyPts(poly,pt.x,pt.y))continue;
+    const a=polyAreaPts(poly); if(a<bestA){bestA=a;best=poly;}
+  }
+  return best;
+}
+// Sampling a line every N steps gives you points wherever the loop happened to land: 64 of
+// them, most on straight runs where they mean nothing, all piled on top of each other the
+// moment you try to grab one. Douglas-Peucker instead keeps the points that CARRY the
+// shape — the corners — and drops the rest. A window goes from 64 unusable dots to a dozen
+// you can actually pull about, and it hugs the drawing more closely for it.
+function simplifyPoly(pts,tol){
+  if(!pts||pts.length<4)return pts;
+  const seg2=(p,a,b)=>{
+    const dx=b[0]-a[0], dy=b[1]-a[1], L2=dx*dx+dy*dy;
+    let t=L2?((p[0]-a[0])*dx+(p[1]-a[1])*dy)/L2:0; t=t<0?0:t>1?1:t;
+    const qx=a[0]+dx*t-p[0], qy=a[1]+dy*t-p[1];
+    return qx*qx+qy*qy;
+  };
+  const keep=new Array(pts.length).fill(false);
+  keep[0]=keep[pts.length-1]=true;
+  const stack=[[0,pts.length-1]], t2=tol*tol;
+  while(stack.length){
+    const [i,j]=stack.pop(); if(j<=i+1)continue;
+    let best=-1,bd=0;
+    for(let k=i+1;k<j;k++){const d=seg2(pts[k],pts[i],pts[j]); if(d>bd){bd=d;best=k;}}
+    if(bd>t2 && best>0){keep[best]=true; stack.push([i,best],[best,j]);}
+  }
+  const out=pts.filter((_,i)=>keep[i]);
+  return out.length>=3?out:pts;
+}
+/* A SHAPE'S FINGERPRINT, so the same one can't be taken twice.
+   "Take all" had no memory: press it a second time and every shape in the drawing was added
+   again, on top of itself. Sixty shapes pressed six times is 360 features that look exactly
+   like 60, and it is the single cause of most of what goes wrong afterwards —
+     * the detail smears. Stacked stamps all ask for depth at once; the gradient limiter has
+       to spread that somewhere, so it pushes it sideways. Measured on nested panels: the
+       dent stays at its 2.77mm cap, but the area that moves grows from 312 cells to 1,077,
+       and crisp panel lines bleed into one soft mound.
+     * deleting does nothing you can see. You removed one of six identical copies.
+     * you can't pick the small shape. Six copies of the big panel sit over it.
+   Duplicates are byte-identical here — same source polygon, same normalise, same simplify —
+   so centroid, extent and area together identify one uniquely and cheaply. */
+function featSig(f){
+  const p=f&&f.poly; if(!p||p.length<3)return null;
+  let cx=0,cy=0,x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+  for(const q of p){ cx+=q[0]; cy+=q[1];
+    if(q[0]<x0)x0=q[0]; if(q[0]>x1)x1=q[0]; if(q[1]<y0)y0=q[1]; if(q[1]>y1)y1=q[1]; }
+  const a=polyAreaPts(p.map(q=>({x:q[0],y:q[1]}))), r=n=>Math.round(n*2000)/2000;
+  return `${f.view||"side"}|${r(cx/p.length)}|${r(cy/p.length)}|${r(x1-x0)}|${r(y1-y0)}|${r(a)}`;
+}
+// how many features on a view are copies of one already there
+function featDupIdx(view){
+  const seen=new Set(), out=[];
+  features.forEach((f,i)=>{ if(view&&f.view!==view)return;
+    const s=featSig(f); if(!s)return;
+    if(seen.has(s))out.push(i); else seen.add(s); });
+  return out;
+}
+function featAddSvgPoly(view,poly,quiet){
+  const dense=featNormalize(view,resamplePoly(poly,140));
+  if(!dense)return false;
+  // tolerance follows the feature's own size, so a small badge isn't flattened and a big
+  // window isn't left with fifty points
+  const us=dense.map(q=>q[0]), vs=dense.map(q=>q[1]);
+  const span=Math.max(Math.max(...us)-Math.min(...us), Math.max(...vs)-Math.min(...vs));
+  let norm=simplifyPoly(dense, Math.max(0.002, span*0.018));
+  if(norm.length>34)norm=simplifyPoly(dense, Math.max(0.004, span*0.035));   // still busy? relax it
+  // already taken? say so and select the one that's there, rather than stacking another
+  const sig=featSig({view,poly:norm});
+  if(sig){
+    const at=features.findIndex(f=>f.view===view&&featSig(f)===sig);
+    if(at>=0){ if(!quiet){ featSelect(at); toast("That shape is already taken — selected the one you have."); }
+      return false; }
+  }
+  features.push({kind:"poly",view,poly:norm,depth:-2.5,soft:0.08,name:featNextName(features,view,"detail")});
+  if(!quiet){featSelect(features.length-1);requestRebuild();
+    toast(`Taken straight from your drawing — <span class="mono">${features[features.length-1].poly.length} points</span> you can drag to reshape it.`);}
+  return true;
+}
+/* =========================================================================
+   CONNECTORS — how parts become a toy.
+   A toy is parts that join: a peg into a socket, a wheel onto an axle. Two
+   things make that work in practice, and both are easy to get wrong by hand:
+     * the socket must be BIGGER than its peg, or the print seizes solid. The
+       gap needed is a printer fact (~0.2mm a side), not a modelling choice.
+     * both halves must be the same nominal size, or they simply don't mate.
+   So a connector is declared by its NOMINAL size, and the clearance is applied
+   for you: peg -> exactly nominal, socket -> nominal + 2x clearance.
+   ========================================================================= */
+const CONN={clearance:0.2, nozzle:0.4};      // mm; a sane FDM starting point
+// a circle in the view's 0..1 frame, sized in mm
+function connPoly(cx,cv,dMM,B,seg){
+  seg=seg||24;
+  const ru=(dMM/2)/Math.max(1e-6,B.wMM), rv=(dMM/2)/Math.max(1e-6,B.hMM);
+  const out=[];
+  for(let i=0;i<seg;i++){const a=i/seg*2*Math.PI; out.push([cx+Math.cos(a)*ru, cv+Math.sin(a)*rv]);}
+  return out;
+}
+// what a connector's outline should measure, once the printer is accounted for
+function connDiameter(kind,nominal,clearance){
+  const c=(clearance==null?CONN.clearance:clearance);
+  return kind==="socket" ? nominal+2*c : nominal;   // a hole is cut oversize; a peg is true
+}
+// is this thing actually printable, or is it a sliver that will snap off?
+function connWarn(kind,nominal,depth,nozzle){
+  const nz=nozzle==null?CONN.nozzle:nozzle;
+  if(kind==="peg" && nominal < nz*4)
+    return `A ${nominal.toFixed(1)}mm peg is under four nozzle widths — it will snap. Try ${(nz*5).toFixed(1)}mm or more.`;
+  if(Math.abs(depth) < nz*2)
+    return `${Math.abs(depth).toFixed(1)}mm deep is thinner than two layers — it won't really be there.`;
+  return null;
+}
+function featStart(){
+  if(!(V[activeView]&&V[activeView].A.length>=3)){toast("Trace the body outline on this view first — features are placed against it.");return;}
+  featDraft={view:activeView,tool:featTool,pts:[]};
+  document.getElementById("featNew").style.display="none";
+  document.getElementById("featDone").style.display="";
+  document.getElementById("featCancel").style.display="";
+  setTraceStatus();drawTrace();
+  toast(featTool==="poly"
+    ? `Click around the shape on the <b>${viewName(activeView)}</b> view, then <b>Finish</b>.`
+    : `Click <b>two opposite corners</b> on the <b>${viewName(activeView)}</b> view to place the ${featTool==="text"?"wording":"box"}.`);
+}
+function featFinish(){
+  if(!featDraft)return;
+  const tool=featDraft.tool||"poly";
+  const need = tool==="poly"?3:2;
+  if(featDraft.pts.length<need){toast(tool==="poly"?"A shape needs at least 3 points.":"Click two opposite corners.");return;}
+  const norm=featNormalize(featDraft.view,featDraft.pts);
+  if(!norm){toast("Trace the body outline on this view first.");featCancelDraft();return;}
+  const nm=()=>featNextName(features,featDraft.view,({poly:"feature",box:"box",text:"text"})[tool]);
+  if(tool==="poly"){
+    features.push({kind:"poly",view:featDraft.view,poly:norm,depth:-2.5,soft:0.12,name:nm()});
+  } else {
+    const u0=Math.min(norm[0][0],norm[1][0]), u1=Math.max(norm[0][0],norm[1][0]);
+    const v0=Math.min(norm[0][1],norm[1][1]), v1=Math.max(norm[0][1],norm[1][1]);
+    if(u1-u0<0.004||v1-v0<0.004){toast("That box is too small — try again with corners further apart.");return;}
+    const box=[u0,v0,u1,v1];
+    if(tool==="box") features.push({kind:"poly",view:featDraft.view,poly:[[u0,v0],[u1,v0],[u1,v1],[u0,v1]],depth:-2.5,soft:0.06,name:nm()});
+    else {
+      const txt=(document.getElementById("featText").value||"TEXT").trim()||"TEXT";
+      features.push({kind:"text",view:featDraft.view,text:txt,box,mask:rasterizeText(txt,(u1-u0)/Math.max(1e-6,(v1-v0))),
+                     depth:-1.2,soft:0.05,name:txt.slice(0,14)});
+    }
+  }
+  featCancelDraft(); featSelect(features.length-1); requestRebuild();
+  toast(tool==="text"
+    ? "Wording added — <b>depth</b> negative engraves it, positive raises it. Resize by re-placing it."
+    : "Feature added — <b>depth</b> negative presses in, positive pops out.");
+}
+function featCancelDraft(){
+  featDraft=null;
+  document.getElementById("featNew").style.display="";
+  document.getElementById("featDone").style.display="none";
+  document.getElementById("featCancel").style.display="none";
+  setTraceStatus();drawTrace();
+}
+/* Typing the size beats clicking two points and a dialog: you already know the thing is
+   201mm long. Each view says how big the object is ACROSS and TALL in its own frame, in mm,
+   and the scale falls out of that. Across and tall can differ, which is how a drawing that
+   isn't quite square still comes out right — and it's what stops a 201mm car reading 182mm
+   wide because one view was calibrated against another. */
+function viewSizeMeans(view){
+  return view==="side"   ? {w:"length", h:"height"}
+       : view==="top"||view==="bottom" ? {w:"length", h:"width"}
+       :                    {w:"width",  h:"height"};
+}
+function syncViewSize(){
+  const v=V[activeView]; if(!v)return;
+  const m=viewSizeMeans(activeView);
+  const lbl=document.getElementById("vSizeLbl"); if(lbl)lbl.textContent=`${m.w} × ${m.h}`;
+  const w=document.getElementById("vSizeW"), h=document.getElementById("vSizeH");
+  if(w)w.value=v.sizeW?Math.round(v.sizeW*10)/10:"";
+  if(h)h.value=v.sizeH?Math.round(v.sizeH*10)/10:"";
+}
+function applyViewSize(){
+  const v=V[activeView]; if(!v)return;
+  const w=parseFloat(document.getElementById("vSizeW").value);
+  const h=parseFloat(document.getElementById("vSizeH").value);
+  v.sizeW=(isFinite(w)&&w>0)?w:null;
+  v.sizeH=(isFinite(h)&&h>0)?h:null;
+  // a real size across the view IS a scale: pixels spanned / millimetres spanned
+  if(v.sizeW && v.A && v.A.length>=2){
+    const xs=v.A.map(p=>p.x), span=Math.max(1,Math.max(...xs)-Math.min(...xs));
+    v.scale=span/v.sizeW;
+  }
+  commitTrace(); setTraceStatus();
+  const m=viewSizeMeans(activeView);
+  toast(v.sizeW?`This ${viewName(activeView)} view is <b>${v.sizeW}mm</b> ${m.w}${v.sizeH?` × <b>${v.sizeH}mm</b> ${m.h}`:""} — everything else is measured from that.`
+               :"Cleared this view's size.");
+}
+function commitTrace(){
+  if(typeof ibRender==="function")setTimeout(ibRender,0);   // a traced view fills a face too
+  const DEF=(typeof DEFAULT_LEN!=="undefined"?DEFAULT_LEN:200);
+  let lenMM=null, widMM=null, hgtMM=null;
+
+  // SIDE view -> LENGTH + roof/sill. The length becomes the shared anchor for every
+  // other view, so the views can never disagree about how big the object is.
+  const sv=V.side;
+  if(sv.A.length>=3){
+    const env=outlineEnvelope(sv.A);
+    const pxmm=anchorPxPerMm(env.span, null, sv.scale, DEF);   // uncalibrated -> standard length
+    const datum=env.bot.reduce((m,p)=>Math.max(m,p.y),-Infinity);
+    traced.top   =env.top.map(p=>[clamp((p.x-env.minX)/env.span,0,1),(datum-p.y)/pxmm]);
+    traced.bottom=env.bot.map(p=>[clamp((p.x-env.minX)/env.span,0,1),(datum-p.y)/pxmm]);
+    lenMM=Math.max(5,Math.round(env.span/pxmm));
+    hgtMM=Math.max(1, Math.max(...traced.top.map(q=>q[1])) - Math.min(...traced.bottom.map(q=>q[1])));
+    if(sv.sizeH>0 && hgtMM>0){                       // you typed the real height: honour it
+      const k=sv.sizeH/hgtMM;
+      traced.top=traced.top.map(q=>[q[0],q[1]*k]); traced.bottom=traced.bottom.map(q=>[q[0],q[1]*k]);
+      hgtMM=sv.sizeH;
+    }
+    traced.natHgt=hgtMM; S.hgtMM=Math.max(1,Math.round(hgtMM*(S.hgtK||1)));
+    S.len=lenMM; syncLen(); markSil(true);
+  } else if(sv.scale && sv.A.length>=2){
+    const minX=Math.min(...sv.A.map(p=>p.x)),maxX=Math.max(...sv.A.map(p=>p.x)),span=Math.max(1,maxX-minX),datum=Math.max(...sv.A.map(p=>p.y));
+    traced.top=edgeToProfile(sv.A,sv.scale,datum,minX,span);traced.bottom=null;
+    lenMM=Math.max(20,Math.round(span/sv.scale)); S.len=lenMM; syncLen(); markSil(true);
+  }
+
+  // TOP view -> WIDTH. The top view shows the SAME object, so its length must equal the
+  // side view's length: derive its px/mm from that instead of its own calibration. This
+  // kills view-to-view scale mismatch (the "model comes out very wide" bug) and means
+  // only ONE view ever needs calibrating.
+  const tv=V.top;
+  if(tv.A.length>=3){
+    const env=outlineEnvelope(tv.A);
+    const pxmm=anchorPxPerMm(env.span, lenMM, tv.scale, DEF);  // anchored to the side view
+    traced.width=env.top.map((p,i)=>[clamp((p.x-env.minX)/env.span,0,1),Math.max(0.4,(env.bot[i].y-p.y)/pxmm/2)]);
+    widMM=2*Math.max(...traced.width.map(q=>q[1]),0.4);
+    if(tv.sizeH>0 && widMM>0){                       // the top view's "height" IS the width
+      const k=tv.sizeH/widMM;
+      traced.width=traced.width.map(q=>[q[0],q[1]*k]); widMM=tv.sizeH;
+    }
+    traced.natWid=widMM; S.widMM=Math.max(1,Math.round(widMM*(S.widK||1)));
+    if(!lenMM){lenMM=Math.max(5,Math.round(env.span/pxmm));S.len=lenMM;}
+    markWidth(true); syncLen();
+  }
+
+  // BOTTOM view -> the floor's own plan. Same object, so it anchors to the same length as
+  // everything else; only its SHAPE differs from the roof plan above it.
+  const bv=V.bottom;
+  if(bv && bv.A.length>=3){
+    const env=outlineEnvelope(bv.A);
+    const pxmm=anchorPxPerMm(env.span, lenMM, bv.scale, DEF);
+    traced.widthBot=env.top.map((p,i)=>[clamp((p.x-env.minX)/env.span,0,1),Math.max(0.3,(env.bot[i].y-p.y)/pxmm/2)]);
+    if(!lenMM){lenMM=Math.max(5,Math.round(env.span/pxmm));S.len=lenMM;syncLen();}
+  } else traced.widthBot=null;
+
+  // FRONT / REAR -> cross-section + absolute hull. Anchored the same way: the front
+  // view's width span IS the object's width (from the top view).
+  const doSection=(view,at,src)=>{
+    const vv=V[view]; if(vv.A.length<3)return;
+    const env=outlineEnvelope(vv.A);
+    const base=env.bot.reduce((m,p)=>Math.max(m,p.y),-Infinity), peak=env.top.reduce((m,p)=>Math.min(m,p.y),Infinity);
+    const sec=sectionFromTopEdge(env.top.map(p=>[p.x,p.y]),base,peak);
+    if(sec){ if(view==="front"){traced.section=sec;markSection(true);} setSourceSection(src,at,sec); refreshSecUI(); }
+    const pxmm = widMM ? anchorPxPerMm(env.span, widMM, vv.scale, DEF)
+               : (hgtMM ? (Math.max(1,base-peak)/hgtMM) : vv.scale);
+    if(pxmm){ const yc=(env.minX+env.maxX)/2;
+      const hull=env.top.map(p=>[(p.x-yc)/pxmm,(base-p.y)/pxmm]);
+      if(view==="front")traced.frontHull=hull; else traced.rearHull=hull;
+    } else { if(view==="front")traced.frontHull=null; else traced.rearHull=null; }
+  };
+  if(!traced.top)traced.natHgt=null;
+  doSection("front",FRONT_AT,"front");
+  doSection("rear",REAR_AT,"rear");
+
+  // WIDTH can come from either place, which is how you actually read a drawing: the TOP
+  // view measures it along the whole length, and the FRONT/REAR view measures it head-on.
+  // With no top view the front view still says how wide the thing is, so the slider works
+  // off that instead of going dead.
+  if(!traced.width){
+    const hull=traced.frontHull||traced.rearHull;
+    let measured=0;
+    if(hull&&hull.length>1){const xs=hull.map(q=>q[0]); measured=Math.max(...xs)-Math.min(...xs);}
+    if(measured>0.5){
+      // nothing traced the width PROFILE, so the sliders still shape it — we just scale that
+      // shape until it is as wide as the drawing says
+      const par=2*Math.max(...buildWidth().map(q=>q[1]),0.4);
+      traced.natWid=par;
+      S.widK=measured/par;                     // the front view IS the measurement
+      S.widMM=Math.max(1,Math.round(measured));
+    } else traced.natWid=null;
+  }
+
+  /* AREA, NOT POINT COUNT — this has to match `_clean` in the backend's hull.py exactly.
+     Three DISTINCT points can still be collinear, and a line has no area to build from. The
+     count check let one through, and both ends then obeyed it as "no constraint at all":
+     the backend's side prism extruded to volume 0.0 and OpenCascade's intersect DISCARDS a
+     zero-volume operand, so the body came out as its full bounding box with no error. The
+     studio's own downstream checks are all `length>2` too, so a flat outline reached the
+     preview mesh the same way.
+     Returning null here is what the 18 `length>2` guards downstream already handle correctly
+     — they fall back to BOX, which is exactly what the backend does with _UNIT_BOX. One
+     rejection at the entry point, and the two ends agree again without touching any of them.
+     Threshold is on NORMALISED 0..1 coords and absolute: a 0.0005-wide sliver still measures
+     3e-4, eight orders above it. Only an exact collapse is caught. */
+  const polyAreaN=(p)=>{let a=0;for(let i=0,j=p.length-1;i<p.length;j=i++)a+=(p[j][0]*p[i][1]-p[i][0]*p[j][1]);return Math.abs(a/2);};
+  const normPoly=(pts,flipY)=>{if(!pts||pts.length<3)return null;const xs=pts.map(p=>p.x),ys=pts.map(p=>p.y);
+    const minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys),sx=Math.max(1,maxX-minX),sy=Math.max(1,maxY-minY);
+    const out=pts.map(p=>[(p.x-minX)/sx, flipY?(maxY-p.y)/sy:(p.y-minY)/sy]);
+    return polyAreaN(out)<=1e-12?null:out;};
+  traced.sidePoly =normPoly(V.side.A,true);
+  // only when the second side was actually drawn — otherwise the body stays symmetric
+  traced.sidePolyR=(V.sideR&&V.sideR.A&&V.sideR.A.length>2)?normPoly(V.sideR.A,true):null;
+  traced.topPoly  =normPoly(V.top.A,false);
+  traced.frontPoly=normPoly(V.front.A,true);
+  traced.bottomPoly=V.bottom?normPoly(V.bottom.A,false):null;
+  /* A ROUND PLAN MEANS A LATHE, AND SAY SO ONCE.
+     A visual hull cannot build a turned object — measured at 36% out of round on a fountain,
+     which is all but a square, anywhere the object is narrower than its widest plan circle.
+     The plan outline is the honest evidence: it is already in hand, and it cannot be defeated
+     by handwriting, a rotated sheet, or a scan of a scan the way reading the word "diameter"
+     off the drawing could be. Words are worth taking as corroboration if a text source ever
+     exists; they are not the mechanism.
+
+     A HINT, not a switch. It is offered once per trace and changes nothing on its own —
+     guessing at somebody's intent and silently rebuilding their model as a different kind of
+     object would be worse than saying nothing. */
+  try{
+    const c = outlineCircularity(traced.topPoly);
+    if(c.round && S.shape !== "lathe" && traced.topPoly !== _lastRoundHint){
+      _lastRoundHint = traced.topPoly;
+      toast("That plan looks round. A fountain or column wants turning on a lathe — a traced "
+          + "hull comes out square where it narrows.");
+    }
+  }catch(e){ /* a hint is never worth breaking a trace over */ }
+  setTraceStatus();requestRebuild();updateViewDots();
+}
+function updateViewDots(){
+  const has={side:!!(traced.top||traced.bottom),top:!!traced.width,bottom:!!traced.widthBot,front:!!traced.section,rear:!!(traced.sections&&traced.sections.some(s=>s.src==="rear"))};
+  document.querySelectorAll("#viewSeg button").forEach(b=>b.classList.toggle("traced",!!has[b.dataset.v]));
+}
+function setTraceStatus(){
+  const v=cv(),s=document.getElementById("traceStatus"),parts=[];
+  const needScale=activeView!=="front"&&activeView!=="rear";
+  if(needScale)parts.push(v.scale?`<span class="tag" style="color:var(--good);border-color:rgba(91,214,160,.3)">${v.scale.toFixed(2)} px/mm</span>`:'<span class="tag">scale not set</span>');
+  else parts.push('<span class="tag">no scale needed</span>');
+  const la={side:"top",top:"left",front:"outline",rear:"outline"}[activeView], lb={side:"lower",top:"right",front:"base",rear:"base"}[activeView];
+  if(v.A.length)parts.push(`${la}: ${v.A.length}`);
+  if(v.B.length&&activeView!=="front"&&activeView!=="rear")parts.push(`${lb}: ${v.B.length}`);
+  if(featDraft&&featDraft.view===activeView)parts.push(`<b style="color:var(--warn)">● drawing a feature — ${featDraft.pts.length} point(s), then Finish</b>`);
+  else if(traceMode)parts.push(`<b style="color:var(--accent)">● ${traceMode==="cal"?"click 2 points to set scale":"click around the outline"}</b>`);
+  s.innerHTML=parts.join(" &nbsp; ");
+}
+
+/* =========================================================================
+   SVG IMPORT — vector paths straight into the traced outline.
+   Uses the browser's own SVG engine (getPointAtLength) to sample ANY path type
+   (beziers, arcs, polylines) exactly, so there is no pixel tracing and no path
+   parser. If the file carries physical units (width="190mm") the scale is exact
+   and no calibration is ever needed.
+   ========================================================================= */
+/* THE PHYSICAL SIZE AN SVG DECLARES, IN MILLIMETRES.
+   This used to accept mm, cm and in only. SVG's absolute unit set is larger than that, and
+   the ones it was missing are the ones real exporters actually write: Illustrator and older
+   Inkscape default to pt, and a plain unitless width alongside a viewBox is a CSS px count,
+   which is 1/96 inch by definition — a real measurement, not an unknown. Every unit below is
+   exact by spec, so none of this is estimation.
+   It also only ever looked at width. A file that states its height and not its width was
+   read as having no size at all, and the person was sent to Set scale to re-measure a
+   number the file was already telling them. */
+const SVG_UNIT_MM={mm:1, cm:10, q:0.25, in:25.4, pt:25.4/72, pc:25.4/6};
+function svgLengthMM(raw){
+  /* px and a bare number are deliberately NOT here. By the letter of the spec a CSS px is
+     1/96 inch and a bare width on the root svg is px, so both could be turned into a
+     millimetre figure — but almost nobody writing either MEANS a physical size, they mean
+     "this many units". Converting anyway would invent a measurement out of a default, which
+     is the same mistake as guessing DXF units from $MEASUREMENT. The units below are ones
+     nobody writes by accident. When the file doesn't state a size, say so and ask. */
+  const m=String(raw||"").trim().match(/^\+?([\d.]+(?:e[+-]?\d+)?)\s*(mm|cm|q|in|pt|pc)$/i);
+  if(!m)return null;
+  const v=parseFloat(m[1]); if(!isFinite(v)||v<=0)return null;
+  return v*SVG_UNIT_MM[m[2].toLowerCase()];
+}
+function svgPhysicalWidthMM(svg){
+  const byW=svgLengthMM(svg.getAttribute("width"));
+  if(byW)return byW;
+  // no usable width? the height plus the viewBox's own aspect gives the width exactly
+  const byH=svgLengthMM(svg.getAttribute("height"));
+  const vb=(svg.getAttribute("viewBox")||"").trim().split(/[\s,]+/).map(Number);
+  if(byH&&vb.length===4&&vb[2]>0&&vb[3]>0)return byH*(vb[2]/vb[3]);
+  return null;
+}
+/* IS THIS OUTLINE A CIRCLE?
+   A fountain, a bollard, a planter, a roundabout island — anything turned on a lathe — is
+   round in plan, and a visual hull cannot build it (it comes out 36% out of round, all but a
+   square, anywhere the object is narrower than its widest plan circle).
+
+   Measured off the TRACED OUTLINE, not read off the drawing. The app already holds the
+   polygon; text on a plan may be handwritten, rotated, or a scan of a scan, and one of the
+   two example drawings is a hand-annotated survey sheet no OCR would touch. Words like
+   "diameter" are worth using as a HINT that corroborates this, never as the mechanism.
+
+   Radial deviation from the AREA centroid, not the isoperimetric ratio: a many-sided polygon
+   scores near 1 on isoperimetric whether or not it is round, and an ellipse scores well too.
+   An ellipse is not a lathe shape and this has to reject it. */
+function outlineCircularity(poly){
+  if(!poly || poly.length < 8) return {round:false, dev:1, n:(poly||[]).length};
+  let A = 0, cx = 0, cy = 0;
+  for(let i = 0, j = poly.length - 1; i < poly.length; j = i++){
+    const [x1,y1] = poly[j], [x2,y2] = poly[i];
+    const f = x1 * y2 - x2 * y1;
+    A += f; cx += (x1 + x2) * f; cy += (y1 + y2) * f;
+  }
+  A /= 2;
+  if(Math.abs(A) < 1e-12) return {round:false, dev:1, n:poly.length};
+  cx /= (6 * A); cy /= (6 * A);
+  /* SAMPLE THE PERIMETER, NOT THE VERTICES. Measuring only the corners lets a shape through
+     whose corners happen to sit at one radius while its edges bow far inside — a 2:1 rounded
+     rectangle scored 0.014 that way, rounder than a hand-traced circle, because all eight of
+     its corners are equidistant from the centroid and the long flat sides are never looked at.
+     Walking the outline at even arc length cannot be fooled by where somebody put a point. */
+  const N = 96, seg = [];
+  let per = 0;
+  for(let i = 0; i < poly.length; i++){
+    const a = poly[i], b = poly[(i + 1) % poly.length];
+    const d = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    seg.push(d); per += d;
+  }
+  if(per < 1e-12) return {round:false, dev:1, n:poly.length};
+  const rs = [];
+  let sum = 0, mn = Infinity, mx = -Infinity, k = 0, run = 0;
+  for(let i = 0; i < N; i++){
+    const want = per * i / N;
+    while(k < seg.length - 1 && run + seg[k] < want){ run += seg[k]; k++; }
+    const a = poly[k], b = poly[(k + 1) % poly.length];
+    const t = seg[k] > 1e-12 ? (want - run) / seg[k] : 0;
+    const r = Math.hypot(a[0] + (b[0] - a[0]) * t - cx, a[1] + (b[1] - a[1]) * t - cy);
+    rs.push(r); sum += r;
+    if(r < mn) mn = r;
+    if(r > mx) mx = r;
+  }
+  const mean = sum / rs.length;
+  if(mean < 1e-12) return {round:false, dev:1, n:poly.length};
+  let v = 0; for(const r of rs) v += (r - mean) * (r - mean);
+  const sd = Math.sqrt(v / rs.length) / mean;      // scatter: catches a wobbly trace
+  const spread = (mx - mn) / mean;                 // worst case: catches one bad corner
+  const dev = Math.max(sd * 2, spread * 0.5);
+  return {round: dev < 0.12, dev, sd, spread, cx, cy, r: mean, n: poly.length};
+}
+function polyArea(p){let a=0;for(let i=0,j=p.length-1;i<p.length;j=i++)a+=(p[j].x*p[i].y-p[i].x*p[j].y);return Math.abs(a/2);}
+// biggest shape wins, ignoring a full-canvas background rect. rank>0 steps to the next
+// candidate, for when the drawing's outer shape isn't the one you meant.
+function pickSilhouette(polys,fullArea,rank){
+  const cand=polys.filter(p=>p.length>2 && polyArea(p)<fullArea*0.95);
+  const list=(cand.length?cand:polys).slice().sort((a,b)=>polyArea(b)-polyArea(a));
+  if(!list.length)return null;
+  return list[((rank||0)%list.length+list.length)%list.length];
+}
+/* THINNING AN OUTLINE MUST NOT MOVE IT.
+   This took every (N-1)th point by INDEX. Index position has nothing to do with shape: on a
+   DXF whose file coordinates are already exact, a corner survived or was dropped purely by
+   where it happened to fall in the list, and a dropped corner takes the outline with it —
+   measured on profile_7, traced points ended up a mean of 1.18mm and a worst of 3.22mm from
+   the finished mesh, and the error did NOT shrink as the voxel grid got finer (1.24 -> 1.18
+   -> 1.07mm from 5mm cells to 1.8mm), which is the signature of points being thrown away
+   before the grid ever sees them rather than of a sampling limit.
+   Douglas-Peucker instead: drop a point only when the straight line between its neighbours
+   already passes within tolerance of it, so corners are kept by construction and only points
+   that add nothing are lost. Tightened until it fits the budget, so the result is the closest
+   N-point outline to what was drawn instead of an arbitrary N of them. */
+function resamplePoly(p,N){
+  if(!p||p.length<=N)return p;
+  let lo=0, hi=0;
+  for(let i=0;i<p.length;i++)for(const k of [0,1]){ const v=Math.abs(p[i][k]); if(v>hi)hi=v; }
+  hi=hi||1;
+  let best=null;
+  for(let it=0;it<24;it++){                    // bisect the tolerance onto the budget
+    const mid=(lo+hi)/2, q=simplifyPoly(p,mid);
+    if(q.length<=N){ best=q; hi=mid; } else lo=mid;
+    if(hi-lo<1e-9)break;
+  }
+  if(best&&best.length>=3)return best;
+  const o=[];for(let i=0;i<N;i++)o.push(p[Math.round(i*(p.length-1)/(N-1))]);return o;
+}
+/* ============================ DXF =============================================
+   A CAD drawing is a better source than a photograph: the lines are exact, and there is no
+   perspective, no lens, no lighting to argue with. What arrives is line art though — a few
+   hundred separate strokes that share endpoints — not a filled shape, so the silhouette has
+   to be recovered from it.
+   The strokes are drawn onto a canvas and handed to the same auto-trace the studio already
+   uses for images. That path is tested, it already knows how to find the outer edge and let
+   you step through inner shapes, and it means a DXF behaves like every other reference once
+   it is loaded. Measured on the files this was built against: at 520 across, all five views
+   close into a solid silhouette, and the answer stops moving as the pen gets fatter, which
+   is how you know the outline is genuinely closed rather than nearly closed.
+   Handles LINE, LWPOLYLINE, POLYLINE, ARC, CIRCLE, SPLINE and nested INSERTs into BLOCKS —
+   which is where the geometry actually lives in a file exported from most CAD packages. */
+/* WHAT ONE DRAWING UNIT IS WORTH, IN MILLIMETRES.
+   $INSUNITS is the DXF header variable every CAD package writes to say what its coordinates
+   mean. The reader used to skip the HEADER section entirely and the comment below claimed
+   "DXF is unitless in general" — which is wrong, and it is exactly the thing Lee is
+   objecting to: his files carry real measurements, and asking him to click two points and
+   type a number can only ever contradict what the file already states exactly. */
+const DXF_UNIT_MM={1:25.4, 2:304.8, 3:1609344, 4:1, 5:10, 6:1000, 7:1e6,
+                   8:2.54e-5, 9:0.0254, 10:914.4, 13:0.001, 14:100, 15:10000, 16:100000,
+                   21:304.8006, 22:25.40005, 23:914.4018};
+const DXF_UNIT_NAME={1:"inches",2:"feet",3:"miles",4:"mm",5:"cm",6:"metres",7:"km",
+                     8:"microinches",9:"mils",10:"yards",13:"microns",14:"dm",15:"dam",
+                     16:"hm",21:"US survey feet",22:"US survey inches",23:"US survey yards"};
+function dxfUnitMM(header){
+  const n=parseInt((header||{})["$INSUNITS"],10);
+  if(isFinite(n)&&DXF_UNIT_MM[n])return {mm:DXF_UNIT_MM[n], name:DXF_UNIT_NAME[n], code:n};
+  /* $INSUNITS 0 means the file genuinely declares no units, and $MEASUREMENT only picks
+     which hatch-pattern file to load — it is not a statement about the coordinates. Guessing
+     from it risks being wrong by a factor of 25.4, so don't: report the raw extent instead
+     and let the person say. Silence beats a confident wrong number. */
+  return null;
+}
+function dxfParse(text){
+  const L=text.replace(/\r\n/g,"\n").split("\n").map(t=>t.trim());
+  const P=[]; for(let i=0;i+1<L.length;i+=2)P.push([L[i],L[i+1]]);
+  const blocks={}, model=[], header={};
+  let sec=null, bucket=null, ent=null, curName=null, awaitingName=false, hdrVar=null;
+  const flush=()=>{ if(ent&&bucket)bucket.push(ent); ent=null; };
+  const KEEP={SPLINE:1,LINE:1,LWPOLYLINE:1,POLYLINE:1,ARC:1,CIRCLE:1,INSERT:1,VERTEX:1};
+  for(let i=0;i<P.length;i++){
+    const c=P[i][0], v=P[i][1];
+    if(c==="0"&&v==="SECTION"){ flush(); sec=(P[i+1]&&P[i+1][0]==="2")?P[i+1][1]:null; bucket=null; hdrVar=null; continue; }
+    if(c==="0"&&v==="ENDSEC"){ flush(); sec=null; bucket=null; hdrVar=null; continue; }
+    // the header is name/value pairs: a code 9 names the variable, the next pair carries it
+    if(sec==="HEADER"){
+      if(c==="9"){ hdrVar=v; continue; }
+      if(hdrVar){ if(header[hdrVar]===undefined)header[hdrVar]=v; hdrVar=null; }
+      continue;
+    }
+    if(sec==="BLOCKS"){
+      if(c==="0"&&v==="BLOCK"){ flush(); awaitingName=true; curName=null; continue; }
+      if(awaitingName&&c==="2"){ curName=v; blocks[curName]=blocks[curName]||[]; bucket=blocks[curName]; awaitingName=false; continue; }
+      if(c==="0"&&v==="ENDBLK"){ flush(); bucket=null; curName=null; continue; }
+    }
+    if(sec==="ENTITIES"&&!bucket)bucket=model;
+    if(c==="0"){ flush(); if(bucket&&KEEP[v])ent={t:v,C:{}}; continue; }
+    if(ent){ (ent.C[c]=ent.C[c]||[]).push(v); }
+  }
+  flush();
+  return {blocks,model,header};
+}
+function dxfBspline(ctrl,knots,deg,samples){
+  const n=ctrl.length; if(n<2)return ctrl.slice();
+  deg=Math.max(1,Math.min(deg||3,n-1));
+  if(!knots||knots.length!==n+deg+1){
+    knots=[]; for(let i=0;i<=deg;i++)knots.push(0);
+    for(let i=1;i<n-deg;i++)knots.push(i/(n-deg));
+    for(let i=0;i<=deg;i++)knots.push(1);
+  }
+  const t0=knots[deg], t1=knots[n];
+  if(!(t1>t0))return ctrl.slice();
+  const out=[];
+  for(let s=0;s<=samples;s++){
+    let t=t0+(t1-t0)*s/samples; if(t>=t1)t=t1-1e-9;
+    let k=deg; while(k<n-1&&t>=knots[k+1])k++;
+    const d=[]; for(let j=k-deg;j<=k;j++)d.push([ctrl[j][0],ctrl[j][1]]);
+    for(let r=1;r<=deg;r++)for(let j=deg;j>=r;j--){
+      const idx=k-deg+j, den=knots[idx+deg-r+1]-knots[idx];
+      const a=den===0?0:(t-knots[idx])/den;
+      d[j][0]=(1-a)*d[j-1][0]+a*d[j][0];
+      d[j][1]=(1-a)*d[j-1][1]+a*d[j][1];
+    }
+    out.push([d[deg][0],d[deg][1]]);
+  }
+  return out;
+}
+function dxfPolys(e,blocks,depth){
+  depth=depth||0; if(depth>6)return [];
+  const C=e.C, num=(k,d)=>(C[k]&&C[k].length?parseFloat(C[k][0]):d);
+  const arr=k=>(C[k]||[]).map(parseFloat);
+  if(e.t==="LINE")return [[[num("10",0),num("20",0)],[num("11",0),num("21",0)]]];
+  if(e.t==="LWPOLYLINE"||e.t==="POLYLINE"){
+    const xs=arr("10"), ys=arr("20"), pts=[];
+    for(let i=0;i<Math.min(xs.length,ys.length);i++)pts.push([xs[i],ys[i]]);
+    if((num("70",0)&1)&&pts.length)pts.push(pts[0]);
+    return pts.length>1?[pts]:[];
+  }
+  if(e.t==="SPLINE"){
+    const xs=arr("10"), ys=arr("20"), ctrl=[];
+    for(let i=0;i<Math.min(xs.length,ys.length);i++)ctrl.push([xs[i],ys[i]]);
+    if(ctrl.length<2){
+      const fx=arr("11"), fy=arr("21"), fit=[];
+      for(let i=0;i<Math.min(fx.length,fy.length);i++)fit.push([fx[i],fy[i]]);
+      return fit.length>1?[fit]:[];
+    }
+    return [dxfBspline(ctrl,arr("40"),Math.round(num("71",3)),Math.max(12,Math.min(96,ctrl.length*6)))];
+  }
+  if(e.t==="ARC"||e.t==="CIRCLE"){
+    const cx=num("10",0), cy=num("20",0), r=num("40",1);
+    let a0=e.t==="CIRCLE"?0:num("50",0), a1=e.t==="CIRCLE"?360:num("51",360);
+    if(a1<=a0)a1+=360;
+    const n=Math.max(8,Math.round((a1-a0)/6)), pts=[];
+    for(let i=0;i<=n;i++){const a=(a0+(a1-a0)*i/n)*Math.PI/180;
+      pts.push([cx+r*Math.cos(a),cy+r*Math.sin(a)]);}
+    return [pts];
+  }
+  if(e.t==="INSERT"){
+    const nm=C["2"]&&C["2"][0]; if(!nm||!blocks[nm])return [];
+    const ox=num("10",0), oy=num("20",0), sx=num("41",1), sy=num("42",1);
+    const rot=num("50",0)*Math.PI/180, ca=Math.cos(rot), sa=Math.sin(rot);
+    const out=[];
+    for(const sub of blocks[nm])
+      for(const poly of dxfPolys(sub,blocks,depth+1))
+        out.push(poly.map(q=>{const X=q[0]*sx, Y=q[1]*sy;
+          return [ox+X*ca-Y*sa, oy+X*sa+Y*ca];}));
+    return out;
+  }
+  return [];
+}
+/* Read a DXF and give back a canvas of it, plus how many lines were in it. Both ways into
+   the studio need exactly this — the Reference & Trace tab traces it directly, the Import
+   Sheet tab adds it as a page — so it lives in one place rather than being written twice. */
+/* ---- STITCHING LINE ART BACK INTO A CLOSED SHAPE ----------------------------------
+   A DXF holds the exact curve of every line and no statement at all about which lines
+   enclose the body. The silhouette used to be recovered by drawing the strokes onto a
+   canvas and reading the pixels back — which works, and throws away the precision that was
+   the reason to accept a CAD file in the first place. The outline came back as a pixel
+   trace of an exact source.
+   The lines do enclose it though; they just do it as a few hundred separate strokes that
+   happen to share endpoints. So: weld endpoints that land on each other, and the strokes
+   become a graph whose faces are the regions the drawing encloses. The outermost face is
+   the silhouette, exactly as drawn, to the file's own coordinates.
+   Endpoints are welded with a tolerance because exporters round, and arcs flattened to
+   segments land a hair off where the line meeting them ends. The tolerance escalates only
+   until a plausible shape appears, so a clean file is never over-merged. */
+function dxfWeldNodes(strokes,tol){
+  const cell=Math.max(tol,1e-12), grid=new Map(), nodes=[];
+  const at=(x,y)=>{
+    const ix=Math.round(x/cell), iy=Math.round(y/cell);
+    for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++){
+      const bucket=grid.get((ix+dx)+"_"+(iy+dy)); if(!bucket)continue;
+      for(const id of bucket){ const p=nodes[id];
+        if((p[0]-x)*(p[0]-x)+(p[1]-y)*(p[1]-y)<=tol*tol)return id; }
+    }
+    const id=nodes.length; nodes.push([x,y]);
+    const k=ix+"_"+iy; if(!grid.has(k))grid.set(k,[]); grid.get(k).push(id);
+    return id;
+  };
+  const edges=[], rings=[];
+  for(const s of strokes){
+    if(!s||s.length<2)continue;
+    const a=at(s[0][0],s[0][1]), b=at(s[s.length-1][0],s[s.length-1][1]);
+    // a stroke that already closes on itself — a circle, or a closed polyline — is a ring
+    // in its own right and needs no stitching at all
+    if(a===b){ if(s.length>=4)rings.push(s.slice()); continue; }
+    edges.push({a,b,pts:s});
+  }
+  return {nodes,edges,rings};
+}
+function dxfFaces(nodes,edges){
+  const adj=nodes.map(()=>[]);
+  edges.forEach((e,i)=>{ adj[e.a].push(i); adj[e.b].push(i); });
+  /* A line that dangles cannot be part of any loop, and CAD drawings are full of them —
+     dimension leaders, centre marks, hatching. Shaving degree-one nodes back repeatedly
+     leaves only the part of the drawing that actually encloses something. */
+  const dead=new Set();
+  for(let pass=0;pass<64;pass++){
+    let cut=0;
+    for(let n=0;n<nodes.length;n++){
+      const live=adj[n].filter(i=>!dead.has(i));
+      if(live.length===1){ dead.add(live[0]); cut++; }
+    }
+    if(!cut)break;
+  }
+  // darts: each surviving edge walked in both directions, with the angle it leaves at
+  const darts=[];
+  const ang=(p,q)=>Math.atan2(q[1]-p[1],q[0]-p[0]);
+  edges.forEach((e,i)=>{
+    if(dead.has(i))return;
+    const P=e.pts;
+    darts.push({e:i,from:e.a,to:e.b,out:ang(P[0],P[1]),                     fwd:true});
+    darts.push({e:i,from:e.b,to:e.a,out:ang(P[P.length-1],P[P.length-2]),   fwd:false});
+  });
+  const outAt=nodes.map(()=>[]);
+  darts.forEach((d,i)=>outAt[d.from].push(i));
+  outAt.forEach(l=>l.sort((x,y)=>darts[x].out-darts[y].out));
+  const rev=new Map();
+  darts.forEach((d,i)=>rev.set(d.e+"_"+(d.fwd?1:0),i));
+  const twin=i=>rev.get(darts[i].e+"_"+(darts[i].fwd?0:1));
+  /* Walk a face by always taking the next edge clockwise from the one you came in on.
+     Every face of the graph comes out exactly once, the interior ones wound one way and
+     the single outer boundary the other — which is the shape the drawing encloses. */
+  const seen=new Set(), faces=[];
+  for(let d0=0;d0<darts.length;d0++){
+    if(seen.has(d0))continue;
+    const loop=[]; let d=d0, guard=0;
+    while(!seen.has(d) && guard++<darts.length*4){
+      seen.add(d); loop.push(d);
+      const back=twin(d), ring=outAt[darts[back].from];
+      const at=ring.indexOf(back);
+      d=ring[(at-1+ring.length)%ring.length];        // one step clockwise
+    }
+    if(loop.length<2)continue;
+    const pts=[];
+    for(const i of loop){ const D=darts[i], P=edges[D.e].pts;
+      const run=D.fwd?P:P.slice().reverse();
+      for(let k=0;k<run.length-1;k++)pts.push([run[k][0],run[k][1]]); }
+    if(pts.length>=3)faces.push(pts);
+  }
+  return faces;
+}
+const dxfLoopArea=p=>{let a=0;for(let i=0,j=p.length-1;i<p.length;j=i++)a+=p[j][0]*p[i][1]-p[i][0]*p[j][1];return Math.abs(a)/2;};
+function dxfSilhouette(strokes,extent){
+  const diag=Math.hypot(extent.wU,extent.hU)||1, boxA=extent.wU*extent.hU||1;
+  let best=null;
+  // clean file first; open the tolerance only while nothing plausible has been found
+  for(const f of [2e-5,1e-4,4e-4,1.5e-3,5e-3]){
+    const {nodes,edges,rings}=dxfWeldNodes(strokes,diag*f);
+    const cand=dxfFaces(nodes,edges).concat(rings.map(r=>r.map(p=>[p[0],p[1]])));
+    // ignore a drawing frame or border box: a real silhouette leaves margin in its own bounds
+    const ok=cand.filter(p=>{const a=dxfLoopArea(p); return a>boxA*0.04 && a<boxA*0.95;});
+    if(ok.length){
+      const win=ok.reduce((m,p)=>dxfLoopArea(p)>dxfLoopArea(m)?p:m);
+      best={loop:win, tol:diag*f, area:dxfLoopArea(win)/boxA};
+      break;
+    }
+  }
+  return best;
+}
+async function dxfToCanvas(file){
+  const {blocks,model,header}=dxfParse(await file.text());
+  const src=model.length?model:(blocks["*Model_Space"]||[]);
+  let polys=[];
+  for(const e of src)polys=polys.concat(dxfPolys(e,blocks));
+  polys=polys.filter(q=>q.length>1);
+  if(!polys.length)throw new Error("no drawable geometry — the file may use entities this reader doesn't know");
+  let x0=Infinity,x1=-Infinity,y0=Infinity,y1=-Infinity;
+  for(const q of polys)for(const pt of q){
+    if(pt[0]<x0)x0=pt[0]; if(pt[0]>x1)x1=pt[0];
+    if(pt[1]<y0)y0=pt[1]; if(pt[1]>y1)y1=pt[1];
+  }
+  const wU=(x1-x0)||1, hU=(y1-y0)||1;
+  /* 1000 across is what the image path already uses, and the outline closes reliably there:
+     the recovered silhouette stops changing as the pen thickens, which it does not at half
+     this. The RASTER is 1000 wide; the MEASUREMENT is whatever the file says it is, and the
+     two are kept apart deliberately — the canvas is only how the silhouette gets found. */
+  const unit=dxfUnitMM(header);
+  const srcMM=unit?wU*unit.mm:null;                // the drawing's real width, per the file
+  const srcHMM=unit?hU*unit.mm:null;
+  const RW=1000, RH=Math.max(1,Math.round(RW*hU/wU));
+  const cnv=document.createElement("canvas"); cnv.width=RW; cnv.height=RH;
+  const g=cnv.getContext("2d");
+  g.fillStyle="#fff"; g.fillRect(0,0,RW,RH);
+  g.strokeStyle="#111"; g.lineWidth=Math.max(1.2,RW/620); g.lineJoin="round"; g.lineCap="round";
+  const PX=q=>(q[0]-x0)/wU*(RW-4)+2, PY=q=>RH-2-(q[1]-y0)/hU*(RH-4);   // DXF y runs up, canvas down
+  g.beginPath();
+  for(const q of polys){
+    g.moveTo(PX(q[0]),PY(q[0]));
+    for(let i=1;i<q.length;i++)g.lineTo(PX(q[i]),PY(q[i]));
+  }
+  g.stroke();
+  /* Hand back the strokes in the SAME pixel space as the canvas. The outline is still found
+     from the rendered pixels — DXF line art is a few hundred open strokes with no single
+     closed one to pick — but the DETAIL comes from these, exactly as drawn. Re-finding a
+     badge from pixels when the file already contains its curve is throwing away the reason
+     to use a CAD file at all. */
+  const asPts=polys.map(q=>q.map(pt=>({x:PX(pt), y:PY(pt)})));
+  /* The silhouette comes from the COORDINATES, not from the pixels above. The canvas is
+     still drawn — it is the reference image you trace against, and the fallback if the
+     drawing genuinely encloses nothing — but the outline handed back here is the file's own
+     geometry, welded into a closed loop and mapped into the same pixel frame so it lines up
+     with the backdrop exactly. */
+  const sil=dxfSilhouette(polys,{wU,hU});
+  const outline=sil?sil.loop.map(pt=>({x:PX(pt), y:PY(pt)})):null;
+  /* drawnW, not RW. The strokes are inset 2px each side so a fat pen doesn't clip against
+     the canvas edge, so the drawing occupies RW-4 pixels, not RW. Scaling by the full canvas
+     width made every DXF come out 0.4% short — 2000mm measured as 1992 — which is small
+     enough to look like rounding and is exactly the kind of quiet disagreement with a stated
+     dimension that reading the file was meant to end. */
+  return {canvas:cnv, lines:polys.length, polys:asPts, area:RW*RH,
+          srcMM, srcHMM, unit, rasterW:RW, drawnW:RW-4, extent:{wU,hU},
+          outline, silFill:sil?sil.area:0};
+}
+async function loadDXFFile(file){
+  const {canvas:cnv, lines, polys:vec, area, srcMM, unit, drawnW, extent,
+         outline, silFill}=await dxfToCanvas(file);
+  const v=cv();
+  setRefImage(v,cnv);
+  v.svgPolys=null; v.svgPick=0;                // Auto-trace still reads pixels for the outline
+  v.dxfPolys=vec; v.svgArea=area;              // …but the detail comes from the real curves
+  v.A=[]; v.B=[];
+  /* THE FILE ALREADY KNOWS HOW BIG IT IS. Take it, and say where it came from — a scale
+     re-measured by eye off a drawing that states its own dimensions can only ever disagree
+     with it, and the disagreement would be silent. srcMM is the width the CAD file declares;
+     the raster is 1000px wide, so that is the exact px-per-mm with nothing estimated. */
+  if(srcMM>0){ v.scale=drawnW/srcMM; v.srcMM=srcMM; v.scaleSrc="file"; }
+  else { v.srcMM=null; v.scaleSrc=null; }
+  /* THE OUTLINE IS THE FILE'S OWN, WHEN THE FILE ENCLOSES ONE.
+     Auto-trace reads pixels, and reading pixels off a drawing that carries exact curves
+     throws away the whole reason to accept a CAD file. Stitching the strokes into a closed
+     loop gives the silhouette to the file's own coordinates instead. Auto-trace is still
+     the fallback for a drawing whose lines genuinely close nothing — an elevation with an
+     open bottom edge, say — because a recovered outline beats no outline. */
+  let exact=false;
+  if(outline&&outline.length>=8){ v.A=resamplePoly(outline,110); exact=true; }
+  drawTrace(); updateViewDots();
+  if(!exact){
+    /* Trigger the studio's own Auto-trace rather than a second copy of it. It lives on the
+       button, so press the button — one implementation, one behaviour, and pressing it again
+       steps to the next shape exactly as it does for any other drawing. */
+    const auto=document.getElementById("bAuto");
+    if(auto&&auto.onclick){ try{ auto.onclick(); }catch(err){ toast("Loaded, but auto-trace failed: "+err.message); } }
+  } else commitTrace();
+  requestRebuild();
+  const sizeNote = srcMM>0
+    ? ` The file states its own size — <b>${fmtMM(srcMM)}</b> across in ${unit.name} — so the `
+      + `scale is taken from it and <span class="mono">Set scale</span> isn't needed.`
+    : ` It spans <span class="mono">${extent.wU.toFixed(1)}</span> drawing units but declares no `
+      + `units ($INSUNITS is 0 or absent), so nothing can be assumed — set the real size with `
+      + `<span class="mono">Set scale</span>.`;
+  const howNote = exact
+    ? ` The outline is the file's own — <b>${v.A.length} exact points</b> stitched from the `
+      + `strokes themselves, filling ${(silFill*100).toFixed(0)}% of its own bounds. Nothing was traced from pixels.`
+    : ` Its lines don't close a shape, so <b>Auto-trace</b> read the outline from the drawing — `
+      + `press it again to step to a different shape.`;
+  toast(`Read <b>${lines}</b> lines from the DXF.` + howNote + sizeNote);
+}
+// a measurement a person can read: 4700mm is a car, 4.7m is a car, 4700.0000 is noise
+function fmtMM(mm){
+  if(!(mm>0))return "—";
+  if(mm>=1000)return (mm/1000).toFixed(mm>=10000?0:2).replace(/\.?0+$/,"")+" m";
+  if(mm>=10)return Math.round(mm)+" mm";
+  return mm.toFixed(2).replace(/\.?0+$/,"")+" mm";
+}
+async function loadSVGFile(file){
+  const text=await file.text();
+  const holder=document.createElement("div");
+  holder.style.cssText="position:fixed;left:-99999px;top:0;opacity:0;pointer-events:none";
+  holder.innerHTML=text; document.body.appendChild(holder);
+  try{
+    const svg=holder.querySelector("svg"); if(!svg)throw new Error("no <svg> element in this file");
+    let vb=svg.viewBox&&svg.viewBox.baseVal;
+    if(!vb||!vb.width){const bb=svg.getBBox();if(!bb.width)throw new Error("the SVG has no drawable geometry");
+      svg.setAttribute("viewBox",`${bb.x} ${bb.y} ${bb.width} ${bb.height}`); vb=svg.viewBox.baseVal;}
+    const physMM=svgPhysicalWidthMM(svg);
+    const RW=1000, RH=Math.max(1,Math.round(RW*vb.height/vb.width));
+    svg.setAttribute("width",RW); svg.setAttribute("height",RH); svg.setAttribute("preserveAspectRatio","xMidYMid meet");
+    const root=svg.getScreenCTM(); if(!root)throw new Error("the SVG could not be measured");
+    const rootInv=root.inverse();
+    const polys=[];
+    for(const el of svg.querySelectorAll("path,polygon,polyline,rect,circle,ellipse")){
+      let len=0; try{len=el.getTotalLength();}catch(_){continue;}
+      if(!(len>0))continue;
+      const m=el.getScreenCTM(); if(!m)continue;
+      const rel=rootInv.multiply(m);
+      const N=Math.max(24,Math.min(500,Math.round(len/1.5))), pts=[];
+      for(let i=0;i<N;i++){const q=el.getPointAtLength(len*i/N);
+        pts.push({x:rel.a*q.x+rel.c*q.y+rel.e, y:rel.b*q.x+rel.d*q.y+rel.f});}
+      polys.push(pts);
+    }
+    if(!polys.length)throw new Error("no drawable paths found");
+    // the silhouette = the largest shape, ignoring a full-canvas background rect
+    const full=RW*RH;
+    const outline=resamplePoly(pickSilhouette(polys,full,0),90);
+    // raster backdrop, pixel-aligned with the sampled points
+    const url=URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(svg)],{type:"image/svg+xml"}));
+    const img=await new Promise((res,rej)=>{const im=new Image();im.onload=()=>res(im);im.onerror=()=>rej(new Error("couldn't rasterize the SVG"));im.src=url;});
+    const cnv=document.createElement("canvas"); cnv.width=RW; cnv.height=RH;
+    cnv.getContext("2d").drawImage(img,0,0,RW,RH); URL.revokeObjectURL(url);
+    const v=cv();
+    v.A=outline; v.B=[];
+    setRefImage(v,cnv);
+    v.svgPolys=polys; v.svgArea=RW*RH; v.svgPick=0;      // the file IS the trace — keep the exact paths
+    // real units in the file -> exact scale, and remember it came from the file so a manual
+    // Set scale can say plainly that it is overriding a stated measurement
+    if(physMM){ v.scale=RW/physMM; v.srcMM=physMM; v.scaleSrc="file"; }
+    else { v.srcMM=null; v.scaleSrc=null; }
+    document.getElementById("imgOpField").style.display="inline-flex";
+    switchTab("trace"); fitTrace(); drawTrace(); commitTrace(); updateViewDots();
+    toast(`SVG → <b>${viewName(activeView)}</b> view · <span class="mono">${outline.length} exact points</span>${physMM?` · size from the file, <b>${fmtMM(physMM)}</b> across — no need to Set scale`:" · <span class='mono'>Set scale</span> once, or leave it standard"}`);
+  }catch(err){toast("SVG import failed: "+err.message);}
+  finally{document.body.removeChild(holder);}
+}
+/* =========================================================================
+   REFERENCE NORMALIZATION — every imported drawing is shown as dark ink on light
+   paper, whatever it arrived as. Handles dark-inked SVGs (transparent background),
+   light-on-dark SVGs, and classic white-on-blue blueprints. The traced outline is
+   drawn in accent orange on top, so there is always a hard colour distinction.
+   This affects the REFERENCE BACKDROP ONLY — never the built model.
+   ========================================================================= */
+function normalizeRef(img,force){
+  const w=img.naturalWidth||img.width, h=img.naturalHeight||img.height;
+  if(!w||!h)return {canvas:img,inverted:false};
+  const c=document.createElement("canvas"); c.width=w; c.height=h;
+  const x=c.getContext("2d",{willReadFrequently:true});
+  x.drawImage(img,0,0,w,h);                            // raw first, alpha intact
+  let d;
+  try{ d=x.getImageData(0,0,w,h); }
+  catch(_){                                            // can't read the pixels: just back it with paper
+    x.globalCompositeOperation="destination-over"; x.fillStyle="#f4f6f9"; x.fillRect(0,0,w,h);
+    x.globalCompositeOperation="source-over"; return {canvas:c,inverted:false};
+  }
+  const p=d.data, step=Math.max(1,Math.floor(p.length/4/20000))*4;   // sample ~20k pixels
+  let opaque=0,total=0,inkSum=0,inkN=0,allSum=0;
+  for(let i=0;i<p.length;i+=step){
+    const L=0.299*p[i]+0.587*p[i+1]+0.114*p[i+2];
+    total++; allSum+=L;
+    if(p[i+3]>240)opaque++;
+    if(p[i+3]>16){inkN++; inkSum+=L;}                  // only pixels that actually have ink
+  }
+  // An SVG is usually strokes on nothing. Judging the finished picture would just measure
+  // the empty space, so line art gets judged on its INK: light strokes are the ones that
+  // need flipping, or they end up invisible on light paper.
+  const lineArt = total>0 && (opaque/total)<0.7;
+  let inv;
+  if(force===null||force===undefined){
+    inv = (lineArt && inkN>0) ? (inkSum/inkN)>140            // pale strokes -> make them dark
+                              : (total>0 && allSum/total<115); // solid picture -> flip if dark
+  } else inv=!!force;
+  if(inv){for(let i=0;i<p.length;i+=4){p[i]=255-p[i];p[i+1]=255-p[i+1];p[i+2]=255-p[i+2];}}
+  x.putImageData(d,0,0);
+  x.globalCompositeOperation="destination-over";       // paper goes BEHIND the ink, not over it
+  x.fillStyle="#f4f6f9"; x.fillRect(0,0,w,h);
+  x.globalCompositeOperation="source-over";
+  return {canvas:c,inverted:inv};
+}
+function applyRefNorm(v){
+  if(!v||!v.imgRaw){return;}
+  const r=normalizeRef(v.imgRaw, v.inv===undefined?null:v.inv);
+  v.img=r.canvas; v.invActive=r.inverted;
+}
+function setRefImage(v,raw,keepVector){ v.imgRaw=raw; if(v.inv===undefined)v.inv=null; if(!keepVector){v.svgPolys=null;v.svgArea=0;v.svgPick=0;} v._shapes=null; v._shapesFor=null; applyRefNorm(v); }
+
+/* image loading + drag/drop (into the active view) */
+function loadImageFile(file){
+  if(!file)return;
+  if(/\.svg$/i.test(file.name||"")||file.type==="image/svg+xml"){loadSVGFile(file);return;}   // vector path
+  if(/\.dxf$/i.test(file.name||"")){                                                        // CAD drawing
+    loadDXFFile(file).catch(err=>toast("Couldn't read that DXF: "+err.message));
+    return;
+  }
+  if(/\.json$/i.test(file.name||"")||file.type==="application/json"){                       // a saved model
+    const r=new FileReader();
+    r.onload=()=>{ try{ const d=JSON.parse(r.result);
+      if(d&&d.schema&&(""+d.schema).indexOf("assembly")>=0){switchTab("workshop");wsInit();requestAnimationFrame(wsResize);wsLoadAssembly(d);}
+      else {applyProfile(d);switchTab("three");toast(`Loaded “${d.name||"model"}”.`);}
+    }catch(e){toast("That JSON isn't a LEE3D model: "+e.message);} };
+    r.readAsText(file); return;
+  }
+  if(!file.type.startsWith("image/")){toast("Drop a drawing (SVG, PNG, JPEG) or a saved .json model.");return;}
+  const url=URL.createObjectURL(file);const img=new Image();
+  img.onload=()=>{setRefImage(cv(),img);document.getElementById("imgOpField").style.display="inline-flex";
+    switchTab("trace");fitTrace();
+    toast(`${activeView[0].toUpperCase()+activeView.slice(1)} view loaded.${(activeView==="front"||activeView==="rear")?" Trace the outline — no scale needed.":" <span class='mono'>Set scale</span>, then trace two edges."}`);};
+  img.src=url;
+}
+{ const b=document.getElementById("thinShow"); if(b) b.onclick=()=>showThinSpot(); }
+document.getElementById("bAuto").onclick=()=>{
+  const v=cv();
+  if(!v.img){toast("No drawing on this view yet \u2014 load one in <b>Import Sheet</b> and press <b>Send views to Reference &amp; Trace</b>.");return;}
+  // An SVG already contains the real lines. Reading its pixels back would be throwing away
+  // exact geometry to guess at it, so re-use the paths and just step to the next shape if
+  // the first pick wasn't the one you wanted.
+  if(v.svgPolys && v.svgPolys.length){
+    v.svgPick=(v.svgPick||0)+1;
+    const pick=pickSilhouette(v.svgPolys, v.svgArea||1e9, v.svgPick);
+    if(pick){
+      v.A=resamplePoly(pick,90); v.B=[];
+      const turned=autoOrientView(activeView);
+      fitTrace(); drawTrace(); commitTrace(); updateViewDots();
+      toast(`Using the SVG's own lines — <span class="mono">shape ${((v.svgPick)%Math.max(1,v.svgPolys.length))+1} of ${v.svgPolys.length}</span>, exact (no tracing)${turned?" · turned upright":""}. Press again for the next shape.`);
+      return;
+    }
+  }
+  try{
+    const im=v.img, w=im.naturalWidth||im.width, h=im.naturalHeight||im.height;
+    const c=document.createElement("canvas"); c.width=w; c.height=h;
+    c.getContext("2d",{willReadFrequently:true}).drawImage(im,0,0,w,h);
+    const pts=autoOutline(c.getContext("2d").getImageData(0,0,w,h));
+    if(!pts){toast("Couldn't find a clear shape. Try the contrast flip, or trace it by hand.");return;}
+    v.A=pts; v.B=[];
+    const turned=autoOrientView(activeView);       // blueprint drew it sideways? straighten it
+    fitTrace(); drawTrace(); commitTrace(); updateViewDots();
+    toast(`Auto-traced the <b>${viewName(activeView)}</b> view — <span class="mono">${pts.length} points</span>${turned?" · turned it upright (it was drawn sideways)":""}. Drag any point to fix it.`);
+  }catch(e){toast("Auto-trace failed: "+e.message);}
+};
+document.querySelectorAll("#featTool button").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll("#featTool button").forEach(x=>x.classList.remove("on"));
+  b.classList.add("on"); featTool=b.dataset.t;
+  document.getElementById("featText").style.display=(featTool==="text")?"":"none";
+  document.getElementById("featSvgAll").style.display=(featTool==="svg")?"":"none";
+  document.getElementById("featJoinRow").style.display=(featTool==="join")?"flex":"none";
+  document.getElementById("featNew").style.display=(featTool==="svg"||featTool==="join")?"none":"";
+  if(featTool==="join")toast("Click where the join goes. A <b>peg</b> and a <b>socket</b> of the same size are made to fit once printed.");
+  if(featDraft)featCancelDraft();
+  if(featTool==="svg"){
+    const have=featSvgAllSync();
+    const kind=(V[activeView]&&V[activeView].svgPolys&&V[activeView].svgPolys.length)?"vector line":"shape";
+    toast(have?`${have} ${kind}(s) found in this drawing — click one to take it.`
+              :"No shapes found in this view's drawing. Load a drawing, or use Shape/Box/Text.");
+  } else featSvgAllSync();
+  featTidySync();
+  drawTrace();
+});
+document.getElementById("featSvgAll").onclick=()=>{
+  const list=svgDetails(activeView);
+  if(!list.length){toast("No SVG lines on this view to take.");return;}
+  /* This used to stop at 12 per face on the theory that every feature costs real time on
+     each rebuild. Measured, that was wrong by a wide margin: on this car the rebuild is flat
+     from 0 to about 96 features — every one of them within noise of the others — and only
+     starts climbing past 150. Twelve per face across five faces capped a whole drawing at
+     60, which is exactly what came out when the drawing held twice that. The detail was
+     being thrown away silently, and it read as "only the last face came through" because a
+     face only ever draws its own boxes; the earlier ones were there all along, just not on
+     screen. So take them all, to a limit that follows the measurement rather than a guess,
+     and say plainly when the model is getting heavy enough to feel. */
+  const CAP=40;
+  const tooMany=list.length>CAP;
+  const take=tooMany?list.slice().sort((a,b)=>polyAreaPts(b)-polyAreaPts(a)).slice(0,CAP):list;
+  /* Clear any copies already stacked up before adding. A model built with the old button
+     can hold six of everything, and nothing downstream can tell them apart — so tidy first,
+     then add only what's genuinely new. */
+  const dups=featDupIdx(activeView);
+  if(dups.length){ dups.slice().sort((a,b)=>b-a).forEach(i=>features.splice(i,1)); featDeselect(); }
+  let added=0, already=0;
+  take.forEach(p=>{ if(featAddSvgPoly(activeView,p,true))added++; else already++; });
+  featRender(); requestRebuild(); drawTrace();
+  const total=features.length;
+  const heavy = total>120
+    ? ` <b>${total}</b> on the model now — past about 120 the rebuild starts to drag.`
+    : ` <b>${total}</b> on the model now.`;
+  const tidied = dups.length ? ` Cleared <b>${dups.length}</b> stacked copy(s) that were already there.` : "";
+  const kept = already ? ` <b>${already}</b> were already taken.` : "";
+  toast((tooMany
+    ? `Took the <b>${added}</b> biggest shapes of ${list.length} on <b>${viewName(activeView)}</b> — click any others you want individually.`
+    : `Took <b>${added}</b> shape(s) from <b>${viewName(activeView)}</b>.`) + kept + tidied + heavy);
+};
+/* Repair a model that already has stacks in it. Sits beside Take all and only appears when
+   there is something to clean, because a button offering to remove nothing is noise. */
+function featTidySync(){
+  const b=document.getElementById("featTidy"); if(!b)return 0;
+  const n=featDupIdx(null).length;
+  b.style.display=n?"":"none";
+  b.textContent=`Remove ${n} duplicate${n===1?"":"s"}`;
+  return n;
+}
+document.getElementById("featTidy").onclick=()=>{
+  const dups=featDupIdx(null);
+  if(!dups.length){toast("No duplicates on this model.");return;}
+  dups.slice().sort((a,b)=>b-a).forEach(i=>features.splice(i,1));
+  featDeselect(); featRender(); featTidySync(); requestRebuild(); drawTrace();
+  toast(`Removed <b>${dups.length}</b> stacked copy(s). <b>${features.length}</b> features left — `
+      + `the detail should read cleanly again.`);
+};
+document.getElementById("featSelFace").onclick=()=>{
+  const idx=featOnView(features,activeView);
+  if(!idx.length){toast(`No features on the <b>${viewName(activeView)}</b> view yet.`);return;}
+  featSelectMany(idx);
+  toast(idx.length>1
+    ? `All <b>${idx.length}</b> features on <b>${viewName(activeView)}</b> selected — the sliders now drive every one.`
+    : `The one feature on <b>${viewName(activeView)}</b> is selected.`);
+};
+document.getElementById("featSelAll").onclick=()=>{
+  if(!features.length){toast("No features on this model yet.");return;}
+  featSelectMany(features.map((_,i)=>i));
+  const faces=[...new Set(features.map(f=>f.view||"side"))].length;
+  toast(`All <b>${features.length}</b> features selected across <b>${faces}</b> face(s). Boxes for the other faces are still there — switch views to see them.`);
+};
+document.getElementById("featSelNone").onclick=()=>featDeselect();
+document.getElementById("railBtn").onclick=railToggle;
+document.getElementById("railScrim").onclick=()=>railOpen(false);
+/* THE × HAS TO WIN AGAINST THE DRAG BAR IT SITS IN.
+   It was an onclick, and #fpClose lives inside #fpDrag, which takes pointer capture on
+   pointerdown. Capture redirects the rest of the gesture to the BAR, so pointerup no longer
+   lands on the × — and a click is only synthesised when down and up share a target. On a
+   phone the button therefore did nothing at all, which is the same bug the crop-box × had.
+   Answer it on pointerdown, and stop the event before the bar ever sees it. */
+(function(){
+  const x=document.getElementById("fpClose");
+  const shut=e=>{ e.preventDefault(); e.stopPropagation(); featDeselect(); };
+  x.addEventListener("pointerdown",shut);
+  x.addEventListener("click",e=>{e.preventDefault();e.stopPropagation();});   // swallow the follow-up
+})();
+// Escape closes it too, for anyone on a keyboard.
+document.addEventListener("keydown",e=>{
+  if(e.key!=="Escape")return;
+  if(featDraft){ featCancelDraft(); return; }
+  if(featSel>=0||featMulti.size) featDeselect();
+});
+(function(){                                   // drag the inspector by its bar
+  const p=document.getElementById("featPanel"), bar=document.getElementById("fpDrag");
+  let d=null;
+  bar.addEventListener("pointerdown",e=>{
+    if(e.target&&e.target.id==="fpClose")return;          // the × is not a handle
+    d={x:e.clientX,y:e.clientY,l:p.offsetLeft,t:p.offsetTop};
+    try{bar.setPointerCapture(e.pointerId);}catch(_){}});
+  bar.addEventListener("pointermove",e=>{ if(!d)return;
+    p.style.left=Math.max(0,d.l+e.clientX-d.x)+"px"; p.style.top=Math.max(0,d.t+e.clientY-d.y)+"px";});
+  const stop=()=>d=null; bar.addEventListener("pointerup",stop); bar.addEventListener("pointercancel",stop);
+})();
+document.querySelectorAll("#featJoinRow .seg button").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll("#featJoinRow .seg button").forEach(x=>x.classList.remove("on"));
+  b.classList.add("on");});
+document.getElementById("featNew").onclick=featStart;
+document.getElementById("featDone").onclick=featFinish;
+document.getElementById("featCancel").onclick=featCancelDraft;
+["vSizeW","vSizeH"].forEach(id=>{
+  const el=document.getElementById(id);
+  el.addEventListener("change",applyViewSize);
+  el.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();applyViewSize();el.blur();}});
+});
+document.getElementById("bRot").onclick=()=>{
+  const v=cv();
+  if(!v.img&&!(v.A&&v.A.length)){toast("Nothing in this view to rotate yet.");return;}
+  rotateView(activeView,1); fitTrace(); drawTrace(); commitTrace(); updateViewDots();
+  toast(`Rotated the <b>${viewName(activeView)}</b> view 90°.`);
+};
+document.getElementById("refInv").onclick=()=>{
+  const v=cv(); if(!v.imgRaw){toast("Load a drawing into this view first.");return;}
+  v.inv=!v.invActive; applyRefNorm(v); drawTrace(); requestRebuild();
+  toast(`Drawing contrast flipped — ${v.invActive?"inverted":"original"}.`);
+};
+document.getElementById("imgFile").onchange=e=>{const f=e.target.files[0]; e.target.value=""; if(f)loadImageFile(f);};
+const host=document.getElementById("canvasHost");
+["dragover","dragenter"].forEach(ev=>host.addEventListener(ev,e=>{e.preventDefault();host.style.outline="2px dashed var(--accent)";}));
+["dragleave","drop"].forEach(ev=>host.addEventListener(ev,e=>{e.preventDefault();host.style.outline="none";}));
+host.addEventListener("drop",e=>{if(e.dataTransfer.files[0])loadImageFile(e.dataTransfer.files[0]);});
+
+/* view switch (side / top / front) */
+function updateEdgeLabels(){
+  document.getElementById("dropTitle").textContent={side:"Drop a side-view drawing",top:"Drop a top-view drawing",bottom:"Drop a bottom-view drawing",front:"Drop a front-view drawing",rear:"Drop a rear-view drawing"}[activeView];
+  document.getElementById("dropSub").textContent={
+    side:"Side view = the profile. Set scale, then trace one closed outline all the way around the silhouette.",
+    top:"Top view = real width. Set scale, then trace one closed outline around the plan shape.",
+    bottom:"Bottom view = the underside. Trace one closed outline around the floor. It shares the length with the side view; its own shape narrows the body near the ground.",
+    front:"Front view = the front cross-section. Trace one closed outline around it — no scale needed.",
+    rear:"Rear view = the back cross-section. Trace one closed outline around it — no scale needed."
+  }[activeView];
+}
+document.querySelectorAll("#viewSeg button").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll("#viewSeg button").forEach(x=>x.classList.remove("on"));b.classList.add("on");
+  activeView=b.dataset.v;traceMode="trace";calPts=[];
+  if(typeof syncViewSize==="function")setTimeout(syncViewSize,0);
+  document.getElementById("bCal").classList.remove("active");
+  document.getElementById("imgOpField").style.display=cv().img?"inline-flex":"none";
+  /* This face's own numbers, not the last one's. A GROUP, though, survives the switch on
+     purpose: "all features" is meant to span faces, the panel names the faces it holds, and
+     its members light up as you arrive on each one. None clears it. */
+  featSvgAllSync(); featSelSync(); featTidySync();
+  updateEdgeLabels();fitTrace();setTraceStatus();
+});
+
+/* trace toolbar */
+function setMode(m){traceMode=(traceMode===m)?"trace":m;
+  document.getElementById("bCal").classList.toggle("active",traceMode==="cal");
+  setTraceStatus();}
+/* Setting the scale is one job, so it lives behind one button. The width/height boxes used
+   to sit out on the bar the whole time, asking a question nobody had got to yet — you have to
+   load a drawing and trace it before its real size means anything. They appear when you say
+   you want to set the scale, and go away again when you're done. */
+function showScaleFields(on){
+  const row=document.getElementById("vSizeRow");
+  if(row)row.style.display = on ? "flex" : "none";
+  const b=document.getElementById("bCal");
+  if(b)b.classList.toggle("primary", !!on);
+}
+document.getElementById("bCal").onclick=()=>{
+  const row=document.getElementById("vSizeRow");
+  const open = row && row.style.display==="none";
+  showScaleFields(open);
+  if(open){
+    calPts=[];calTarget="trace";setMode("cal");
+    const v=cv();
+    const w=document.getElementById("vSizeW"), h=document.getElementById("vSizeH");
+    if(w)w.value=v.sizeW||""; if(h)h.value=v.sizeH||"";
+    toast("Type how big this view really is, or <b>click two points</b> a known distance apart.");
+  } else { calPts=[]; setMode("trace"); }
+};
+/* Auto-trace detail is the same machinery the "From drawing" tool drove, with the tool
+   selection and the take-all press folded into one button — because that was three steps to
+   express one intention. */
+document.getElementById("bAutoDetail").onclick=()=>{
+  const v=cv();
+  if(!v.img){toast("Load a drawing into this view first.");return;}
+  const have=(typeof svgDetails==="function")?svgDetails(activeView).length:0;
+  if(!have){
+    toast("No separate lines found inside this view to take. If you traced it from a photo "
+        + "rather than a drawing, use <b>Manual</b> to draw the details you want.");
+    return;
+  }
+  // press the real tool button rather than reimplementing what it does
+  const tool=document.querySelector('#featTool button[data-t="svg"]');
+  if(tool&&tool.onclick)tool.onclick();
+  const all=document.getElementById("featSvgAll");
+  if(all&&all.onclick)all.onclick();
+  /* Taking the details leaves you in the pick-a-detail mode, which is genuinely useful — tap
+     any shape to add that one too. But a mode you can't see is a trap, so open the Manual row
+     so the active tool is on screen. */
+  const seg=document.getElementById("featTool");
+  if(seg&&seg.style.display==="none"){
+    seg.style.display="flex";
+    document.getElementById("manualToggle").textContent="Manual \u25b4";
+  }
+};
+document.getElementById("manualToggle").onclick=()=>{
+  const seg=document.getElementById("featTool");
+  const on = seg.style.display==="none";
+  seg.style.display = on ? "flex" : "none";
+  document.getElementById("manualToggle").textContent = on ? "Manual \u25b4" : "Manual \u25be";
+  if(on)toast("<b>Shape</b> traces a free outline \u00b7 <b>Box</b> a rectangle \u00b7 "
+            + "<b>Text</b> raised or cut wording \u00b7 <b>Join</b> a peg or socket. "
+            + "Zoom in first for small detail.");
+};
+document.getElementById("featBoxes").onclick=()=>{
+  featBoxMode = featBoxMode==="auto" ? "all" : featBoxMode==="all" ? "sel" : "auto";
+  document.getElementById("featBoxes").textContent="Boxes: "+featBoxMode;
+  const onView=features.reduce((n,f)=>n+(f.view===activeView?1:0),0);
+  toast(featBoxMode==="all" ? `Every feature on this view is a box now \u2014 <b>${onView}</b> of them.`
+      : featBoxMode==="sel" ? "Only the selected features get a box. The rest stay drawn."
+      : `Auto \u2014 boxes while there are few, outlines past ${featBoxLimit} on a view.`);
+  drawTrace();
+};
+document.getElementById("trZoomIn").onclick =()=>traceZoom(1.4);
+document.getElementById("trZoomOut").onclick=()=>traceZoom(1/1.4);
+document.getElementById("trZoomFit").onclick=()=>{ traceZoomReset();
+  toast("Back to the whole view. Zoom in and <b>two fingers</b> (or right-drag) moves around."); };
+document.getElementById("bUndo").onclick=()=>{
+  if(featDraft&&featDraft.pts.length){featDraft.pts.pop();drawTrace();return;}
+  const v=cv(); v.A.pop(); drawTrace();commitTrace();};
+document.getElementById("bClear").onclick=()=>{const v=cv();v.A=[];v.B=[];calPts=[];
+  if(activeView==="side"){traced.top=null;traced.bottom=null;markSil(false);}
+  else if(activeView==="top"){traced.width=null;markWidth(false);}
+  else if(activeView==="front"){traced.section=null;traced.frontHull=null;if(traced.sections){traced.sections=traced.sections.filter(s=>s.src!=="front");if(!traced.sections.length)traced.sections=null;}markSection(false);refreshSecUI();}
+  else if(activeView==="rear"){traced.rearHull=null;if(traced.sections){traced.sections=traced.sections.filter(s=>s.src!=="rear");if(!traced.sections.length)traced.sections=null;}refreshSecUI();}
+  drawTrace();setTraceStatus();requestRebuild();};
+document.getElementById("clearTrace").onclick=()=>{V.side.A=[];V.side.B=[];traced.top=null;traced.bottom=null;markSil(false);if(activeView==="side")drawTrace();requestRebuild();};
+document.getElementById("clearWidth").onclick=()=>{V.top.A=[];V.top.B=[];traced.width=null;markWidth(false);if(activeView==="top")drawTrace();requestRebuild();};
+document.getElementById("clearSection").onclick=()=>{V.front.A=[];V.front.B=[];traced.section=null;traced.frontHull=null;if(traced.sections){traced.sections=traced.sections.filter(s=>s.src!=="front");if(!traced.sections.length)traced.sections=null;}markSection(false);refreshSecUI();if(activeView==="front")drawTrace();requestRebuild();};
+function backToParametric(){markSil(false);markWidth(false);markSection(false);}
+document.getElementById("b3D").onclick=()=>switchTab("three");
+function refreshCrispUI(){
+  /* Edge crispness and the carve engine are both meaningful only in Follow my drawing:
+     the carved-field engine lives in the projection builder, so Smooth mode has no field to
+     cut and always presses details onto the surface. Showing the control there would offer a
+     choice that does nothing. */
+  const on=(S.mode==="projection");
+  for(const id of ["crispField","carveField","carveHint"]){
+    const f=document.getElementById(id); if(f)f.style.display=on?"":"none";
+  }
+}
+document.querySelectorAll("#modeSeg button").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll("#modeSeg button").forEach(x=>x.classList.remove("on"));b.classList.add("on");
+  /* "Round · turned" sits in this row because it answers the same question the other two do —
+     how the body is built from the outlines. It is a SHAPE rather than a mode, so it sets
+     `S.shape` and parks `S.mode` on the projection builder underneath; picking either of the
+     others puts the shape back. Keeping it here rather than in its own control means there is
+     one place to look for "what kind of thing is this", and the three are mutually exclusive,
+     which they genuinely are. */
+  if(b.dataset.m==="lathe"){
+    S.shape="lathe";
+    if(!traced.sidePoly)
+      toast("A turned object is built from its <b>side</b> elevation — trace that first. Each "
+          + "height's radius is half the outline's width there.");
+    else if(traced.topPoly && !outlineCircularity(traced.topPoly).round)
+      toast("That plan does not look round. Turning it will build the shape its side elevation "
+          + "sweeps, which may not be what the drawing shows.");
+  } else {
+    S.shape="loft";
+    S.mode=b.dataset.m;
+  }
+  refreshCrispUI();
+  if(S.shape!=="lathe"&&S.mode==="projection"&&!traced.sidePoly)
+    toast("Follow my drawing needs at least a traced <b>side</b> outline — it carves the volume your outlines describe.");
+  /* Frame the model again when the shape style changes.
+     `frameModel()` only ran at startup, so the camera kept whatever angle it had been orbited
+     to — and switching style rebuilds the body from a different method. Someone who had turned
+     the model over to look at its underside, then switched, saw the new build from underneath
+     and read it as the shape coming out flipped. Measured three ways (bounding box,
+     width-by-height, height-along-length) the two builders agree to within a millimetre, so
+     nothing about the geometry is turned around — it was the viewpoint that carried over.
+     Deferred two frames so the rebuild has produced the new mesh before it is framed. */
+  requestRebuild();
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{ try{ frameModel(); }catch(e){} }));
+});
+document.querySelectorAll("#qualSeg button").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll("#qualSeg button").forEach(x=>x.classList.remove("on"));b.classList.add("on");
+  S.quality=b.dataset.q;
+  requestRebuild();
+});
+document.querySelectorAll("#carveSeg button").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll("#carveSeg button").forEach(x=>x.classList.remove("on"));b.classList.add("on");
+  S.carveMode=b.dataset.c;
+  requestRebuild();
+});
+document.getElementById("bSaveAll").onclick=async ()=>{
+  const p=fullProfile(), name=(p.name||"").trim()||"untitled-object";
+  const cat=(p.category||"uncategorized").trim();
+  if(name==="untitled-object" && !confirm("Save it as “untitled-object”?\n\nGiving it a name up top makes it easy to find later."))return;
+  LIB.add(name,"object",JSON.parse(JSON.stringify(p)),cat);          // this device (updates in place)
+  let cloud=null;
+  if(typeof CLOUD!=="undefined"&&CLOUD.ok()){
+    try{await CLOUD.upsert(name,"object",p,cat);cloud=true;}catch(e){cloud=false;}
+  }
+  if(typeof wsRenderLib==="function")wsRenderLib();
+  const where = cloud===true ? "this device + the cloud"
+              : cloud===false ? "this device (the cloud didn't answer — it's still saved here)"
+              : "this device";
+  toast(`Saved “${name}” to <b>${where}</b> · <span class="mono">${cat}</span>`);
+};
+document.getElementById("bSave").onclick=()=>{
+  const prof=fullProfile(), name=(projName.value||"body").trim().replace(/\s+/g,"-").replace(/[^A-Za-z0-9._-]/g,"")||"body";
+  download(new Blob([JSON.stringify(prof,null,2)],{type:"application/json"}),name+".profile.json");
+  const have=[traced.top&&"side",traced.width&&"top",traced.section&&"front"].filter(Boolean).join(" + ")||"sliders only";
+  toast(`Saved <span class="mono">${name}.profile.json</span> (${have}). Use the Export panel to push it into LEE3D-Lib.`);
+};
+
+/* calibration modal */
+const modalBg=document.getElementById("modalBg");
+function openModal(){mInput.value="";modalBg.classList.add("show");setTimeout(()=>mInput.focus(),50);}
+function closeModal(){modalBg.classList.remove("show");}
+document.getElementById("mCancel").onclick=()=>{
+  if(calTarget==="import"){calTarget=null;IMP.calPts=[];document.getElementById("calLayer").innerHTML="";
+    document.getElementById("iScale").classList.remove("active");document.getElementById("cropLayer").style.pointerEvents="";closeModal();return;}
+  calPts=[];drawTrace();closeModal();setMode(null);};
+document.getElementById("mOk").onclick=()=>{
+  const raw=parseFloat(mInput.value);
+  if(!(raw>0)){toast("Enter a distance greater than 0.");return;}
+  if(calTarget==="import"){
+    const mm=raw*UNIT_MM[IMP.unit];
+    const dx=IMP.calPts[1].x-IMP.calPts[0].x,dy=IMP.calPts[1].y-IMP.calPts[0].y;
+    IMP.scalePxPerMm=Math.hypot(dx,dy)/mm;
+    calTarget=null;IMP.calPts=[];document.getElementById("calLayer").innerHTML="";
+    document.getElementById("iScale").classList.remove("active");document.getElementById("cropLayer").style.pointerEvents="";
+    closeModal();updateImpStatus();
+    toast(`Scale locked: <span class='mono'>${IMP.scalePxPerMm.toFixed(2)} px/mm</span> (${IMP.unit})`);
+    return;
+  }
+  const dx=calPts[1].x-calPts[0].x,dy=calPts[1].y-calPts[0].y;
+  cv().scale=Math.hypot(dx,dy)/raw;calPts=[];closeModal();setMode(null);commitTrace();
+  toast(`${activeView==="side"?"Side":"Top"} scale locked. Now trace the two edges.`);};
+mInput.addEventListener("keydown",e=>{if(e.key==="Enter")document.getElementById("mOk").click();});
+
+/* =========================================================================
+   UI WIRING
+   ========================================================================= */
+const projName=document.getElementById("projName");
+const projCat=document.getElementById("projCat");
+const DEFAULT_CATS=["Bodies","Wheels","Axles","Panels","Accessories","Misc"];
+function knownCategories(){
+  const set=new Set(DEFAULT_CATS);
+  try{(LIB.items||[]).forEach(it=>{const c=(it.category||(it.data&&it.data.category)||"").trim();if(c)set.add(c);});}catch(_){}
+  (window.__cloudCats||[]).forEach(c=>{if(c)set.add(c);});
+  return [...set].sort((a,b)=>a.localeCompare(b));
+}
+function refreshCategories(){
+  const dl=document.getElementById("catList");if(!dl)return;
+  dl.innerHTML=knownCategories().map(c=>`<option value="${c.replace(/"/g,"&quot;")}"></option>`).join("");
+}
+
+function bindSlider(id,key,label,decimals,after){
+  const el=document.getElementById(id),out=document.getElementById(label);
+  if(!el)return;                                   // section removed from the UI -> skip
+  el.addEventListener("input",()=>{
+    let v=parseFloat(el.value);S[key]=v;
+    out.textContent=decimals!=null?v.toFixed(decimals):v;
+    if(after)after();requestRebuild();
+  });
+}
+bindSlider("sLen","len","vLen");
+/* SCALE. Off by default and, when off, nothing here runs — which is what keeps the car exactly
+   as it was. A car is modelled at whatever size prints nicely and nobody thinks in ratios; a
+   building cannot be expressed that way at all, because an architect works at 1:100 or 1:200
+   and the model size FOLLOWS from the real size.
+
+   `S.len` stays the single source of truth for geometry. This only DRIVES it, the same way the
+   preset buttons do, so every downstream path is untouched. The real figure is kept on the
+   profile as well, because typing a model length throws it away and nothing can recover it. */
+(function(){
+  const on=document.getElementById("cScale"), box=document.getElementById("scaleBox"),
+        real=document.getElementById("nReal"), den=document.getElementById("nScale"),
+        out=document.getElementById("scaleOut"), len=document.getElementById("sLen");
+  if(!on) return;
+  function recompute(quiet){
+    const r=+real.value||0, d=Math.max(1,+den.value||1);
+    const mm=(r*1000)/d;
+    const lo=+len.min, hi=+len.max;
+    const clamped=clamp(mm,lo,hi);
+    /* Saying "held at 600mm" tells you it did not work; it does not tell you what would. The
+       smallest ratio that fits is ceil(real / max), and that is the number somebody actually
+       wants — otherwise they guess denominators until one lands. */
+    let note="";
+    if(Math.abs(clamped-mm)>0.5){
+      const fits = mm>hi ? Math.ceil((r*1000)/hi) : Math.floor((r*1000)/lo);
+      note = "  ·  outside the "+lo+"–"+hi+"mm range, held at "+fmtLen(clamped)
+           + (fits>0 ? "  ·  1:"+fits+" would fit" : "");
+    }
+    out.textContent="→ "+fmtLen(mm)+" model"+note;
+    S.len=clamped; len.value=String(Math.round(clamped));
+    const v=document.getElementById("vLen"); if(v)v.textContent=fmtLen(clamped);
+    if(!quiet){ featRender(); }
+  }
+  window.__scaleRecompute=recompute;
+  on.onchange=()=>{ S.scaleOn=on.checked; box.classList.toggle("hide",!on.checked);
+    if(on.checked) recompute(); else featRender(); };
+  real.oninput=()=>recompute();
+  den.oninput=()=>recompute();
+})();
+// Moving these records how far you pushed it AWAY from what the drawing measured. Re-trace
+// and the drawing re-measures, but your adjustment rides along instead of being wiped.
+bindSlider("sCrisp","hullCrisp","vCrisp",2);
+bindSlider("sWid","widMM","vWid",null,()=>{ if(traced.natWid>0)S.widK=S.widMM/traced.natWid; });
+bindSlider("sHgt","hgtMM","vHgt",null,()=>{ if(traced.natHgt>0)S.hgtK=S.hgtMM/traced.natHgt; });
+bindSlider("sNose","nose","vNose");bindSlider("sCowl","cowl","vCowl");
+bindSlider("sRoof","roof","vRoof");bindSlider("sRoofPos","roofPos","vRoofPos",2);
+bindSlider("sTail","tail","vTail");bindSlider("sSill","sill","vSill");
+bindSlider("sNW","nw","vNW");bindSlider("sMW","mw","vMW");bindSlider("sWP","wp","vWP",2);
+bindSlider("sTW","tw","vTW");bindSlider("sRound","round","vRound",2);
+bindSlider("sWall","wall","vWall",1,()=>{ if(!S.wallPerFace){S.wallTop=S.wallSide=S.wallBottom=S.wall;syncWallUI();} featRender(); });
+bindSlider("sWallTop","wallTop","vWallTop",1,()=>featRender());
+bindSlider("sWallSide","wallSide","vWallSide",1,()=>featRender());
+bindSlider("sWallBot","wallBottom","vWallBot",1,()=>featRender());
+function syncWallUI(){
+  const set=(id,v)=>{const e=document.getElementById(id);if(e)e.value=v;};
+  const lab=(id,v)=>{const e=document.getElementById(id);if(e)e.textContent=Number(v).toFixed(1);};
+  set("sWallTop",S.wallTop);set("sWallSide",S.wallSide);set("sWallBot",S.wallBottom);
+  lab("vWallTop",S.wallTop);lab("vWallSide",S.wallSide);lab("vWallBot",S.wallBottom);
+  const box=document.getElementById("wallFaces"); if(box)box.style.display=S.wallPerFace?"":"none";
+}
+document.getElementById("openArches").addEventListener("change",e=>{
+  /* Closed is the default because it is the shape with no plank in it. Open gives back the
+     material — measured on a 233-feature car at a 1.8mm wall, 94cm3 closed against 62cm3
+     open — at the cost of a visible rim arcing across each arch, which is the thing that
+     read as a plank. Worth having as a choice: a frame that has to be printed cheaply is a
+     different job from one that has to look right. */
+  S.openArches=e.target.checked;
+  toast(e.target.checked
+    ? "Underside left open — lighter, and you can see up inside. The edge gets busier."
+    : "Underside closed — with no bottom traced, one is made from the drawing itself, "
+    + "open only where the shape comes down and meets the ground.");
+  requestRebuild();
+});
+document.getElementById("noDetail").addEventListener("change",e=>{
+  S.noDetail=e.target.checked; requestRebuild();
+  toast(S.noDetail?"Plain frame — the traced detail is off. Cut-through holes still cut."
+                  :"Traced detail is back on.");
+});
+document.getElementById("wallPerFace").addEventListener("change",e=>{
+  S.wallPerFace=e.target.checked;
+  if(!S.wallPerFace)S.wallTop=S.wallSide=S.wallBottom=S.wall;
+  syncWallUI(); featRender(); requestRebuild();
+});bindSlider("sSt","st","vSt");bindSlider("sSeg","seg","vSeg");
+document.getElementById("sOp").addEventListener("input",e=>{S.opacity=e.target.value/100;vOp.textContent=e.target.value;drawTrace();});
+document.getElementById("sepBottom").addEventListener("change",e=>{S.sepBottom=e.target.checked;requestRebuild();});
+
+/* presets */
+document.querySelectorAll("#presetSeg button").forEach(b=>{
+  b.onclick=()=>{
+    document.querySelectorAll("#presetSeg button").forEach(x=>x.classList.remove("on"));
+    b.classList.add("on");
+    const P=PRESETS[b.dataset.p], len=S.len;
+    Object.assign(S,P);
+    // Traces are never touched — they are the model. A starting shape only moves the
+    // sliders, which are ignored for any view you have actually traced.
+    const traces=[traced.top&&"side",traced.width&&"top",traced.section&&"front"].filter(Boolean);
+    if(traces.length)S.len=len;                          // keep the size your drawing set
+    syncSlidersFromState();
+    if(typeof commitTrace==="function")commitTrace();     // re-assert the traced values
+    requestRebuild();
+    toast(traces.length
+      ? `Starting shape: <span class='mono'>${b.textContent}</span> — your traced <b>${traces.join(" + ")}</b> still wins, so only the untraced parts moved.`
+      : `Starting shape: <span class='mono'>${b.textContent}</span> — now trace your views to define the model.`);
+  };
+});
+function syncSlidersFromState(){
+  const map={sLen:"len",sNose:"nose",sCowl:"cowl",sRoof:"roof",sRoofPos:"roofPos",sTail:"tail",sSill:"sill",
+    sNW:"nw",sMW:"mw",sWP:"wp",sTW:"tw",sRound:"round",sWall:"wall",sSt:"st",sSeg:"seg"};
+  for(const[id,key]of Object.entries(map)){
+    const el=document.getElementById(id);if(!el)continue;el.value=S[key];
+    const out=document.getElementById("v"+id.slice(1));
+    if(out){const dec=(el.step&&el.step.includes("."))?2:(["round","arch","wall"].includes(key)?(key==="wall"?1:2):null);
+      out.textContent=dec!=null?Number(S[key]).toFixed(dec):S[key];}
+  }
+  vLen.textContent=S.len;vRoofPos.textContent=Number(S.roofPos).toFixed(2);vWP.textContent=Number(S.wp).toFixed(2);
+  vRound.textContent=Number(S.round).toFixed(2);syncSize();
+  vWall.textContent=Number(S.wall).toFixed(1);
+}
+
+/* tabs */
+function switchTab(t){
+  document.querySelectorAll("#subTabs .tab").forEach(x=>x.classList.toggle("on",x.dataset.tab===t));
+  document.getElementById("viewThree").classList.toggle("hide",t!=="three");
+  document.getElementById("viewTrace").classList.toggle("hide",t!=="trace");
+  document.getElementById("viewImport").classList.toggle("hide",t!=="import");
+  document.getElementById("viewWorkshop").classList.toggle("hide",t!=="workshop");
+  WS.on=(t==="workshop"); if(WS.on){wsInit();requestAnimationFrame(wsResize);}
+  if(t==="three")resize();
+  else if(t==="trace")fitTrace();
+  else if(t==="import"){if(IMP.img)setTimeout(()=>{layoutSheet();renderCrops();},30);}
+  // reflect the top-level tab (Build vs Workshop)
+  const main=(t==="workshop")?"workshop":"build";
+  if(main==="build")lastBuildTab=t;
+  document.querySelectorAll("#mainTabs .tab").forEach(x=>x.classList.toggle("on",x.dataset.main===main));
+  document.getElementById("subTabs").style.display=(main==="build")?"flex":"none";
+  {const m=document.querySelector("main"); if(m)m.classList.toggle("no-rail", main!=="build");}
+  // the grid has to settle before the canvases can be measured
+  requestAnimationFrame(()=>{ if(t==="workshop"){wsResize();wsRequestRender();} else if(t==="three"){resize();requestRender();} });
+}
+let lastBuildTab="import";
+function railAutoClose(){ if(window.matchMedia("(max-width:860px)").matches)railOpen(false); }
+document.querySelectorAll("#subTabs .tab").forEach(x=>x.onclick=()=>{switchTab(x.dataset.tab);railAutoClose();});
+document.querySelectorAll("#mainTabs .tab").forEach(x=>x.onclick=()=>{
+  switchTab(x.dataset.main==="workshop"?"workshop":(lastBuildTab||"import"));railAutoClose();});
+
+/* viewport tools */
+document.getElementById("tWire").onclick=function(){wireOn=!wireOn;this.classList.toggle("active",wireOn);
+  if(wireMesh)wireMesh.visible=wireOn;if(bodyMesh)bodyMesh.material.opacity=wireOn?0.45:1,bodyMesh.material.transparent=wireOn;requestRender();};
+document.getElementById("tReset").onclick=frameModel;
+document.getElementById("tZoomIn").onclick=()=>{cam.rad*=0.8;updateCam();};
+document.getElementById("tZoomOut").onclick=()=>{cam.rad*=1.25;updateCam();};
+document.getElementById("tRef").onclick=function(){
+  refOn=!refOn;this.classList.toggle("active",refOn);
+  if(refOn&&!(V.side.img||V.top.img||V.front.img||V.rear.img)){toast("No traced views yet — import a sheet or load drawings, then the side/top/front/rear planes appear here.");}
+  if(bodyMesh)makeRefPlanes(bodyMesh.geometry.boundingBox);
+  requestRender();
+};
+
+/* export */
+function download(blob,name){const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;
+  document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),4000);}
+document.getElementById("dlStl").onclick=()=>{
+  const prof=currentProfile();const {positions,indices}=makeBody(prof);
+  const man=checkManifold(indices);
+  download(toSTL(positions,indices),(projName.value||"object")+".stl");
+  toast(man.watertight
+    ?`STL exported · <span class="mono">${(indices.length/3).toLocaleString()} tris · watertight</span>`
+    :`STL exported · <span class="mono" style="color:var(--warn)">${man.boundary} open edges — check in slicer</span>`);
+};
+document.getElementById("dlBottom").onclick=()=>{
+  const prof=currentProfile();const {positions,indices}=makeBottom(prof);
+  const man=checkManifold(indices);
+  download(toSTL(positions,indices),(projName.value||"object")+"-bottom.stl");
+  toast(man.watertight
+    ?`Bottom plate · <span class="mono">${(indices.length/3).toLocaleString()} tris · watertight</span>`
+    :`Bottom plate · <span class="mono" style="color:var(--warn)">${man.boundary} open edges</span>`);
+};
+/* Point cloud out: build the shell, take just its points (corners) or scatter more across the
+   surface so a reconstruction tool has enough density, then write the chosen format. */
+document.getElementById("dlCloud").onclick=()=>{
+  const prof=currentProfile();const {positions,indices}=makeBody(prof);
+  const dens=+(document.getElementById("pcDensity").value||0);
+  const cloud = dens>0 ? samplePointCloud(positions,indices,dens) : dedupeVerts(positions);
+  const fmt=document.getElementById("pcFormat").value;
+  const nm=(projName.value||"object");
+  let blob, ext;
+  if(fmt==="xyz"){ blob=toXYZ(cloud.pts,null); ext="xyz"; }
+  else if(fmt==="pcd"){ blob=toPCD(cloud.pts,null); ext="pcd"; }
+  else if(fmt==="ply"){ blob=toPLY(cloud.pts,null,false); ext="ply"; }
+  else { blob=toPLY(cloud.pts,null,true); ext="ply"; }
+  download(blob,nm+"."+ext);
+  toast(`Point cloud exported · <span class="mono">${cloud.n.toLocaleString()} points · ${ext.toUpperCase()}</span>`);
+};
+/* Point cloud in: parse any of the formats, show the points in the 3D view, and remember them
+   so they can be turned on as a tracing reference. A cloud has no faces, so it renders as dots. */
+let importedCloud=null;
+document.getElementById("cloudFile").onchange=async(e)=>{
+  const f=e.target.files&&e.target.files[0]; if(!f)return;
+  try{
+    const isText=/\.(xyz|pcd|pts|txt)$/i.test(f.name);
+    const buf = isText ? await f.text() : await f.arrayBuffer();
+    const cloud = parsePointCloud(f.name, buf);
+    if(!cloud.n){ toast('<span style="color:var(--warn)">No points found in that file.</span>'); return; }
+    importedCloud=cloud;
+    showCloudInView(cloud);
+    const withC = cloud.colors ? " · with colour" : "";
+    toast(`Imported <b>${f.name}</b> · <span class="mono">${cloud.n.toLocaleString()} points${withC}</span>. Showing in the 3D view.`);
+  }catch(err){ toast('<span style="color:var(--warn)">Could not read that point cloud: '+(err.message||err)+'</span>'); }
+  e.target.value="";
+};
+/* Draw an imported cloud as a THREE.Points layer, oriented like the studio's models
+   (model-Z → world-Y). Replaces any previous imported cloud. */
+let cloudPointsObj=null;
+function showCloudInView(cloud){
+  if(typeof scene==="undefined"||!scene)return;
+  if(cloudPointsObj){ scene.remove(cloudPointsObj); cloudPointsObj.geometry.dispose(); cloudPointsObj.material.dispose(); cloudPointsObj=null; }
+  const geo=new THREE.BufferGeometry();
+  geo.setAttribute("position",new THREE.BufferAttribute(cloud.pts.slice(),3));
+  let mat;
+  if(cloud.colors){
+    const col=new Float32Array(cloud.n*3);
+    for(let i=0;i<cloud.n*3;i++)col[i]=cloud.colors[i]/255;
+    geo.setAttribute("color",new THREE.BufferAttribute(col,3));
+    mat=new THREE.PointsMaterial({size:1.2,vertexColors:true,sizeAttenuation:true});
+  } else {
+    mat=new THREE.PointsMaterial({size:1.2,color:0x58c6ff,sizeAttenuation:true});
+  }
+  const pts=new THREE.Points(geo,mat);
+  pts.rotation.set(-Math.PI/2,0,0);   // same orientation STL meshes get
+  scene.add(pts); cloudPointsObj=pts;
+  try{ if(typeof requestRender==="function") requestRender(); }catch(_){}
+}
+document.getElementById("dlJson").onclick=()=>{
+  download(new Blob([JSON.stringify(fullProfile(),null,2)],{type:"application/json"}),(projName.value||"object")+".profile.json");
+  toast("Profile JSON exported — feed this to the backend.");
+};
+document.getElementById("jsonFile").onchange=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();
+  r.onload=()=>{try{const p=JSON.parse(r.result);applyProfile(p);switchTab("three");toast(`Resumed “${p.name||f.name}” — pick up right where you left off.`);}catch(err){toast("Couldn't read that JSON.");}};r.readAsText(f);e.target.value="";};
+function applyProfile(p){
+  if(p.length)S.len=p.length;if(p.stations)S.st=p.stations;if(p.arcSegments)S.seg=p.arcSegments;
+  if(p.roofFlatness)S.round=p.roofFlatness;
+  // scale, if the profile carries one. Absent means the model IS the real size, which is how
+  // every car profile behaves and what the checkbox defaults to.
+  if(p.realLength && p.modelScale){
+    S.scaleOn=true;
+    const r=document.getElementById("nReal"), d=document.getElementById("nScale"),
+          c=document.getElementById("cScale"), b=document.getElementById("scaleBox");
+    if(r)r.value=String(p.realLength/1000); if(d)d.value=String(p.modelScale);
+    if(c)c.checked=true; if(b)b.classList.remove("hide");
+  } else if(document.getElementById("cScale")){
+    S.scaleOn=false;
+    document.getElementById("cScale").checked=false;
+    document.getElementById("scaleBox").classList.add("hide");
+  }
+  if(p.wallThickness)S.wall=p.wallThickness;
+  S.wallTop=p.wallTop??S.wall; S.wallSide=p.wallSide??S.wall; S.wallBottom=p.wallBottom??S.wall;
+  if(p.wallPerFace!=null)S.wallPerFace=!!p.wallPerFace;
+  if(p.noDetail!=null){S.noDetail=!!p.noDetail;
+    const nd=document.getElementById("noDetail"); if(nd)nd.checked=S.noDetail;}
+  {                                                        // reopens the way it was saved
+    const want = (p.openUnderside!=null) ? p.openUnderside
+               : (p.openArches!=null)    ? p.openArches : null;
+    if(want!=null){ S.openArches=!!want;
+      const oa=document.getElementById("openArches"); if(oa)oa.checked=S.openArches; }
+  }
+  if(typeof syncWallUI==="function")syncWallUI();
+  // NOTE: hullHollow is deliberately NOT restored from the file. A frame is always a shell,
+  // and an old saved profile carrying hullHollow:false used to switch the session to a solid
+  // lump with no way in the UI to switch it back.
+  traced.top=p.topProfile&&p.topProfile.length?p.topProfile:null;
+  traced.bottom=p.bottomProfile&&p.bottomProfile.length?p.bottomProfile:null;
+  traced.width=p.widthProfile&&p.widthProfile.length?p.widthProfile:null;
+  traced.section=p.section&&p.section.length>1?p.section:null;
+  traced.frontHull=p.frontHull&&p.frontHull.length>1?p.frontHull:null;
+  traced.sidePoly=p.sidePoly&&p.sidePoly.length>2?p.sidePoly:null; traced.sidePolyR=p.sidePolyR&&p.sidePolyR.length>2?p.sidePolyR:null; traced.topPoly=p.topPoly&&p.topPoly.length>2?p.topPoly:null; traced.frontPoly=p.frontPoly&&p.frontPoly.length>2?p.frontPoly:null;
+  traced.bottomPoly=p.bottomPoly&&p.bottomPoly.length>2?p.bottomPoly:null;   // decides whether the base gets levelled
+  traced.rearHull=null;
+  traced.sections=(p.sections&&p.sections.length)?p.sections.map(x=>({at:x.at,prof:x.prof,src:x.src||'manual'})):null;
+  if(p.mode==="loft"||p.mode==="projection"){S.mode=p.mode;
+    // a lathe is shown as its own choice in this row, so reflect shape first
+    document.querySelectorAll("#modeSeg button").forEach(x=>x.classList.toggle("on",
+      S.shape==="lathe" ? x.dataset.m==="lathe" : x.dataset.m===S.mode));}
+  /* Models saved before this control existed have no carveMode, and they were built by the
+     stamp engine — but they were also saved with whatever geometry that produced, so re-opening
+     them on the field engine would quietly change the part. Default an OLD file to stamp and a
+     new one to what it says, so nothing reshapes itself behind the person's back. */
+  S.quality=(p.hullQuality==="fast"||p.hullQuality==="fine")?p.hullQuality:"normal";
+  document.querySelectorAll("#qualSeg button").forEach(x=>x.classList.toggle("on",x.dataset.q===S.quality));
+  S.carveMode=(p.carveMode==="stamp"||p.carveMode==="field")?p.carveMode:(p.schema?"stamp":"field");
+  document.querySelectorAll("#carveSeg button").forEach(x=>x.classList.toggle("on",x.dataset.c===S.carveMode));
+  if(p.sepBottom!=null){S.sepBottom=!!p.sepBottom;const cb=document.getElementById("sepBottom");if(cb)cb.checked=S.sepBottom;}
+  if(typeof SC!=="undefined")SC.off=(p.sculpt&&p.sculpt.length)?Float32Array.from(p.sculpt):null;
+  if(typeof SC!=="undefined")SC.strokes=(p.sculptStrokes&&p.sculptStrokes.length)?p.sculptStrokes.map(s=>({x:s.x,y:s.y,z:s.z,r:s.r,amt:s.amt,mode:s.mode})):null;
+  features=Array.isArray(p.features)?JSON.parse(JSON.stringify(p.features)):[];
+  if(typeof featEnsureMasks==="function")featEnsureMasks();
+  if(typeof featRender==="function")featRender();
+  if(p.shape==="loft"||p.shape==="revolve")S.shape=p.shape; if(p.revShape)S.revShape=p.revShape; if(p.revSize)S.revSize=p.revSize;
+  if(p.widMM)S.widMM=p.widMM; if(p.hgtMM)S.hgtMM=p.hgtMM; if(p.hullCrisp!=null)S.hullCrisp=p.hullCrisp;
+  // restore full editable tracing state: points, scale, and reference images
+  for(const v of ["side","sideR","top","bottom","front","rear"]){ if(!V[v])continue; V[v].A=[];V[v].B=[];V[v].img=null;V[v].imgRaw=null;V[v].inv=null;V[v].dxfPolys=null; }
+  if(p.trace){
+    for(const v of ["side","sideR","top","bottom","front","rear"]){
+      const T=p.trace[v]; if(!T||!V[v])continue;
+      V[v].A=(T.A||[]).map(pt=>({x:pt.x,y:pt.y}));
+      V[v].B=(T.B||[]).map(pt=>({x:pt.x,y:pt.y}));
+      V[v].scale=T.scale||null;
+      if(V[v].B.length){V[v].A=[...V[v].A,...V[v].B.slice().reverse()];V[v].B=[];}  // migrate legacy 2-edge traces to one outline
+      if(T.img){const im=new Image();im.onload=(()=>{const vv=v;return()=>{setRefImage(V[vv],im);if(activeView===vv)drawTrace();requestRebuild();};})();im.src=T.img;}
+    }
+    // Re-derive silhouette/width/sections from the RAW points with the current math,
+    // so profiles saved by older derivations load correctly (trace is authoritative).
+    if(["side","sideR","top","bottom","front","rear"].some(v=>V[v]&&V[v].A.length>=3)){
+      commitTrace();
+      /* commitTrace rebuilds every outline from the traced POINTS, which is right — the
+         points are the source of truth and the derivation may have improved since the file
+         was saved. But a profile can carry an outline with no points behind it: one imported
+         from a DXF that was auto-traced elsewhere, or handed over by someone else. Rebuilding
+         then wipes it to null and the model silently loses that view. So put back any outline
+         the file carried that the points could not re-derive. */
+      const keep=(k,src)=>{ if(!traced[k] && src && src.length>2) traced[k]=src; };
+      keep("sidePoly",p.sidePoly); keep("sidePolyR",p.sidePolyR);
+      keep("topPoly",p.topPoly);   keep("frontPoly",p.frontPoly);
+      keep("bottomPoly",p.bottomPoly);
+    }
+  }
+  if(p.name){projName.value=p.name;} if(p.category){projCat.value=p.category;}
+  if(traced.top||traced.bottom){
+    document.getElementById("silMode").innerHTML='Source: <span class="tag" style="color:var(--accent);border-color:var(--accent-soft)">imported profile</span>';
+    document.getElementById("clearTrace").style.display="block";
+  } else markSil(false);
+  if(traced.width){
+    document.getElementById("widMode").innerHTML='Source: <span class="tag" style="color:var(--accent);border-color:var(--accent-soft)">imported profile</span>';
+    document.getElementById("clearWidth").style.display="block";
+  } else markWidth(false);
+  if(traced.section){
+    document.getElementById("secMode").innerHTML='Source: <span class="tag" style="color:var(--accent);border-color:var(--accent-soft)">imported profile</span>';
+    document.getElementById("clearSection").style.display="block";
+  } else markSection(false);
+  refreshSecUI();syncSlidersFromState();
+  if(typeof updateViewDots==="function")updateViewDots();
+  if(typeof setTraceStatus==="function")setTraceStatus();
+  if(typeof drawTrace==="function")drawTrace();
+  requestRebuild();
+}
+/* ---- backend wiring (LEE3D-Backend-A) ---- */
+function slug(s){return (s||"misc").trim().replace(/\s+/g,"-").replace(/[^A-Za-z0-9._-]/g,"")||"misc";}
+function b64utf8(str){return btoa(unescape(encodeURIComponent(str)));}
+function beBase(){return (document.getElementById("backendUrl").value||"").trim().replace(/\/+$/,"");}
+
+// Everything that was filled in at deploy time gets used silently and its input hidden,
+// so the studio arrives already connected and there is nothing to set up.
+/* On a phone the settings rail slides over instead of sitting beside. Same rail, same
+   controls — it just can't have a third of a 390px screen to itself. */
+function railOpen(on){
+  const r=document.querySelector("main > .rail"), sc=document.getElementById("railScrim");
+  if(!r)return;
+  r.classList.toggle("open",on); if(sc)sc.classList.toggle("on",on);
+}
+function railToggle(){ railOpen(!document.querySelector("main > .rail")?.classList.contains("open")); }
+function applyWiredConfig(){
+  const beUrl=window.LEE3D_CFG("backendUrl");
+  if(beUrl){
+    const el=document.getElementById("backendUrl"); if(el)el.value=beUrl;
+    const f=document.getElementById("beField"); if(f)f.style.display="none";     // wired: don't ask
+  }
+  const repo=window.LEE3D_CFG("libRepo");
+  if(repo && typeof GHLIB!=="undefined"){
+    GHLIB.repo=repo;
+    const el=document.getElementById("ghRepo"); if(el){el.value=repo;el.parentElement&&(el.style.display="none");}
+    const lbl=document.getElementById("ghRepoLbl"); if(lbl)lbl.style.display="none";
+  }
+  // The repo write-back needs a real GitHub token, which must never be baked into a public
+  // page. It is an editor tool, so it stays folded away unless someone goes looking.
+  const box=document.getElementById("ghWrite"); if(box)box.open=false;
+  refreshPublishUI();
+  wiringReport();
+}
+// Exactly why each connection is or isn't wired, in words, in the app. Beats reading a
+// workflow log to find out a secret name was mistyped.
+function wiringReport(){
+  const el=document.getElementById("wireState"); if(!el)return;
+  const sb=!!(window.LEE3D_CFG("supabaseUrl")&&window.LEE3D_CFG("supabaseKey"));
+  const be=!!window.LEE3D_CFG("backendUrl");
+  const repo=!!window.LEE3D_CFG("libRepo");
+  const row=(ok,name,fix)=>`<div style="margin:2px 0">${ok?'<b style="color:var(--good)">✓ wired</b>':'<b style="color:var(--warn)">— not wired</b>'} · <b>${name}</b>${ok?"":` <span style="opacity:.7">${fix}</span>`}</div>`;
+  el.innerHTML =
+    row(sb,"Cloud saves", "→ add repo <b>Secrets</b> <code>SUPABASE_URL</code> + <code>SUPABASE_ANON_KEY</code>, then push")+
+    row(be,"Publish + exact build", "→ add repo <b>Variable</b> <code>BACKEND_URL</code> = your Render URL")+
+    row(repo,"Shared library", "→ add repo <b>Variable</b> <code>LIB_REPO</code> (defaults to BEARME-A/LEE3D-Lib)")+
+    ((sb&&be)?'<div style="margin-top:4px;opacity:.75">Nothing to paste — this is all wired at deploy.</div>'
+             :'<div style="margin-top:4px;opacity:.75">Secrets and Variables are different tabs under <b>Settings → Secrets and variables → Actions</b>. A value typed below works, but only in this browser.</div>');
+}
+// The publish button appears when the backend can do it for everyone (token server-side),
+// or when this browser is the owner's and holds a token. Otherwise it stays hidden rather
+// than promising something it can't do.
+function refreshPublishUI(){
+  const btn=document.getElementById("ghPublish"); if(!btn)return;
+  const route=publishRoute(!!(typeof beBase==="function"&&beBase()), !!(typeof ghTok==="function"&&ghTok()));
+  btn.style.display=route?"":"none";
+  btn.title=route==="backend"?"Goes through the backend — no token needed":"Uses the token saved in this browser";
+}
+/* What the backend can actually DO, not merely whether it answered.
+   "Connected" used to mean "/health returned 200" — which the light image does perfectly
+   while having no CAD kernel at all. So the studio said connected and then exact build
+   failed, with nothing tying the two together. The health route now reports its
+   capabilities and they're kept here. */
+let BE={reached:false, cad:false, image:null, libraryWritable:false};
+
+/* Read a failed response and say something true about it.
+   A backend that's running always answers in JSON, even when it's refusing: the light
+   image returns a JSON 503 explaining it has no CAD kernel. So HTML coming back means the
+   request never reached the app — it was answered by the host in front of it. On Render's
+   free tier that's nearly always the instance having gone to sleep (it spins down after
+   about 15 minutes idle and takes ~50s to wake), and dumping the raw markup into a toast
+   told you none of that. */
+async function beExplain(r){
+  const ct=(r.headers.get("content-type")||"").toLowerCase();
+  let body=""; try{ body=(await r.text()).trim(); }catch(_){}
+  const looksHTML = ct.includes("text/html") || /^<(!doctype|html)/i.test(body);
+  if(looksHTML){
+    return `the host answered instead of the app (HTTP ${r.status}). On Render's free tier `
+         + `that usually means the instance went to sleep — wait ~50s and try again. `
+         + `If it keeps happening, check the service is deployed and the URL has no path on the end.`;
+  }
+  if(ct.includes("application/json")){
+    try{ const j=JSON.parse(body); return (j.detail||j.message||body).toString().slice(0,180); }catch(_){}
+  }
+  return `HTTP ${r.status} ${body.slice(0,140)}`;
+}
+
+async function probeBackend(){
+  const el=document.getElementById("beState");const base=beBase();
+  BE={reached:false, cad:false, image:null, libraryWritable:false};
+  if(!base){el.textContent="—";el.style.color="var(--ink-faint)";refreshBuildBtn();return;}
+  if(!/^https?:\/\//i.test(base)){
+    el.textContent="needs http(s)://"; el.style.color="var(--warn)"; refreshBuildBtn(); return;
+  }
+  try{
+    const r=await fetch(base+"/health",{method:"GET"});
+    if(!r.ok){el.textContent="error "+r.status;el.style.color="var(--warn)";refreshBuildBtn();return;}
+    let j={}; try{ j=await r.json(); }catch(_){ 
+      el.textContent="not a LEE3D backend"; el.style.color="var(--warn)"; refreshBuildBtn(); return; }
+    BE={reached:true, cad:!!j.cad, image:j.image||null, libraryWritable:!!j.library_writable};
+    if(j.cad===undefined){                      // older backend, before capabilities
+      el.textContent="online"; el.style.color="var(--good)";
+    } else if(j.cad){
+      el.textContent="online · CAD ready"; el.style.color="var(--good)";
+    } else {
+      el.textContent="online · light image"; el.style.color="var(--warn)";
+    }
+  }catch(e){el.textContent="offline";el.style.color="var(--ink-faint)";}
+  refreshBuildBtn();
+}
+/* Say on the button itself what it will do, rather than letting it look ready and fail. */
+function refreshBuildBtn(){
+  const b=document.getElementById("buildServer"); if(!b)return;
+  const noCad = BE.reached && BE.image && !BE.cad;
+  b.title = noCad
+    ? "This backend runs the light image, which has no CAD kernel. Rebuild it from Dockerfile.full (and on Render, a paid plan — the image is multi-GB)."
+    : "Rebuild the same outlines with OpenCascade and download a STEP file.";
+  b.style.opacity = noCad ? "0.55" : "";
+}
+document.getElementById("backendUrl").addEventListener("change",probeBackend);
+
+document.getElementById("saveLib").onclick=async ()=>{
+  const prof=fullProfile();const name=slug(projName.value||"body");
+  const path=`json/${name}/${name}.profile.json`;
+  const base=beBase();
+  if(base){
+    try{
+      const r=await fetch(base+"/library/commit",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({path,content_base64:b64utf8(JSON.stringify(prof,null,2)),message:`LEE3D: ${name} profile`})});
+      if(!r.ok)throw new Error("HTTP "+r.status+" "+(await r.text()).slice(0,120));
+      const j=await r.json();
+      toast(`Committed to LEE3D-Lib ✓ <span class="mono">${j.path||path}</span>`);
+      return;
+    }catch(e){
+      download(new Blob([JSON.stringify(prof,null,2)],{type:"application/json"}),name+".profile.json");
+      toast(`Backend unreachable (${String(e.message).slice(0,80)}). Saved JSON locally instead.`);
+      return;
+    }
+  }
+  download(new Blob([JSON.stringify(prof,null,2)],{type:"application/json"}),name+".profile.json");
+  toast("No backend URL set — saved JSON locally. Set the URL to commit into LEE3D-Lib.");
+};
+
+document.getElementById("buildServer").onclick=async ()=>{
+  /* currentProfile(), not fullProfile(). The exact build reads the outlines, the features
+     and the dimensions — it never looks at the reference images. fullProfile() re-encodes
+     every traced view to a base64 JPEG and bolts it on, so a five-view sheet meant several
+     megabytes uploaded on a phone, on every press, for the far end to ignore. */
+  const prof=currentProfile(), name=slug(projName.value||"body"), base=beBase();
+  if(!base){toast("Exact build needs the backend running — see SETUP.md. Everything else here works without it.");return;}
+  await probeBackend();                                  // ask before spending the upload
+  if(BE.reached && BE.image && !BE.cad){
+    toast("That backend is the <b>light image</b> — it has no CAD kernel, so it can't make a STEP. "
+        + "Rebuild it from <span class='mono'>Dockerfile.full</span>; on Render that also needs a paid plan, "
+        + "because the OpenCascade image is multi-GB.");
+    return;
+  }
+  if(!BE.reached){
+    toast("Can't reach that backend right now. On Render's free tier the instance sleeps after "
+        + "~15 minutes and takes about 50s to wake — open the URL in a tab, wait for it, then try again.");
+    return;
+  }
+  const holes=(features||[]).filter(f=>f.through&&f.depth<0).length;
+  toast(`Building exactly… <span class="mono">OpenCascade${holes?` · ${holes} real opening(s)`:""}</span>`);
+  try{
+    // Say the hollowing out loud rather than relying on a default at the far end.
+    const wantHollow = prof.hullHollow!==false && (+prof.wallThickness||0)>0;
+    const r=await fetch(base+`/solid?fmt=step&hollow=${wantHollow?"true":"false"}`,{method:"POST",
+      headers:{"Content-Type":"application/json"},body:JSON.stringify(prof)});
+    if(r.status===503){toast("The backend is up but running the light image, which has no CAD kernel. Rebuild it with <span class='mono'>Dockerfile.full</span> for exact output.");return;}
+    if(!r.ok){toast("Exact build: "+(await beExplain(r)));return;}
+    /* READ ALL OF THEM. This used to take two of the seven the backend sends, and the five it
+       dropped are the ones that say the STEP is not what is on screen:
+
+         X-LEE3D-Hollow-Failed          a shell was asked for and could not be built -> SOLID
+         X-LEE3D-Pockets-Through-Wall   pockets that open into the cavity here and not in the
+                                        preview, i.e. holes where the screen shows pockets
+         X-LEE3D-Unusable-Views         extra-view silhouettes this build cannot use -> FATTER
+         X-LEE3D-Skipped                features with no depth, genuinely nothing to build
+         X-LEE3D-Pockets / -Raises      how much detail actually made it in
+
+       `Hollow-Failed` is the sharp one. STATUS.md has a whole section on getting that flag OUT
+       of `build_solid`, where it was written to a local dict and dropped on return — "a value
+       written to a local you are about to drop is not set internally, it is not set at all."
+       It was threaded through export_bytes to main.py to a header, and then stopped one step
+       short of a person, because nothing here looked at it. The same failure one layer out.
+
+       Everything below only ADDS to the message. The download happens either way: a header
+       that says the part differs is a reason to tell somebody, never a reason to withhold the
+       file they asked for. */
+    const cut=r.headers.get("X-LEE3D-Through-Cuts")||"0";
+    const sym=r.headers.get("X-LEE3D-Symmetric-Only")==="1";
+    const hollowFailed=r.headers.get("X-LEE3D-Hollow-Failed")==="1";
+    const thru=+(r.headers.get("X-LEE3D-Pockets-Through-Wall")||0);
+    const unusable=+(r.headers.get("X-LEE3D-Unusable-Views")||0);
+    const skipped=+(r.headers.get("X-LEE3D-Skipped")||0);
+    const warn=[];
+    if(hollowFailed) warn.push("the shell could not be built, so this file is <b>solid</b> — "
+      + "it will use far more material than the preview says");
+    if(thru) warn.push(`${thru} pocket${thru>1?"s are":" is"} deeper than the wall `
+      + `underneath, so ${thru>1?"they":"it"} <b>cut through into the cavity</b> here. `
+      + "The preview keeps the wall under a pocket; this file does not");
+    if(unusable) warn.push(`${unusable} extra view${unusable>1?"s":""} could not be used, `
+      + "so the part is <b>fatter</b> than the preview");
+    if(skipped) warn.push(`${skipped} feature${skipped>1?"s have":" has"} no depth `
+      + "(a mask or a label), so nothing was cut for "+(skipped>1?"them":"it"));
+    download(await r.blob(), name+".step");
+    // The exact build intersects ONE side outline. If a right-hand drawing was traced, the
+    // STEP is a symmetric body and the preview beside it is not — say so rather than hand
+    // over a quietly different shape.
+    if(sym) warn.push("it is <b>symmetric</b> — the exact path uses one side outline, so a "
+      + "second side drawing wasn't applied. The STL from here does use both");
+    const head=`<span class="mono">${name}.step</span>${+cut?` · ${cut} real opening(s) cut`:""}`;
+    toast(warn.length
+      ? `Exact build done ${head} — but ${warn.join("; and ")}.`
+      : `Exact build done ✓ ${head} — opens in any CAD package.`);
+  }catch(e){
+    toast("Exact build failed: "+e.message+" — if the studio is on https, the backend must be too, or the browser blocks it.");
+  }
+};
+
+/* toast */
+let toastT;
+/* AN UNTRUSTED STRING ON ITS WAY INTO MARKUP.
+   `toast()` below is an innerHTML sink by design — most of its callers pass markup on purpose,
+   and that is fine for strings this app wrote. It is not fine for a detail TITLE, which comes
+   out of an arbitrary PDF, or a file NAME, which comes from whoever sent the file. Dylan's set
+   arrives from a third-party studio; a title of `<img src=x onerror=...>` would run.
+   This app's stated property is that such strings go in with `textContent` and never have HTML
+   built around them. The picker list keeps that by returning DATA and appending text nodes; a
+   toast has nowhere to put a text node, so the value is escaped at the interpolation instead.
+   ON THE NAME: the suite keeps a list of helpers that were once CALLED without existing, and
+   the obvious name for this one is on it. That check greps the whole file, so even writing the
+   ghost's name in a comment fires it — which it did, on the first run of this very block. The
+   check is right and the comment was wrong; this helper takes a different name and the ghost
+   list stays true. */
+function htmlSafe(s){
+  return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+    .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+}
+function toast(html){const t=document.getElementById("toast");t.innerHTML=html;t.classList.add("show");
+  clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove("show"),3600);}
+
+/* debounced rebuild */
+let rebuildT;
+function requestRebuild(){clearTimeout(rebuildT);rebuildT=setTimeout(rebuild,40);}
+
+/* =========================================================================
+   BLUEPRINT IMPORT  (multi-view sheet -> cut-out views -> model)
+   Detection + edge extraction are the exact algorithms validated in Node on a
+   real Lamborghini Countach blueprint (5 views auto-segmented, title excluded).
+   ========================================================================= */
+const UNIT_MM={mm:1,cm:10,in:25.4,px:1};
+let displayUnit="mm";
+/* READING A DRAWING: turning what the backend read into what this app builds.
+   The backend reports a detail's PLOT scale — 48 for 1/4"=1'-0" — plus the frame it occupies
+   in paper millimetres and, on a rotated sheet, the fact that the rendered image's axes are
+   SWAPPED relative to that frame. Every sheet in Dylan's set is rotated 270, so the swap is
+   the normal case here, not the exception.
+
+   These are the conversions where a mistake is silent: a building comes out a plausible size
+   and simply the wrong one. Nothing downstream can tell. */
+
+/* How many REAL millimetres a span across the drawing represents.
+   `frac` is the fraction of the image the span covers, along x unless `vertical` is set. A
+   traced outline is already normalised to the image, so this is what turns a trace into a
+   size. */
+function drawnSpanToReal(frac, crop, plotScale, vertical){
+  if(!crop || !plotScale || !isFinite(frac)) return null;
+  const fm = crop.frame_mm || {};
+  let alongX = fm.w, alongY = fm.h;
+  /* THE SWAP. The image comes back the right way up, so on a rotated sheet its WIDTH spans the
+     frame's HEIGHT. Using the frame's own w for an image x-span is out by the aspect ratio —
+     368.3/181.0 on these sheets, very nearly two, which reads as a perfectly believable
+     building. Every sheet in Dylan's set is rotated 270, so this is the normal case here. */
+  if(crop.axes_swapped){ alongX = fm.h; alongY = fm.w; }
+  const span = vertical ? alongY : alongX;
+  if(!isFinite(span) || span <= 0) return null;
+  return frac * span * plotScale;
+}
+
+/* A TRACE BECOMES A REAL SIZE.
+   The last link: traced points are in IMAGE pixels (`v.A.push(canvas2img(...))`), the crop
+   covers a known area of paper, and the detail was drawn at a known ratio. Compose those and
+   nobody types a dimension.
+
+   `normPoly` cannot do this — it normalises a trace to its OWN bounding box, which throws away
+   how much of the image it spans, which is the whole measurement. So the extent has to be
+   taken before that, in image pixels. */
+function traceExtentFrac(pts, imgW, imgH){
+  if(!pts || pts.length < 2 || !(imgW > 0) || !(imgH > 0)) return null;
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for(const q of pts){
+    const x = (q && q.x !== undefined) ? q.x : (q ? q[0] : NaN);
+    const y = (q && q.y !== undefined) ? q.y : (q ? q[1] : NaN);
+    if(!isFinite(x) || !isFinite(y)) return null;
+    if(x < x0) x0 = x; if(x > x1) x1 = x;
+    if(y < y0) y0 = y; if(y > y1) y1 = y;
+  }
+  if(!(x1 > x0) && !(y1 > y0)) return null;
+  return {x: (x1 - x0) / imgW, y: (y1 - y0) / imgH};
+}
+
+/* Real size and profile scale fields for a trace taken off a drawing.
+   `drawing` is what `impPdfUseDetail` stored: {plotScale, crop}. `modelScale` is the ratio the
+   model is BUILT at, which stays the user's choice — a sheet plotted at 1/4"=1'-0" says
+   nothing about how big a model anyone wants. */
+function profileScaleFromTrace(pts, imgW, imgH, drawing, modelScale){
+  const f = traceExtentFrac(pts, imgW, imgH);
+  if(!f || !drawing || !drawing.plotScale) return null;
+  const realX = drawnSpanToReal(f.x, drawing.crop, drawing.plotScale, false);
+  const realY = drawnSpanToReal(f.y, drawing.crop, drawing.plotScale, true);
+  if(realX == null || realY == null) return null;
+  const out = profileScaleFromDetail(realX, modelScale);
+  if(!out) return null;
+  out.realHeight = realY;            // reported, not applied: height comes from the profile
+  return out;
+}
+
+/* Traced points, out of the BOX canvas they were drawn in and into the PAGE image they came
+   from. `cropCanvas` scaled the box down by `cf` on the way in, so `x / cf` undoes that and
+   `x0` puts it back where the box sat on the page. */
+function boxPtsToPage(pts, src){
+  if(!pts || !pts.length || !src || !(src.cf > 0)) return null;
+  const out = [];
+  for(const q of pts){
+    const x = (q && q.x !== undefined) ? q.x : (q ? q[0] : NaN);
+    const y = (q && q.y !== undefined) ? q.y : (q ? q[1] : NaN);
+    if(!isFinite(x) || !isFinite(y)) return null;
+    out.push({x: src.x0 + x / src.cf, y: src.y0 + y / src.cf});
+  }
+  return out;
+}
+
+/* WHAT THE DRAWING ITSELF SAYS THIS DETAIL MEASURES, or null.
+   These are the true measurements: a written dimension matched to the line work it dimensions
+   by ARITHMETIC — a line drawn L mm at 1:S measures L x S, and the text says what that should
+   be — so a match is a check and not a guess. On the real sheets they land at 0.00% error.
+   Returned as a RANGE and a list rather than as one number, and deliberately: nothing here
+   knows which of eleven dimensions corresponds to the span somebody traced, and picking the
+   largest would be the kind of plausible answer this project keeps having to retract. The
+   person can see 4'-0" and 12'-4" beside what their trace measured and judge in one glance. */
+function drawingStated(drawing){
+  const d = drawing && drawing.dims;
+  if(!d || !d.length) return null;
+  const mm = [], texts = [];
+  for(const it of d){
+    const v = +(it && it.mm);
+    if(isFinite(v) && v > 0){ mm.push(v); if(it.text) texts.push(String(it.text)); }
+  }
+  if(!mm.length) return null;
+  mm.sort((a,b) => a-b);
+  return { n: mm.length, min: mm[0], max: mm[mm.length-1], all: mm,
+           texts: texts.slice(0, 8),
+           forThisDetail: !!drawing.dimsAreThisDetail };
+}
+
+/* WHAT A TRACED VIEW MEASURES IN LIFE, or null. **This is the only way to ask.**
+   `profileScaleFromTrace` takes points and an image size and cannot tell which image they are
+   in — hand it the view's own canvas and its box size and the arithmetic is perfect and the
+   answer is wrong by the box's share of the page. Everything that decides the basis is here,
+   in one function, so there is one place to be right rather than one place per caller. */
+function viewRealSize(view, modelScale){
+  if(!view || !view.drawing || !view.drawingSrc) return null;
+  const src = view.drawingSrc;
+  if(!(src.pageW > 0) || !(src.pageH > 0)) return null;
+  const pts = boxPtsToPage(view.A, src);
+  if(!pts) return null;
+  return profileScaleFromTrace(pts, src.pageW, src.pageH, view.drawing, modelScale);
+}
+
+/* The scale fields a profile should carry for a detail read off a drawing.
+   `realLength` is what the thing measures in life; `modelScale` is the ratio it is BUILT at,
+   which is the user's choice and NOT the sheet's plot scale — a sheet plotted at 1/4"=1'-0"
+   says nothing about how big a model someone wants. */
+function profileScaleFromDetail(realLengthMM, modelScale){
+  const r = +realLengthMM, d = Math.max(1, +modelScale || 1);
+  if(!isFinite(r) || r <= 0) return null;
+  return {realLength: r, modelScale: d, length: r / d};
+}
+
+/* What the picker should show, as DATA rather than markup.
+   Split this way for two reasons. First it can be tested, and the thing that goes wrong here
+   is the INDEX — a list that displays one order and dispatches another hands somebody a
+   different drawing from the one they tapped, which is the exact fault already fixed once
+   between the two endpoints. `index` is the position in `sheet.details` and nothing sorts or
+   filters in between. Second, a detail title comes out of a PDF: this app puts such strings in
+   with `textContent`, never by building HTML around them, and returning data keeps that so. */
+function impPdfListItems(sheet){
+  const ds = (sheet && sheet.details) || [];
+  const dims = (sheet && sheet.dimensions) || [];
+  return ds.map((d, i) => {
+    const n = dims.filter(m => m.detail && m.detail.title === d.title).length;
+    return {index: i, title: d.title || "untitled", scale: d.scale,
+            dimensions: n,
+            note: `1:${d.scale} · ` + (n ? `${n} dimension${n > 1 ? "s" : ""} read`
+                                         : "no dimensions matched")};
+  });
+}
+
+function impPdfRenderList(){
+  const st = IMP.pdf, box = document.getElementById("pdfPick");
+  if(!st || !box) return;
+  const host = document.getElementById("pdfPickList");
+  host.textContent = "";
+  const items = impPdfListItems(st.sheet);
+  if(!items.length){
+    const p = document.createElement("p");
+    p.className = "hint"; p.textContent = "No titled details on this page.";
+    host.appendChild(p);
+  }
+  for(const it of items){
+    const b = document.createElement("button");
+    b.className = "mini";
+    b.style.cssText = "display:block;width:100%;text-align:left;margin:0 0 6px";
+    const strong = document.createElement("b");
+    strong.textContent = it.title;                 // straight from a PDF — never innerHTML
+    const note = document.createElement("span");
+    note.className = "mono"; note.style.opacity = ".7";
+    note.textContent = " · " + it.note;
+    b.appendChild(strong); b.appendChild(note);
+    b.addEventListener("click", () => impPdfUseDetail(it.index));
+    host.appendChild(b);
+  }
+  const info = document.getElementById("pdfPickInfo");
+  if(info) info.textContent = impPdfSummary(st.sheet);
+  const t = document.getElementById("pdfPickTitle");
+  if(t) t.textContent = st.nm || "Details on this sheet";
+  const close = document.getElementById("pdfPickClose");
+  if(close) close.onclick = () => box.classList.add("hide");
+  box.classList.remove("hide");
+}
+
+/* PICKING A DETAIL OUT OF A DRAWING SET.
+   Two calls: one to read a page, one to crop the detail chosen from it. The detail list and
+   the crop index the SAME list, so a person cannot be shown one drawing and handed another. */
+async function impPdfSheet(file, page){
+  const fd = new FormData();
+  fd.append("file", file); fd.append("page", String(page));
+  const r = await fetch(beBase() + "/import/pdf/sheet", {method:"POST", body:fd});
+  if(!r.ok) throw new Error(`the backend could not read page ${page + 1} (${r.status})`);
+  return r.json();
+}
+async function impPdfCrop(file, page, index, dpi){
+  const fd = new FormData();
+  fd.append("file", file); fd.append("page", String(page));
+  fd.append("detail", String(index)); fd.append("dpi", String(dpi || 200));
+  const r = await fetch(beBase() + "/import/pdf/detail", {method:"POST", body:fd});
+  if(!r.ok){
+    const j = await r.json().catch(()=>({}));
+    throw new Error(j.detail || `that detail could not be cropped (${r.status})`);
+  }
+  return r.json();
+}
+
+/* What a person is told about a page, in their words rather than the schema's. */
+function impPdfSummary(sheet){
+  if(!sheet) return "";
+  const n = sheet.sheet && sheet.sheet.number;
+  const sc = sheet.scale && sheet.scale.used;
+  const bits = [];
+  if(n) bits.push("sheet " + n);
+  if((sheet.details||[]).length) bits.push(sheet.details.length + " details");
+  if(sc) bits.push("1:" + sc + (sheet.scale.printed ? "" : " (read off the line work)"));
+  if((sheet.dimensions||[]).length) bits.push(sheet.dimensions.length + " dimensions read");
+  if((sheet.points||[]).length) bits.push(sheet.points.length + " survey points");
+  return bits.join(" · ");
+}
+
+async function impPdfPick(file, nm){
+  if(!beBase()){
+    toast("Reading a PDF needs the backend — set its address in <b>Settings</b> first. "
+        + "Everything else here works without one.");
+    return;
+  }
+  toast(`Reading <b>${htmlSafe(nm)}</b>…`);
+  let sheet = null, page = 0;
+  /* WALK FORWARD to the first page that HAS details: page 1 of a set is usually a cover or a
+     site plan, and offering those as something to trace would be a dead end.
+     THE WALK HAS TO KNOW WHERE THE DOCUMENT ENDS. This ran to page 12 whatever the file held,
+     and asking for a page past the end is a 400 — so on any shorter set where NO page carries
+     titled details, the loop fell out of the bottom into the catch and said "Couldn't read
+     Drawings.pdf: the backend could not read page 9", which reads as a broken file. The
+     honest message below — the one written for exactly this case — was unreachable unless the
+     PDF happened to have twelve pages or more.
+     So a failure PAST page 0 ends the walk and keeps the last page that did read; only page 0
+     failing means the file itself could not be read. */
+  for(; page < 12; page++){
+    let got = null;
+    try{ got = await impPdfSheet(file, page); }
+    catch(err){
+      if(page === 0){ toast(`Couldn't read <b>${htmlSafe(nm)}</b>: ${htmlSafe(err.message)}`); return; }
+      break;                                   // ran off the end of the document
+    }
+    sheet = got;
+    if((sheet.details || []).length) break;
+  }
+  if(!sheet || !(sheet.details || []).length){
+    toast(`<b>${htmlSafe(nm)}</b> read fine, but no page in it carries titled details — `
+        + `a site plan or a schedule has none. Trace it as an image instead.`);
+    return;
+  }
+  IMP.pdf = {file, nm, page, sheet};
+  switchTab("import");
+  impPdfRenderList();
+  return sheet;
+}
+
+/* Crop one detail and hand it to the tracer as a reference page, with the scale it was drawn
+   at already known. The tracer works in fractions of the image, so `drawnSpanToReal` is what
+   turns a trace back into a real size — and it needs `axes_swapped`, which is why the whole
+   crop record is kept rather than just the picture. */
+async function impPdfUseDetail(index, dpi){
+  const st = IMP.pdf;
+  if(!st){ toast("Read a PDF first."); return; }
+  const det = (st.sheet.details || [])[index];
+  if(!det){ toast("That detail is not on this page."); return; }
+  let crop;
+  try{ crop = await impPdfCrop(st.file, st.page, index, dpi || 200); }
+  catch(err){ toast(`Couldn't crop <b>${htmlSafe(det.title)}</b>: ${htmlSafe(err.message)}`); return; }
+  const url = "data:image/png;base64," + crop.png_base64;
+  const img = new Image();
+  img.onload = () => {
+    try{
+      impAddPage(img, url, (det.title || "detail").slice(0, 22));
+      /* THE SCALE COMES BACK WITH THE PICTURE, and that is the copy to keep. `det` is this
+         client's own listing; `crop` is what the backend actually cropped. They agree, and the
+         endpoints are now indexed so they cannot disagree — but sizing a trace off the listing
+         while looking at the crop is a disagreement waiting for the next indexing bug, and a
+         wrong plot scale is silent: the building simply comes out the wrong size. Read the
+         scale from the thing the image came with. */
+      /* THE SHEET'S OWN MEASUREMENTS TRAVEL WITH THE DRAWING. Until now this record carried
+         the plot scale and the crop and nothing else, so every dimension the importer read —
+         over a thousand across Dylan's set, matched to real line work at 0.00% error — was
+         parsed, counted, shown as a number in the picker, and then dropped. The survey
+         schedule went the same way: ten northings and eastings to four decimals, exact, used
+         to print "10 survey points" and discarded.
+         That is Collin's own rule broken at the last step. `manual input for PICTURES, never
+         for information` is worth nothing if the information is read and then thrown away —
+         the person still ends up typing a dimension the drawing already states.
+         `dims` is filtered to THIS detail (each item carries its own `detail` title, which is
+         the segmentation the backend went to some trouble to get right); `points` belongs to
+         the sheet, not the detail, and is placement data for Workshop. */
+      const allDims = (st.sheet.dimensions || []);
+      const mine = allDims.filter(m => m && m.detail && m.detail === (crop.title || det.title));
+      IMP.cur.drawing = {plotScale: crop.scale || det.scale, crop,
+                         sheet: st.sheet.sheet,
+                         title: crop.title || det.title, page: st.page,
+                         dims: mine.length ? mine : allDims.slice(),
+                         dimsAreThisDetail: mine.length > 0,
+                         points: (st.sheet.points || []).slice()};
+      document.getElementById("sheetImg").src = url;
+      const d = document.getElementById("iDrop"); if(d) d.style.display = "none";
+      const pick = document.getElementById("pdfPick"); if(pick) pick.classList.add("hide");
+      switchTab("import");
+      setTimeout(()=>{ try{ layoutSheet(); renderCrops(); updateImpStatus(); impRenderPages(); }
+        catch(err){ toast("Detail loaded, but laying it out failed: " + err.message); } }, 60);
+      toast(`<b>${htmlSafe(det.title)}</b> at 1:${crop.scale || det.scale} — trace its outline. `
+          + `Sizes come from the drawing, so you do not type them.`, 6000);
+    }catch(err){ toast("Couldn't add that detail: " + err.message); }
+  };
+  img.onerror = () => toast("The detail was cropped but its image couldn't be shown.");
+  img.src = url;
+}
+
+function fmtLen(mm){const u=displayUnit,v=mm/UNIT_MM[u];return `${v.toFixed(u==="mm"||u==="px"?0:1)} ${u}`;}
+
+let calTarget=null;  // 'trace' | 'import'
+const IMP={pages:[], page:0, unit:"mm", calPts:[], zoom:1};
+Object.defineProperties(IMP,{
+  cur:{get(){return this.pages[this.page]||null;}},
+  img:{get(){return this.cur?this.cur.img:null;}, set(v){if(this.cur)this.cur.img=v;}},
+  natW:{get(){return this.cur?this.cur.natW:0;}, set(v){if(this.cur)this.cur.natW=v;}},
+  natH:{get(){return this.cur?this.cur.natH:0;}, set(v){if(this.cur)this.cur.natH=v;}},
+  boxes:{get(){return this.cur?this.cur.boxes:[];}, set(v){if(this.cur)this.cur.boxes=v;}},
+  scalePxPerMm:{get(){return this.cur?this.cur.scalePxPerMm:null;}, set(v){if(this.cur)this.cur.scalePxPerMm=v;}},
+});
+function impAddPage(img,url,name){
+  IMP.pages.push({img,url,name:name||("page "+(IMP.pages.length+1)),natW:img.naturalWidth||img.width,natH:img.naturalHeight||img.height,boxes:[],scalePxPerMm:null});
+  IMP.page=IMP.pages.length-1; return IMP.cur;
+}
+function impShowPage(i){
+  if(i<0||i>=IMP.pages.length)return;
+  IMP.page=i; const p=IMP.cur;
+  document.getElementById("sheetImg").src=p.url;
+  document.getElementById("iDrop").style.display="none";
+  setTimeout(()=>{layoutSheet();renderCrops();updateImpStatus();impRenderPages();},40);
+}
+function impRemovePage(i){
+  const p=IMP.pages[i]; if(!p)return;
+  if(!confirm(`Remove ${p.name}? Its view boxes go with it.`))return;
+  try{if(p.url)URL.revokeObjectURL(p.url);}catch(_){}
+  IMP.pages.splice(i,1);
+  if(!IMP.pages.length){IMP.page=0;document.getElementById("iDrop").style.display="";document.getElementById("sheetImg").removeAttribute("src");
+    document.getElementById("cropLayer").innerHTML="";impRenderPages();updateImpStatus();return;}
+  impShowPage(Math.min(i,IMP.pages.length-1));
+}
+function impRenderPages(){
+  const host=document.getElementById("pageStrip"); if(!host)return;
+  host.style.display=IMP.pages.length?"flex":"none";
+  host.innerHTML="";
+  IMP.pages.forEach((p,i)=>{
+    const roles=[...new Set(p.boxes.filter(b=>b.role&&b.role!=="ignore").map(b=>b.role))];
+    const el=document.createElement("div"); el.className="pg"+(i===IMP.page?" on":"");
+    el.innerHTML=`<img src="${p.url}" alt=""><span class="nm"></span><span class="rl">${roles.length?roles.join("+"):"—"}</span><button title="remove">×</button>`;
+    el.querySelector(".nm").textContent=p.name;
+    el.onclick=e=>{if(e.target.tagName!=="BUTTON")impShowPage(i);};
+    el.querySelector("button").onclick=e=>{e.stopPropagation();impRemovePage(i);};
+    host.appendChild(el);
+  });
+}
+const ROLE_COLOR={side:"#FF7A2F",top:"#46B7D9",front:"#5BD6A0",rear:"#E5B45B",ignore:"#71839A"};
+
+/* ---- pure detection core (luminance -> view panels, source px) ---- */
+function detectPanels(lum,w,h,opt){
+  opt=opt||{};const thr=opt.thr||160,cap=opt.cap||700,G=opt.G||8;
+  const f=Math.min(1,cap/Math.max(w,h));
+  const dw=Math.max(1,Math.round(w*f)),dh=Math.max(1,Math.round(h*f));
+  const dl=new Float32Array(dw*dh);
+  for(let y=0;y<dh;y++){const sy=Math.min(h-1,Math.floor(y/f));
+    for(let x=0;x<dw;x++){const sx=Math.min(w-1,Math.floor(x/f));dl[y*dw+x]=lum[sy*w+sx];}}
+  const gw=Math.floor(dw/G),gh=Math.floor(dh/G);if(gw<1||gh<1)return [];
+  const occ=new Uint8Array(gw*gh);
+  for(let gy=0;gy<gh;gy++)for(let gx=0;gx<gw;gx++){let ink=0;
+    for(let yy=0;yy<G&&!ink;yy++)for(let xx=0;xx<G;xx++){if(dl[(gy*G+yy)*dw+(gx*G+xx)]<thr){ink=1;break;}}
+    occ[gy*gw+gx]=ink;}
+  const lbl=new Int32Array(gw*gh).fill(-1),boxes=[],st=[];let nid=0;
+  for(let sy=0;sy<gh;sy++)for(let sx=0;sx<gw;sx++){
+    if(occ[sy*gw+sx]&&lbl[sy*gw+sx]<0){st.length=0;st.push(sy*gw+sx);lbl[sy*gw+sx]=nid;
+      let minx=sx,maxx=sx,miny=sy,maxy=sy;
+      while(st.length){const idx=st.pop(),cy=(idx/gw)|0,cx=idx%gw;
+        if(cx<minx)minx=cx;if(cx>maxx)maxx=cx;if(cy<miny)miny=cy;if(cy>maxy)maxy=cy;
+        for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){const ny=cy+dy,nx=cx+dx;
+          if(ny>=0&&ny<gh&&nx>=0&&nx<gw&&occ[ny*gw+nx]&&lbl[ny*gw+nx]<0){lbl[ny*gw+nx]=nid;st.push(ny*gw+nx);}}}
+      boxes.push({minx,miny,maxx,maxy});nid++;}}
+  const area=w*h,out=[];
+  for(const b of boxes){
+    const x0=Math.floor(b.minx*G/f),y0=Math.floor(b.miny*G/f),
+          x1=Math.min(w,Math.floor((b.maxx+1)*G/f)),y1=Math.min(h,Math.floor((b.maxy+1)*G/f));
+    const bw=x1-x0,bh=y1-y0,aspect=bw/Math.max(1,bh);
+    if(bw*bh<=0.012*area||bh<=0.04*h||bw<=0.05*w)continue;
+    if(y0<0.06*h&&aspect>6)continue;
+    out.push({x0,y0,x1,y1});
+  }
+  out.sort((a,b)=>(Math.round(a.y0/40)-Math.round(b.y0/40))||(a.x0-b.x0));
+  return out;
+}
+function extractEdges(lum,w,h,box,thr){
+  thr=thr||160;const x0=box.x0,y0=box.y0,x1=box.x1,y1=box.y1,cw=x1-x0,ch=y1-y0,top=[],bot=[];
+  for(let x=0;x<cw;x++){let mn=-1,mx=-1;
+    for(let y=0;y<ch;y++){if(lum[(y0+y)*w+(x0+x)]<thr){if(mn<0)mn=y;mx=y;}}
+    if(mn>=0){top.push([x,mn]);bot.push([x,mx]);}}
+  return {top,bot,cw,ch};
+}
+// Otsu threshold (adapts ink/paper split to the scan's brightness), clamped to a sane band
+function autoThreshold(lum){
+  const hist=new Array(256).fill(0);
+  for(let i=0;i<lum.length;i++){let v=lum[i]|0;if(v<0)v=0;else if(v>255)v=255;hist[v]++;}
+  const total=lum.length;let sum=0;for(let t=0;t<256;t++)sum+=t*hist[t];
+  let sumB=0,wB=0,maxVar=-1,thr=160;
+  for(let t=0;t<256;t++){wB+=hist[t];if(!wB)continue;const wF=total-wB;if(!wF)break;
+    sumB+=t*hist[t];const mB=sumB/wB,mF=(sum-sumB)/wF,v=wB*wF*(mB-mF)*(mB-mF);
+    if(v>maxVar){maxVar=v;thr=t;}}
+  return Math.max(120,Math.min(210,thr));
+}
+
+/* ---- canvas helpers ---- */
+function fullLum(){
+  const cap=1600,sc=Math.min(1,cap/Math.max(IMP.natW,IMP.natH));
+  const w=Math.round(IMP.natW*sc),h=Math.round(IMP.natH*sc);
+  const c=document.createElement("canvas");c.width=w;c.height=h;
+  const cx=c.getContext("2d");cx.drawImage(IMP.img,0,0,w,h);
+  const d=cx.getImageData(0,0,w,h).data,lum=new Float32Array(w*h);
+  for(let i=0,p=0;i<w*h;i++,p+=4)lum[i]=0.299*d[p]+0.587*d[p+1]+0.114*d[p+2];
+  return {lum,w,h,sc};
+}
+function cropCanvas(bx){
+  const sw=bx.x1-bx.x0,sh=bx.y1-bx.y0,cap=1000,cf=Math.min(1,cap/sw);
+  const cw=Math.max(1,Math.round(sw*cf)),ch=Math.max(1,Math.round(sh*cf));
+  const c=document.createElement("canvas");c.width=cw;c.height=ch;
+  c.getContext("2d").drawImage(IMP.img,bx.x0,bx.y0,sw,sh,0,0,cw,ch);
+  return {canvas:c,cf};
+}
+function lumOfCanvas(c){
+  const cx=c.getContext("2d"),d=cx.getImageData(0,0,c.width,c.height).data,lum=new Float32Array(c.width*c.height);
+  for(let i=0,p=0;i<c.width*c.height;i++,p+=4)lum[i]=0.299*d[p]+0.587*d[p+1]+0.114*d[p+2];
+  return lum;
+}
+
+/* ---- display <-> source coordinate mapping (overlays live inside #sheetWrap) ---- */
+function sheetMetrics(){
+  const img=document.getElementById("sheetImg");
+  const sc=IMP.natW?(img.clientWidth/IMP.natW):1;
+  const r=img.getBoundingClientRect();
+  return {sc,imgLeft:r.left,imgTop:r.top};
+}
+function s2d(x,y){const m=sheetMetrics();return {x:x*m.sc,y:y*m.sc};}   // relative to the image/wrap origin
+function clientToSrc(cx,cy){const m=sheetMetrics();return {x:(cx-m.imgLeft)/m.sc,y:(cy-m.imgTop)/m.sc};}
+function sheetFitZoom(){
+  // the zoom that puts the WHOLE sheet on screen, both directions
+  const host=document.getElementById("sheetHost");
+  if(!host||!IMP.natW||!IMP.natH)return 1;
+  const wFit=(host.clientWidth-24)/IMP.natW;
+  const hFit=(host.clientHeight-24)/IMP.natH;
+  const base=Math.max(60,Math.min(IMP.natW*2, host.clientWidth-24))/IMP.natW;
+  return Math.max(0.05, Math.min(wFit,hFit)/base);
+}
+function layoutSheet(){
+  if(!IMP.img)return;
+  const host=document.getElementById("sheetHost");
+  /* The sheet used to be pinned to the width of its panel, so a tall drawing ran off the
+     bottom and there was no way to step back and see the whole thing — which is exactly when
+     you need to, because that is when you are deciding which panel is which view. The fitted
+     width is still the starting point; zoom multiplies it. */
+  const base=Math.max(60,Math.min(IMP.natW*2, host.clientWidth-24));
+  const dw=Math.max(40, base*(IMP.zoom||1));
+  document.getElementById("sheetImg").style.width=dw+"px";
+  document.getElementById("sheetWrap").style.width=dw+"px";
+  const z=document.getElementById("iZoomLbl");
+  if(z)z.textContent=Math.round((dw/IMP.natW)*100)+"%";
+}
+function setSheetZoom(z){
+  IMP.zoom=Math.max(0.08,Math.min(6,z));
+  layoutSheet(); renderCrops();
+  if(typeof drawCalMarks==="function")drawCalMarks();
+}
+
+/* ---- crop box rendering + editing ---- */
+function renderCrops(){
+  const layer=document.getElementById("cropLayer");if(!layer)return;layer.innerHTML="";
+  IMP.boxes.forEach((b)=>{
+    const a=s2d(b.x0,b.y0),c=s2d(b.x1,b.y1);
+    const div=document.createElement("div");div.className="cropbox";
+    div.style.left=a.x+"px";div.style.top=a.y+"px";div.style.width=(c.x-a.x)+"px";div.style.height=(c.y-a.y)+"px";
+    div.style.borderColor=ROLE_COLOR[b.role]||"#71839A";
+    div.innerHTML=`<div class="cb-bar" style="background:${ROLE_COLOR[b.role]||"#71839A"}">
+        <select class="cb-role">${["side","sideR","top","bottom","front","rear","ignore"].map(r=>`<option value="${r}" ${r===b.role?"selected":""}>${viewName(r)}</option>`).join("")}</select>
+        <span class="cb-del">×</span></div>
+      <span class="h nw"></span><span class="h ne"></span><span class="h sw"></span><span class="h se"></span>`;
+    layer.appendChild(div);
+    div.querySelector(".cb-role").addEventListener("change",e=>{b.role=e.target.value;renderCrops();});
+    /* Delete on POINTERDOWN, not click. A click is synthesised after the pointer sequence
+       finishes, and on a touch screen that sequence is often claimed by the drag handler on
+       the box underneath — so the tap moved the box a hair instead of closing it and the ×
+       looked dead. Firing first, and stopping the event there, means the button always wins.
+       The target was also about twelve pixels wide, which is not a button on a phone. */
+    const del=div.querySelector(".cb-del");
+    del.addEventListener("pointerdown",ev=>{
+      ev.preventDefault(); ev.stopPropagation();
+      IMP.boxes=IMP.boxes.filter(x=>x!==b);
+      renderCrops(); impRenderPages();
+    });
+    div.addEventListener("pointerdown",ev=>{
+      if(ev.target.classList.contains("cb-role")||ev.target.classList.contains("cb-del"))return;
+      let handle=null;
+      if(ev.target.classList.contains("h"))handle=["nw","ne","sw","se"].find(x=>ev.target.classList.contains(x));
+      startCropDrag(ev,b,div,handle);
+    });
+  });
+  updateImpStatus();
+}
+function startCropDrag(ev,box,div,handle){
+  ev.preventDefault();
+  const p0=clientToSrc(ev.clientX,ev.clientY),o={x0:box.x0,x1:box.x1,y0:box.y0,y1:box.y1};
+  function mv(e){
+    const p=clientToSrc(e.clientX,e.clientY),dx=p.x-p0.x,dy=p.y-p0.y;
+    if(!handle){box.x0=o.x0+dx;box.x1=o.x1+dx;box.y0=o.y0+dy;box.y1=o.y1+dy;}
+    else{if(handle.includes("w"))box.x0=o.x0+dx;if(handle.includes("e"))box.x1=o.x1+dx;
+         if(handle.includes("n"))box.y0=o.y0+dy;if(handle.includes("s"))box.y1=o.y1+dy;}
+    box.x0=clamp(box.x0,0,IMP.natW);box.x1=clamp(box.x1,0,IMP.natW);
+    box.y0=clamp(box.y0,0,IMP.natH);box.y1=clamp(box.y1,0,IMP.natH);
+    if(box.x1-box.x0<10)box.x1=box.x0+10;if(box.y1-box.y0<10)box.y1=box.y0+10;
+    const a=s2d(box.x0,box.y0),c=s2d(box.x1,box.y1);
+    div.style.left=a.x+"px";div.style.top=a.y+"px";div.style.width=(c.x-a.x)+"px";div.style.height=(c.y-a.y)+"px";
+  }
+  function up(){window.removeEventListener("pointermove",mv);window.removeEventListener("pointerup",up);updateImpStatus();}
+  window.addEventListener("pointermove",mv);window.addEventListener("pointerup",up);
+}
+
+/* =========================================================================
+   THE BLOCK, FILLING IN
+   The model is a rectangular block the size of the drawing with everything else carved
+   away, so the most honest progress indicator is that block: one face per view, each one
+   solid once that side is spoken for. Drawn exploded while it is incomplete — six separate
+   panels floating apart, which is the only way to show all six at once, since a solid box
+   only ever presents three — and closing into one block when the last side lands.
+   ========================================================================= */
+const IB_S=15, IB_K=0.866;                       // half-size, and cos(30°) for the iso axes
+// Viewed from front-top-LEFT, so the Left side — the drawing almost everyone starts with —
+// is one of the three you can see rather than one of the three hidden round the back.
+const ibProj=(x,y,z)=>[(x+y)*IB_K*IB_S, ((x-y)*0.5-z)*IB_S];
+const IB_FACES=[
+  {v:"top",    n:[0,0,1],  c:[[-1,-1,1],[1,-1,1],[1,1,1],[-1,1,1]]},
+  {v:"bottom", n:[0,0,-1], c:[[-1,-1,-1],[1,-1,-1],[1,1,-1],[-1,1,-1]]},
+  {v:"front",  n:[1,0,0],  c:[[1,-1,-1],[1,1,-1],[1,1,1],[1,-1,1]]},
+  {v:"rear",   n:[-1,0,0], c:[[-1,-1,-1],[-1,1,-1],[-1,1,1],[-1,-1,1]]},
+  {v:"side",   n:[0,-1,0], c:[[-1,-1,-1],[1,-1,-1],[1,-1,1],[-1,-1,1]]},
+  {v:"sideR",  n:[0,1,0],  c:[[-1,1,-1],[1,1,-1],[1,1,1],[-1,1,1]]},
+];
+/* Which sides the model actually has. A role given to a crop on ANY page counts — Send
+   collects across every page — and so does a view already carrying a drawing over in
+   Reference & Trace, because that is just as much "the model has this side". */
+function ibFilled(){
+  const set=new Set();
+  try{ (IMP.pages||[]).forEach(p=>(p.boxes||[]).forEach(b=>{
+    if(b.role&&b.role!=="ignore")set.add(b.role); })); }catch(_){}
+  try{ IB_FACES.forEach(f=>{ const v=V[f.v]; if(v&&(v.img||(v.A&&v.A.length>2)))set.add(f.v); }); }catch(_){}
+  return set;
+}
+function ibRender(){
+  const host=document.getElementById("impBox"), svg=document.getElementById("impBoxSvg");
+  if(!host||!svg)return;
+  const have=ibFilled(), n=IB_FACES.filter(f=>have.has(f.v)).length, done=n===6;
+  // the panels draw together as the block comes in, and sit flush once it is whole
+  const gap=done?0:0.30+0.30*(1-n/6);
+  // painter's order: the three facing away go down first, so the near three sit over them
+  const order=IB_FACES.slice().sort((a,b)=>
+    (a.n[0]-a.n[1]+a.n[2])-(b.n[0]-b.n[1]+b.n[2]));
+  svg.innerHTML=order.map(f=>{
+    const [ox,oy]=ibProj(f.n[0]*gap,f.n[1]*gap,f.n[2]*gap);
+    const pts=f.c.map(c=>{const [x,y]=ibProj(c[0],c[1],c[2]);return `${(x+ox).toFixed(2)},${(y+oy).toFixed(2)}`;}).join(" ");
+    const on=have.has(f.v);
+    const near=(f.n[0]-f.n[1]+f.n[2])>0;                 // shade the far panels back a little
+    // light blue, brighter on the faces turned toward you so it still reads as a solid
+    const fill=on?(near?"rgba(90,200,235,.62)":"rgba(90,200,235,.34)"):"rgba(113,131,154,.07)";
+    const stroke=on?"rgba(150,222,246,.95)":"rgba(113,131,154,.45)";
+    return `<polygon class="ib-face" points="${pts}" fill="${fill}" stroke="${stroke}"
+      stroke-width="1.2" stroke-linejoin="round"${on?"":' stroke-dasharray="3 2.5"'}>
+      <title>${viewName(f.v)}${on?"":" — not in the model yet"}</title></polygon>`;
+  }).join("");
+  host.classList.toggle("full",done);
+  const cnt=document.getElementById("ibCount"), miss=document.getElementById("ibMiss");
+  if(cnt)cnt.textContent=done?"all six sides":`${n} of 6 sides`;
+  if(miss){
+    const gone=IB_FACES.filter(f=>!have.has(f.v)).map(f=>viewName(f.v));
+    miss.textContent=done?"the block is closed"
+      :(gone.length>3?"give a crop its role":"still open: "+gone.join(", ").toLowerCase());
+  }
+}
+
+function updateImpStatus(){
+  const s=document.getElementById("iStatus");if(!s)return;const parts=[];
+  parts.push(IMP.unit==="px"?'<span class="tag">px units · 1px = 1u</span>'
+    :(IMP.scalePxPerMm?`<span class="tag" style="color:var(--good);border-color:rgba(91,214,160,.3)">${IMP.scalePxPerMm.toFixed(2)} px/mm</span>`:'<span class="tag">scale not set</span>'));
+  parts.push(`${IMP.boxes.length} boxes`);
+  const feed=IMP.boxes.filter(b=>b.role==="side"||b.role==="top").length;
+  if(feed)parts.push(`<b style="color:var(--accent)">${feed} feeding model</b>`);
+  if(calTarget==="import")parts.push('<b style="color:var(--accent)">● click 2 points</b>');
+  s.innerHTML=parts.join(" &nbsp; ");
+  ibRender();          // every path that changes a role already comes through here
+}
+
+/* ---- load sheet ---- */
+function loadSheet(file){
+  // iOS hands back files from the Files app and iCloud with an EMPTY type, so refusing
+  // anything that isn't declared an image turned away perfectly good photos. Take it on the
+  // extension, or on nothing at all, and let the decoder be the judge — img.onerror catches
+  // whatever genuinely isn't a picture.
+  const nm=(file&&file.name)||"";
+  const looksImage = !!file && (
+        (file.type&&file.type.startsWith("image/")) ||
+        /\.(svg|png|jpe?g|heic|heif|webp|gif|bmp|tiff?|avif)$/i.test(nm) ||
+        !file.type);
+  /* A DXF is not something the browser can decode as a picture, so it has to be turned into
+     one first. This branch was missing: the picker offered .dxf, the file arrived here, an
+     Image was pointed at it, and the decoder quite correctly refused — which surfaced as
+     "the browser can't decode it" and looked like the reader was broken when in fact it was
+     never reached. Both ways in now go through the same renderer. */
+  if(/\.dxf$/i.test(nm)){
+    dxfToCanvas(file).then(({canvas,lines})=>{
+      const url2=canvas.toDataURL("image/png");
+      const im=new Image();
+      im.onload=()=>{
+        try{
+          impAddPage(im,url2,(nm||"page").replace(/\.[^.]+$/,"").slice(0,22));
+          document.getElementById("sheetImg").src=url2;
+          document.getElementById("iDrop").style.display="none";
+          switchTab("import");
+          setTimeout(()=>{ try{ layoutSheet();renderCrops();updateImpStatus();impRenderPages(); }
+            catch(err){ toast("Sheet loaded, but laying it out failed: "+err.message); } },60);
+          toast(`Added <b>${nm}</b> — <b>${lines}</b> lines from the DXF, now page ${IMP.pages.length}. `
+              + `Give each view a role, then <span class='mono'>Send</span>.`);
+        }catch(err){ toast("Couldn't add that sheet: "+err.message); }
+      };
+      im.onerror=()=>toast("The DXF was read but its drawing couldn't be shown.");
+      im.src=url2;
+    }).catch(err=>toast(`Couldn't read <b>${nm}</b>: ${err.message}`));
+    return;
+  }
+  /* A PDF IS A DRAWING, NOT A FILE TO TURN AWAY. This used to refuse it and suggest a manual capture instead, which
+     is exactly the retyping-by-hand that reading a file is meant to remove — and a screenshot
+     throws away the scale, the dimensions and the sheet number along with the vectors.
+     The backend reads all of that. It cannot pick out the silhouette — a construction detail
+     draws the thing IN ITS CONTEXT, footing and grade and subgrade, and the ink covers six
+     times the object's area — so the trace stays. What changes is everything AROUND it: one
+     framed detail at its own scale instead of a 725 x 952mm sheet. */
+  if(/\.pdf$/i.test(nm) || file.type === "application/pdf"){ impPdfPick(file, nm); return; }
+  if(!looksImage){toast("That file isn't an image, SVG, DXF or PDF.");return;}
+  const url=URL.createObjectURL(file),img=new Image();
+  img.onload=()=>{
+    /* Everything past here runs in a callback, so anything that throws used to vanish into
+       the console — the tap looked like it did nothing at all, which is indistinguishable
+       from a dead button and impossible to report usefully from a phone. Say what broke. */
+    try{
+      impAddPage(img,url,(file.name||"page").replace(/\.[^.]+$/,"").slice(0,22));
+      document.getElementById("sheetImg").src=url;document.getElementById("iDrop").style.display="none";
+      switchTab("import");setTimeout(()=>{
+        try{ layoutSheet();renderCrops();updateImpStatus();impRenderPages(); }
+        catch(err){ toast("Sheet loaded, but laying it out failed: "+err.message); }
+      },60);
+      toast(IMP.pages.length>1
+        ? `Added <b>${IMP.cur.name}</b> — ${IMP.pages.length} pages. Give each view a role; <span class='mono'>Send</span> collects them all.`
+        : "Sheet loaded. <span class='mono'>Auto-detect views</span>, then set scale and send. Drop more files to add pages.");
+    }catch(err){
+      toast("Couldn't add that sheet: "+err.message);
+    }
+  };
+  img.onerror=()=>toast(`Couldn't read <b>${nm||"that file"}</b> — the browser can't decode it as a picture. iPhone HEIC photos sometimes need converting; try a screenshot of the drawing instead.`);
+  img.src=url;
+}
+function loadSheets(files){ [...files].forEach((f,i)=>setTimeout(()=>loadSheet(f), i*120)); }
+document.getElementById("sheetFile").onchange=e=>{
+  const fs2=[...e.target.files]; e.target.value="";
+  if(!fs2.length){toast("No file came back from the picker. If you chose an iCloud file, wait for it to download and try again.");return;}
+  try{ loadSheets(fs2); }catch(err){ toast("Load sheet failed: "+err.message); }
+};
+(function(){const host=document.getElementById("sheetHost");
+  ["dragover","dragenter"].forEach(ev=>host.addEventListener(ev,e=>{e.preventDefault();host.style.outline="2px dashed var(--accent)";}));
+  ["dragleave","drop"].forEach(ev=>host.addEventListener(ev,e=>{e.preventDefault();host.style.outline="none";}));
+  host.addEventListener("drop",e=>{if(e.dataTransfer.files.length)loadSheets(e.dataTransfer.files);});
+})();
+
+/* ---- unit switch ---- */
+document.querySelectorAll("#unitSeg button").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll("#unitSeg button").forEach(x=>x.classList.remove("on"));b.classList.add("on");
+  IMP.unit=b.dataset.u;displayUnit=b.dataset.u;
+  if(IMP.unit==="px")IMP.scalePxPerMm=null;
+  updateImpStatus();requestRebuild();
+});
+
+/* ---- auto-detect + role guess ---- */
+function guessRoles(){
+  const bs=IMP.boxes;if(!bs.length)return;
+  /* A long, low panel is a side view. There can be TWO of them now — a drawing set with both
+     flanks — and only picking one left the second sitting on "ignore", which reads as the
+     importer not having seen it. Take the two longest: the upper one on the sheet becomes
+     Left, the lower one Right, which is the order a sheet is normally laid out in. Either can
+     be changed in the dropdown; this only has to be a sensible first guess. */
+  const longs=bs.filter(b=>(b.x1-b.x0)/(b.y1-b.y0)>2.2)
+                .sort((a,b)=>(b.x1-b.x0)-(a.x1-a.x0));
+  const side=longs[0];
+  if(side)side.role="side";
+  if(longs.length>1){
+    const pair=[longs[0],longs[1]].sort((a,b)=>a.y0-b.y0);
+    pair[0].role="side"; pair[1].role="sideR";
+  }
+  const top=bs.filter(b=>b.role==="ignore").map(b=>({b,ar:(b.x1-b.x0)/(b.y1-b.y0),area:(b.x1-b.x0)*(b.y1-b.y0)}))
+    .filter(o=>o.ar>=1.3&&o.ar<=2.4).sort((p,q)=>q.area-p.area)[0];
+  if(top)top.b.role="top";
+  const front=bs.filter(b=>b.role==="ignore").map(b=>({b,ar:(b.x1-b.x0)/(b.y1-b.y0)}))
+    .filter(o=>o.ar>=1.1&&o.ar<=2.2).sort((p,q)=>p.b.x0-q.b.x0)[0];
+  if(front)front.b.role="front";
+}
+document.getElementById("iDetect").onclick=()=>{
+  if(!IMP.img){toast("Load a sheet first.");return;}
+  const {lum,w,h,sc}=fullLum();
+  const thr=autoThreshold(lum);
+  const panels=detectPanels(lum,w,h,{thr});
+  IMP.boxes=panels.map(p=>({x0:p.x0/sc,y0:p.y0/sc,x1:p.x1/sc,y1:p.y1/sc,role:"ignore"}));
+  guessRoles();renderCrops();impRenderPages();
+  toast(`Detected ${IMP.boxes.length} views (ink threshold ${thr}). Fix boxes/roles, set scale, then build.`);
+};
+document.getElementById("iZoomIn").onclick =()=>setSheetZoom((IMP.zoom||1)*1.35);
+document.getElementById("iZoomOut").onclick=()=>setSheetZoom((IMP.zoom||1)/1.35);
+document.getElementById("iZoomFit").onclick=()=>{ setSheetZoom(sheetFitZoom());
+  toast("Whole sheet in view. <b>＋</b> to zoom back in — the boxes follow."); };
+document.getElementById("iAdd").onclick=()=>{
+  if(!IMP.img){toast("Load a sheet first.");return;}
+  IMP.boxes.push({x0:IMP.natW*0.32,y0:IMP.natH*0.32,x1:IMP.natW*0.68,y1:IMP.natH*0.5,role:"ignore"});renderCrops();
+};
+
+/* ---- import scale calibration (clicks on the sheet) ---- */
+function drawCalMarks(){
+  const cl=document.getElementById("calLayer");cl.innerHTML="";
+  IMP.calPts.forEach(p=>{const d=s2d(p.x,p.y),e=document.createElement("div");
+    e.style.cssText=`position:absolute;left:${d.x-5}px;top:${d.y-5}px;width:10px;height:10px;border-radius:50%;background:#E5B45B;box-shadow:0 0 0 2px #1a1208`;cl.appendChild(e);});
+}
+document.getElementById("iScale").onclick=()=>{
+  if(!IMP.img){toast("Load a sheet first.");return;}
+  if(IMP.unit==="px"){toast("px mode: 1 px = 1 unit, no scale needed.");return;}
+  IMP.calPts=[];calTarget="import";document.getElementById("iScale").classList.add("active");
+  document.getElementById("cropLayer").style.pointerEvents="none";
+  updateImpStatus();toast("Click two points a known distance apart on the sheet.");
+};
+document.getElementById("sheetHost").addEventListener("click",e=>{
+  if(calTarget!=="import")return;
+  const s=clientToSrc(e.clientX,e.clientY);
+  if(s.x<0||s.y<0||s.x>IMP.natW||s.y>IMP.natH)return;
+  IMP.calPts.push(s);drawCalMarks();
+  if(IMP.calPts.length===2)openModal();
+});
+
+/* ---- hand-off: cut-outs flow into Reference & Trace as editable, pre-traced views ---- */
+function smoothSeries(pts,passes){
+  let a=pts.map(p=>[p[0],p[1]]);
+  for(let k=0;k<(passes||1);k++)a=a.map((p,i)=>{const p0=a[Math.max(0,i-1)],p2=a[Math.min(a.length-1,i+1)];return [p[0],(p0[1]+p[1]+p2[1])/3];});
+  return a;
+}
+function cropToViewTrace(bx){
+  const {canvas,cf}=cropCanvas(bx),lum=lumOfCanvas(canvas),thr=autoThreshold(lum);
+  const {top,bot}=extractEdges(lum,canvas.width,canvas.height,{x0:0,y0:0,x1:canvas.width,y1:canvas.height},thr);
+  const ds=arr=>{if(!arr.length)return [];const N=Math.min(44,arr.length),o=[];
+    for(let i=0;i<N;i++){const k=Math.round(i*(arr.length-1)/(N-1));o.push(arr[k]);}
+    return smoothSeries(o,2).map(p=>({x:p[0],y:p[1]}));};
+  return {canvas,cf,topPts:ds(top),botPts:ds(bot)};
+}
+document.getElementById("iBuild").onclick=()=>{
+  if(!IMP.pages.length){toast("Load a sheet first.");return;}
+  /* NOTHING GOES TO THE TRACE SIDE UNTIL THIS SHEET HAS BEEN READ.
+     Send used to run whatever it found, which on a sheet nobody had detected yet was
+     nothing at all — it switched tabs, showed an empty canvas, and left the person to work
+     out that the step before had been skipped. A blank tracing screen is the worst possible
+     prompt: it asks for work while giving no clue what work. So say plainly which step is
+     missing and stay put. */
+  const roled=IMP.pages.reduce((n,p)=>n+(p.boxes||[]).filter(b=>
+    ["side","sideR","top","bottom","front","rear"].includes(b.role)).length,0);
+  if(!roled){
+    const anyBox=IMP.pages.some(p=>(p.boxes||[]).length);
+    toast(anyBox
+      ? "These boxes are all set to <b>ignore</b>. Give at least one a role — <b>Left</b>, "
+        + "<b>Top</b>, <b>Front</b> — from the dropdown on its bar, then Send."
+      : "Nothing has been read off this sheet yet. Press <b>Auto-detect views</b> first "
+        + "(or <b>＋ Add box</b> to mark one by hand), give each box a role, then Send.");
+    return;
+  }
+  const savedPage=IMP.page, sent=[], usedPages=new Set(), turned=[];
+  let noScale=false;
+  for(let pi=0; pi<IMP.pages.length; pi++){
+    IMP.page=pi;                                     // cropCanvas() crops from THIS page
+    const pg=IMP.pages[pi];
+    let sPxPerMm;
+    if(IMP.unit==="px") sPxPerMm=1;
+    else if(pg.scalePxPerMm) sPxPerMm=pg.scalePxPerMm;
+    else { noScale=true;                             // unscaled page: standard length, then anchored
+      const ref=pg.boxes.find(b=>b.role==="side")||pg.boxes.slice().sort((a,b)=>(b.x1-b.x0)-(a.x1-a.x0))[0];
+      sPxPerMm=(ref?(ref.x1-ref.x0):DEFAULT_LEN)/DEFAULT_LEN;
+    }
+    for(const bx of pg.boxes){
+      const role=bx.role;
+      if(["side","sideR","top","bottom","front","rear"].includes(role)){
+        const {canvas,cf,topPts,botPts}=cropToViewTrace(bx);
+        if(topPts.length<2)continue;
+        const view=V[role];
+        setRefImage(view,canvas); view.scale=sPxPerMm*cf;
+        /* WHAT THE DRAWING SAYS THIS VIEW MEASURES — carried together with the BASIS it is in.
+           `pg.drawing` is the record `impPdfUseDetail` stored, and `drawing.crop.frame_mm`
+           describes the WHOLE PAGE image. A view's traced points are in the BOX canvas, which
+           is a crop of that page taken by `cropCanvas`. So `view.drawing = pg.drawing` on its
+           own is one line and silently wrong: measuring a trace as a fraction of the BOX and
+           multiplying by the PAGE's paper size makes a building covering a third of the page
+           come out three times too small — plausible, and nothing downstream can tell.
+           The box rect and the crop factor therefore travel WITH the record, and
+           `viewRealSize()` converts to page pixels before it measures anything. One basis,
+           page-image pixels, from the trace to `frame_mm`. The alternative — scaling
+           `frame_mm` down by the box's share of the page — is a smaller change that leaves
+           two bases alive in the file, which is how this class of bug comes back. */
+        view.drawing = pg.drawing || null;
+        view.drawingSrc = pg.drawing
+          ? {x0:bx.x0, y0:bx.y0, cf, pageW:pg.natW, pageH:pg.natH} : null;
+        view.A=(botPts&&botPts.length)?[...topPts,...botPts.slice().reverse()]:topPts; view.B=[];
+        sent.push(role); usedPages.add(pg.name);
+        if(autoOrientView(role))turned.push(role);      // blueprint drew it sideways
+
+      }
+    }
+  }
+  IMP.page=savedPage;
+  if(!sent.length){toast("Assign at least one Side, Top, Front or Rear view on a box (use the dropdown), then send.");return;}
+  const tv=sent.includes("side")?"side":sent.includes("top")?"top":sent.includes("front")?"front":sent.includes("rear")?"rear":null;
+  /* REPORTED, NOT APPLIED. If the view came off a drawing whose plot scale was read, the trace
+     already says how big the thing is in life — nobody should have to type a dimension the
+     sheet states. Silently resizing somebody's model off an auto-trace would be the wrong way
+     round though, so the number is shown and the scale control stays theirs to set. Same
+     treatment as `scale_mismatch` and `unusable_views`: say it, do not resolve it. */
+  let readSize="";
+  try{
+    const rs = tv ? viewRealSize(V[tv], +(document.getElementById("nScale")||{}).value||1) : null;
+    if(rs) readSize = ` · <b>${tv}</b> measures about <b>${(rs.realLength/1000).toFixed(2)} m</b>`
+      + ` &times; ${(rs.realHeight/1000).toFixed(2)} m` 
+      + ` at the drawing's 1:${V[tv].drawing.plotScale} — set it under <b>Build it at a scale</b>`;
+    /* AND WHAT THE SHEET ITSELF SAYS, beside it. The figure above is derived from a hand
+       trace; these are read off the drawing and matched to its line work. Shown together and
+       NOT reconciled — nothing here knows which stated dimension the traced span corresponds
+       to, and this file's habit is to report a reading rather than resolve it. */
+    const st8 = rs ? drawingStated(V[tv].drawing) : null;
+    if(st8) readSize += ` · the sheet states <b>${st8.n}</b> dimension${st8.n>1?"s":""}`
+      + `${st8.forThisDetail ? " on this detail" : " on this page"}, `
+      + `${(st8.min/1000).toFixed(2)}–${(st8.max/1000).toFixed(2)} m`
+      + (st8.texts.length ? ` (${htmlSafe(st8.texts.slice(0,3).join(", "))}…)` : "");
+  }catch(_){}
+  if(tv){activeView=tv;document.querySelectorAll("#viewSeg button").forEach(x=>x.classList.toggle("on",x.dataset.v===activeView));
+    document.getElementById("imgOpField").style.display="inline-flex";updateEdgeLabels();}commitTrace();refreshSecUI();
+  switchTab(tv?"trace":"three");if(tv)setTimeout(fitTrace,40);
+  toast(`Sent to Reference &amp; Trace: <span class="mono">${[...new Set(sent)].join(", ")}</span> from ${usedPages.size} page(s).${turned.length?` · turned <b>${[...new Set(turned)].join(", ")}</b> upright (drawn sideways)`:""}${noScale?` · no scale on a page — the traced <b>side</b> length anchors the rest`:""}${readSize} Front/rear became section cuts. Refine, then open 3D.`);
+};
+
+/* =========================================================================
+   SECTION CUT EDITOR (edit the 3D model by reshaping cross-sections)
+   ========================================================================= */
+let secSel=0, secPtDrag=null;
+function refreshSecUI(){
+  const sel=document.getElementById("secSelect"), info=document.getElementById("secInfo");
+  if(!sel)return; const ss=traced.sections||[];
+  if(secSel>=ss.length)secSel=Math.max(0,ss.length-1);
+  sel.innerHTML=ss.map((s,i)=>`<option value="${i}" ${i===secSel?"selected":""}>cut ${i+1} @ ${Math.round(s.at*100)}%${s.src?` (${s.src})`:""}</option>`).join("");
+  if(ss.length){const cur=ss[secSel];document.getElementById("secPos").value=Math.round(cur.at*100);document.getElementById("vSecPos").textContent=Math.round(cur.at*100);
+    info.textContent=`${ss.length} cut${ss.length>1?"s":""} — the model morphs between them.`;}
+  else info.textContent="No section cuts yet — trace a front view, import a sheet, or add one.";
+  drawSec();
+}
+function drawSec(){
+  const c=document.getElementById("secCanvas");if(!c)return;const ctx=c.getContext("2d");
+  const w=c.clientWidth||300,h=c.clientHeight||150;c.width=w*devicePixelRatio;c.height=h*devicePixelRatio;ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+  ctx.clearRect(0,0,w,h);
+  const ss=traced.sections||[];
+  if(!ss.length){ctx.fillStyle="#71839A";ctx.font="12px ui-sans-serif";ctx.fillText("Add a cut or trace a front view to edit a cross-section",10,h/2);return;}
+  const prof=ss[secSel].prof,pad=16,zMax=1.15;
+  const X=t=>pad+t*(w-2*pad), Y=z=>h-pad-(z/zMax)*(h-2*pad);
+  ctx.strokeStyle="#22303f";ctx.beginPath();ctx.moveTo(X(0),Y(0));ctx.lineTo(X(1),Y(0));ctx.stroke();
+  ctx.fillStyle="#5d6b7d";ctx.font="10px ui-sans-serif";ctx.fillText("left sill",X(0),h-4);ctx.fillText("roof",X(0.5)-9,12);ctx.fillText("right sill",X(1)-30,h-4);
+  ctx.strokeStyle="#46B7D9";ctx.lineWidth=2;ctx.beginPath();prof.forEach((p,i)=>{const x=X(p[0]),y=Y(p[1]);i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.stroke();
+  ctx.fillStyle="#FF7A2F";prof.forEach((p,i)=>{const x=X(p[0]),y=Y(p[1]),r=(i===0||i===prof.length-1)?3:5;ctx.beginPath();ctx.arc(x,y,r,0,7);ctx.fill();});
+}
+(function(){const c=document.getElementById("secCanvas");if(!c)return;const pad=16,zMax=1.15;
+  c.addEventListener("pointerdown",ev=>{const ss=traced.sections;if(!ss||!ss.length)return;const prof=ss[secSel].prof;
+    const r=c.getBoundingClientRect(),x=ev.clientX-r.left,w=c.clientWidth,X=t=>pad+t*(w-2*pad);
+    let best=-1,bd=1e9;prof.forEach((p,i)=>{const d=Math.abs(X(p[0])-x);if(d<bd){bd=d;best=i;}});
+    if(best>0&&best<prof.length-1&&bd<22){secPtDrag=best;try{c.setPointerCapture(ev.pointerId);}catch(_){}}});
+  c.addEventListener("pointermove",ev=>{if(secPtDrag==null)return;const ss=traced.sections;const prof=ss[secSel].prof;
+    const r=c.getBoundingClientRect(),y=ev.clientY-r.top,h=c.clientHeight;
+    prof[secPtDrag][1]=clamp((h-pad-y)/(h-2*pad)*zMax,0,zMax);drawSec();requestRebuild();});
+  c.addEventListener("pointerup",()=>{secPtDrag=null;});
+})();
+document.getElementById("secSelect").onchange=e=>{secSel=+e.target.value;refreshSecUI();};
+document.getElementById("secPos").addEventListener("input",e=>{
+  document.getElementById("vSecPos").textContent=e.target.value;
+  const ss=traced.sections;if(!ss||!ss.length)return;const obj=ss[secSel];
+  obj.at=clamp(+e.target.value/100,0,1);sortSections();secSel=traced.sections.indexOf(obj);
+  const sel=document.getElementById("secSelect");[...sel.options].forEach((o,i)=>{o.textContent=`cut ${i+1} @ ${Math.round(traced.sections[i].at*100)}%${traced.sections[i].src?` (${traced.sections[i].src})`:""}`;});sel.value=secSel;
+  requestRebuild();
+});
+document.getElementById("secAdd").onclick=()=>{
+  if(!traced.sections)traced.sections=[];
+  const at=clamp(+document.getElementById("secPos").value/100,0,1);
+  const base=traced.sections.length?morphSections(traced.sections.slice().sort((a,b)=>a.at-b.at),at):[[0,0],[0.25,0.7],[0.5,1.0],[0.75,0.7],[1,0]];
+  traced.sections.push({at,prof:resampleSection(base),src:"manual"});sortSections();
+  secSel=traced.sections.findIndex(s=>s===traced.sections.find(x=>x.at===at&&x.src==="manual"));
+  refreshSecUI();requestRebuild();toast("Added a section cut — drag the dots to shape it.");
+};
+document.getElementById("secDel").onclick=()=>{
+  const ss=traced.sections;if(!ss||!ss.length)return;ss.splice(secSel,1);
+  if(!ss.length)traced.sections=null;secSel=0;refreshSecUI();requestRebuild();
+};
+
+/* =========================================================================
+   WORKSHOP — multi-object assembly playground (its own 3D scene)
+   ========================================================================= */
+const LIB={
+  items:[],
+  load(){try{this.items=JSON.parse(localStorage.getItem("lee3d.lib")||"[]");}catch(_){this.items=[];}},
+  // localStorage is about 5MB and a model with four traced views is ~1MB of drawings, so
+  // it fills after a handful. Rather than silently failing to save, drop the reference
+  // IMAGES from the local copies (the geometry, and every preview, still work without
+  // them) and say so. The full copy — images and all — lives in the cloud.
+  persist(){
+    const write=v=>localStorage.setItem("lee3d.lib",JSON.stringify(v));
+    try{ write(this.items); return true; }
+    catch(e){
+      try{
+        const lean=this.items.map(it=>{
+          const c=JSON.parse(JSON.stringify(it));
+          if(c.data&&c.data.trace)for(const k in c.data.trace)if(c.data.trace[k])c.data.trace[k].img=null;
+          return c;
+        });
+        write(lean); this.items=lean;
+        toast("This device's storage is full, so the saved <b>drawings</b> were dropped from the local copies — the models and previews are fine. The full copies are in the cloud.");
+        return true;
+      }catch(_){
+        toast("This device's storage is full. Your work is still in the cloud — clear a few local models to save here again.");
+        return false;
+      }
+    }
+  },
+  add(name,kind,data,category){const cat=category||(data&&data.category)||"uncategorized";
+    const rec={name,kind,category:cat,data,ts:Date.now()};
+    const i=this.items.findIndex(it=>it.name===name && it.category===cat);
+    if(i>=0)this.items[i]=rec; else this.items.unshift(rec);   // update in place, never duplicate
+    this.persist();},
+  removeAt(i){this.items.splice(i,1);this.persist();}
+};
+const WS={on:false,ready:false,renderer:null,scene:null,cameraObj:null,cam:{az:-0.9,pol:1.05,rad:600},target:null,
+  inst:[],sel:null,nextId:1,ext:400,gridOn:true,gridStep:10,gridGroup:null,ray:null,mode:0,last:null,moveOff:null,first:true,
+  session:[]};                     // reversible edits on the current part; cleared (committed) when you click off
+const WS_STEEL=0x9fb0c4;           // default body colour
+const WS_SWATCHES=[0x9fb0c4,0xd9dee6,0x2b3440,0xc81e2a,0xe07a1f,0xe6c452,0x4fae54,0x2f9e8f,0x2f6fd0,0x7a4fd0,0xd05b9e,0x9c6b43];
+
+function wsInit(){
+  if(WS.ready)return;
+  const cnv=document.getElementById("wsgl");
+  WS.renderer=new THREE.WebGLRenderer({canvas:cnv,antialias:true,alpha:true});
+  WS.renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));
+  WS.scene=new THREE.Scene();
+  WS.target=new THREE.Vector3(0,30,0);
+  WS.cameraObj=new THREE.PerspectiveCamera(50,1,1,200000);
+  WS.scene.add(new THREE.HemisphereLight(0xbcd2ea,0x0a0e13,0.95));
+  const d1=new THREE.DirectionalLight(0xffffff,0.8);d1.position.set(1,2,1.2);WS.scene.add(d1);
+  const d2=new THREE.DirectionalLight(0x6fa8d8,0.35);d2.position.set(-1.4,0.6,-1);WS.scene.add(d2);
+  WS.ray=new THREE.Raycaster();
+  wsBuildGrid(); wsBindPointer(cnv); wsRecenter(); wsBuildSwatches();
+  LIB.load(); wsRenderLib(); wsRenderParts();
+  WS.ready=true;
+  wsRequestRender();
+  (function loop(){requestAnimationFrame(loop);
+    if(!WS.on||!WS.ready||document.hidden)return;                 // hidden tab: stop entirely
+    if(performance.now()>(WS.dirtyUntil||0))return;               // nothing changed: skip
+    WS.renderer.render(WS.scene,WS.cameraObj);})();
+}
+function wsRequestRender(ms){WS.dirtyUntil=Math.max(WS.dirtyUntil||0, performance.now()+(ms||220));}
+function wsResize(){const cnv=document.getElementById("wsgl");const w=cnv.clientWidth||800,h=cnv.clientHeight||600;
+  WS.renderer.setSize(w,h,false);WS.cameraObj.aspect=w/h;WS.cameraObj.updateProjectionMatrix();wsRequestRender();}
+function wsUpdateCam(){const c=WS.cam;c.pol=clamp(c.pol,0.12,Math.PI-0.12);c.rad=clamp(c.rad,Math.max(8,WS.ext*0.04),WS.ext*10);
+  const t=WS.target;WS.cameraObj.position.set(t.x+c.rad*Math.sin(c.pol)*Math.cos(c.az),t.y+c.rad*Math.cos(c.pol),t.z+c.rad*Math.sin(c.pol)*Math.sin(c.az));
+  WS.cameraObj.lookAt(t);wsRequestRender();}
+function wsRecenter(){WS.target.set(0,WS.ext*0.08,0);WS.cam.rad=WS.ext*1.4;WS.cam.az=-0.9;WS.cam.pol=1.05;wsUpdateCam();}
+/* THE SITE PLAN UNDERLAY.
+   A plan drawing lying on the floor so buildings can be placed ONTO it rather than by eye
+   against a grid. Everything else a site needs — 6-DOF placement, numeric fields, per-instance
+   colour, combined STL, saving the arrangement — Workshop already had; this was the only thing
+   missing, which is that there was nothing to place against.
+
+   **IT IS SCENE FURNITURE, NOT A PART.** It is kept in `WS.planMesh` and never enters
+   `WS.inst`, and that single choice is what keeps it out of everything that matters:
+     wsRecomputeExtent  iterates WS.inst -> the plan cannot blow up the grid or the recenter
+     wsPick             iterates WS.inst -> the plan cannot be selected or dragged by accident
+     wsExportSTL        iterates WS.inst -> the plan can never end up in a printed file
+   Adding it as an instance would have been less code and wrong in three places at once.
+
+   SIZING. The plan's width in the model is (real width) / (scale it is drawn at), which is the
+   same arithmetic the buildings use, so a building dropped on a spot on the drawing lands at
+   that spot in the model. Both numbers are the user's — there is no guessing a scale from an
+   image. */
+function wsPlanApply(){
+  if(!WS.planMesh) return;
+  const num=(id,d)=>{const e=document.getElementById(id); return e ? (+e.value||0) : d;};
+  const realM = num("wsPlanW",80) || 80;                                    // metres
+  const denom = Math.max(1, num("wsPlanScale",200) || 200);
+  const wModel = (realM * 1000) / denom;                                    // mm in the model
+  const ar = WS.planAspect || 1;
+  WS.planMesh.scale.set(wModel, wModel / ar, 1);
+  /* ALIGNMENT. A scanned plan is never square to the axes and its origin is wherever the scan
+     started, so a plan that can only sit centred and unrotated cannot be placed against. The
+     rotation is about the WORLD up axis, applied after the -90 that lays the plane flat —
+     hence rotation.order, without which turning it also tips it out of the floor. */
+  WS.planMesh.rotation.order = "YXZ";
+  WS.planMesh.rotation.set(-Math.PI/2, 0, 0);
+  WS.planMesh.rotation.y = num("wsPlanR",0) * Math.PI / 180;
+  WS.planMesh.position.set(num("wsPlanX",0), -0.15, num("wsPlanZ",0));
+  const o = num("wsPlanO",85); WS.planMesh.material.opacity = clamp(o/100, 0.05, 1);
+  wsRequestRender();
+}
+function wsPlanSet(url){
+  const tex = new THREE.TextureLoader().load(url, t=>{
+    const im = t.image;
+    WS.planAspect = (im && im.height) ? (im.width / im.height) : 1;
+    wsPlanApply(); wsRequestRender();
+  });
+  if(WS.planMesh){ WS.scene.remove(WS.planMesh);
+    WS.planMesh.geometry.dispose();
+    if(WS.planMesh.material.map) WS.planMesh.material.map.dispose();
+    WS.planMesh.material.dispose(); WS.planMesh=null; }
+  const geo = new THREE.PlaneGeometry(1,1);
+  const mat = new THREE.MeshBasicMaterial({map:tex, transparent:true, opacity:0.85,
+                                           depthWrite:false, side:THREE.DoubleSide});
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.rotation.x = -Math.PI/2;      // lie flat
+  mesh.position.y = -0.15;           // a hair under the floor grid: no z-fighting with it
+  mesh.renderOrder = -1;             // and draw first, so parts always sit on top
+  mesh.userData.isPlan = true;       // a label for anything that walks the scene later
+  WS.scene.add(mesh); WS.planMesh = mesh;
+  wsPlanApply();
+}
+function wsPlanClear(){
+  if(!WS.planMesh) return;
+  WS.scene.remove(WS.planMesh);
+  WS.planMesh.geometry.dispose();
+  if(WS.planMesh.material.map) WS.planMesh.material.map.dispose();
+  WS.planMesh.material.dispose();
+  WS.planMesh = null; wsRequestRender();
+}
+function wsBuildGrid(){wsRequestRender();
+  if(WS.gridGroup){WS.scene.remove(WS.gridGroup);WS.gridGroup.traverse(o=>{o.geometry&&o.geometry.dispose();o.material&&o.material.dispose&&o.material.dispose();});}
+  WS.gridGroup=new THREE.Group();
+  if(WS.gridOn){
+    const ext=WS.ext,half=ext/2,div=Math.max(2,Math.round(ext/WS.gridStep));
+    const floor=new THREE.GridHelper(ext,div,0x35506b,0x1a2632);WS.gridGroup.add(floor);
+    const back=new THREE.GridHelper(ext,div,0x243646,0x16212c);back.rotation.x=Math.PI/2;back.position.set(0,half,-half);WS.gridGroup.add(back);
+    const side=new THREE.GridHelper(ext,div,0x243646,0x16212c);side.rotation.z=Math.PI/2;side.position.set(-half,half,0);WS.gridGroup.add(side);
+    WS.gridGroup.add(new THREE.AxesHelper(half*0.55));
+  }
+  WS.scene.add(WS.gridGroup);
+  const info=document.getElementById("wsInfo");if(info)info.textContent=`grid ${WS.gridStep} mm cubes · ${WS.inst.length} part(s)`;
+}
+function wsRecomputeExtent(){
+  let mx=120;
+  for(const it of WS.inst){const b=new THREE.Box3().setFromObject(it.pivot);
+    mx=Math.max(mx,Math.abs(b.min.x),Math.abs(b.max.x),Math.abs(b.min.z),Math.abs(b.max.z),Math.abs(b.max.y));}
+  WS.ext=clamp(Math.ceil((mx*2.2)/WS.gridStep)*WS.gridStep,200,6000);
+  wsBuildGrid();
+}
+function wsMeshFor(profile){
+  const pivot=new THREE.Group(), oriented=new THREE.Group(); oriented.rotation.x=-Math.PI/2; pivot.add(oriented);
+  const meshes=[];
+  const body=makeBody(profile);
+  const g=new THREE.BufferGeometry();g.setAttribute("position",new THREE.Float32BufferAttribute(body.positions,3));g.setIndex(body.indices);g.computeVertexNormals();
+  const shell=new THREE.Mesh(g,new THREE.MeshStandardMaterial({color:0x9fb0c4,metalness:.1,roughness:.62,side:THREE.DoubleSide}));
+  oriented.add(shell);meshes.push(shell);
+  /* A TURNED OBJECT HAS NO TRACED FLOOR PLATE. `makeBottom` builds a rectangular plate from
+     `widthProfile` and `bottomProfile`; on a fountain that is a slab under a round body, and
+     the lathe already closes its own base. `revolve` was excluded from the separate-bottom
+     option for the same reason — this is the same exclusion, in the place Workshop builds. */
+  /* WORKSHOP NOW OBEYS THE STUDIO'S RULE, WHICH IT NEVER DID.
+     The studio refuses a separate bottom in projection mode — `S.sepBottom && shape!=="revolve"
+     && shape!=="lathe" && S.mode!=="projection"` — and it is right to: `makeBottom` lays the
+     plate at `x=(xf-0.5)*L`, so -L/2..L/2, while the projection body measures x[0, L]. The
+     plate is half a length out from the body it belongs to. The smooth builder is centred, so
+     there it lines up, which is why this went unseen.
+     Workshop only checked `sepBottom!==false`, so a projection profile carrying sepBottom:true
+     — which is what the traced car profiles carry — got the offset plate. Same rule both
+     places now. */
+  const wantsPlate = profile.sepBottom!==false
+    && profile.shape!=="lathe" && profile.shape!=="revolve"
+    && profile.mode!=="projection";
+  if(wantsPlate){const bp=makeBottom(profile);const bg=new THREE.BufferGeometry();
+    bg.setAttribute("position",new THREE.Float32BufferAttribute(bp.positions,3));bg.setIndex(bp.indices);bg.computeVertexNormals();
+    const bmesh=new THREE.Mesh(bg,new THREE.MeshStandardMaterial({color:0x46b7d9,metalness:.1,roughness:.6,side:THREE.DoubleSide}));
+    oriented.add(bmesh);meshes.push(bmesh);}
+  return {pivot,shell,meshes};
+}
+/* ---- colour, boxes, and per-part undo -----------------------------------
+   Colour lives on the instance (it.color), so it survives deselection and is
+   written into the saved assembly — permanent until you set a different colour.
+   Undo is a small stack of reversible edits scoped to the part you're editing;
+   clicking off (selecting another part or empty space) commits them for good. */
+function wsSelItem(){return WS.inst.find(x=>x.id===WS.sel);}
+function wsPushUndo(fn){WS.session.push(fn);}
+function wsCommitSession(){WS.session.length=0;}   // lock in every edit on the part we're leaving
+function wsUndo(){const fn=WS.session.pop(); if(!fn){toast("Nothing to undo on this part — earlier changes are locked in.");return;} fn(); wsRequestRender();}
+function wsHex(n){return "#"+(n>>>0&0xffffff).toString(16).padStart(6,"0");}
+function wsBuildSwatches(){const host=document.getElementById("wsSwatches"); if(!host)return; host.innerHTML="";
+  WS_SWATCHES.forEach(h=>{const b=document.createElement("button"); b.className="sw"; b.dataset.hex=h;
+    b.style.background=wsHex(h); b.title=wsHex(h).toUpperCase();
+    b.onclick=()=>{const it=wsSelItem(); if(!it)return;
+      if(WS.paint&&WS.paint.on)wsPaintSetColor(h); else wsApplyColor(it,h,true);}; host.appendChild(b);});}
+// while painting, a colour choice arms the brush instead of repainting the whole part
+function wsPaintSetColor(hex){ wsPaintInit(); WS.paint.color=hex>>>0&0xffffff;
+  const ci=document.getElementById("wsColor"); if(ci)ci.value=wsHex(WS.paint.color);
+  const hi=document.getElementById("wsHex"); if(hi)hi.value=wsHex(WS.paint.color).toUpperCase();
+  document.querySelectorAll("#wsSwatches .sw").forEach(s=>s.classList.toggle("on",(+s.dataset.hex)===WS.paint.color)); }
+function wsColorSyncUI(it){ if(!it)return; const hx=wsHex(it.color).toUpperCase();
+  const ci=document.getElementById("wsColor"); if(ci)ci.value=wsHex(it.color);
+  const hi=document.getElementById("wsHex"); if(hi)hi.value=hx;
+  document.querySelectorAll("#wsSwatches .sw").forEach(s=>s.classList.toggle("on",(+s.dataset.hex)===it.color));}
+function wsApplyColor(it,hex,record){ if(!it)return; hex=hex>>>0&0xffffff;
+  if(record && it.color!==hex){const prev=it.color; wsPushUndo(()=>wsApplyColor(it,prev,false));}
+  it.color=hex; wsRecolor(it);
+  if(WS.sel===it.id)wsColorSyncUI(it); wsRequestRender();}
+/* ---- per-region painting -------------------------------------------------
+   Colour is baked into a vertex-colour attribute: the base colour fills the whole part, then
+   each painted region (a box, stored in the part's own local frame so it moves with the part
+   and survives save/reload) overrides the vertices inside it. Later regions win over earlier. */
+function wsEnsureVColor(m){
+  const g=m.geometry, n=g.attributes.position.count;
+  if(!g.attributes.color || g.attributes.color.count!==n)
+    g.setAttribute("color", new THREE.BufferAttribute(new Float32Array(n*3),3));
+  if(!m.material.vertexColors){ m.material.vertexColors=true; m.material.color.setHex(0xffffff); m.material.needsUpdate=true; }
+}
+function wsInRegion(px,py,pz,rg){          // point-in-oriented-box test in the part's local frame
+  const dx=px-rg.c[0], dy=py-rg.c[1], dz=pz-rg.c[2];
+  for(const ax of [rg.A,rg.B,rg.C]){ const d=dx*ax[0]+dy*ax[1]+dz*ax[2], a2=ax[0]*ax[0]+ax[1]*ax[1]+ax[2]*ax[2];
+    if(Math.abs(d)>a2) return false; }
+  return true;
+}
+function wsRecolor(it){
+  const base=new THREE.Color(it.color); const paints=it.paints||[];
+  for(const p of paints) if(!p._c) p._c=new THREE.Color(p.color);
+  for(const m of it.meshes){
+    wsEnsureVColor(m);
+    const pos=m.geometry.attributes.position, col=m.geometry.attributes.color, n=pos.count;
+    for(let i=0;i<n;i++){
+      let r=base.r, g=base.g, b=base.b;
+      if(paints.length){ const px=pos.getX(i),py=pos.getY(i),pz=pos.getZ(i);
+        for(let k=0;k<paints.length;k++){ if(wsInRegion(px,py,pz,paints[k])){ const c=paints[k]._c; r=c.r;g=c.g;b=c.b; } } }
+      col.setXYZ(i,r,g,b);
+    }
+    col.needsUpdate=true;
+  }
+}
+// convert the world-space paint box to an oriented box in the part's local (geometry) frame
+function wsWorldBoxToLocal(it,box){
+  const m=it.meshes[0]; m.updateWorldMatrix(true,false);
+  const inv=new THREE.Matrix4().copy(m.matrixWorld).invert();
+  const wc=new THREE.Vector3((box.min[0]+box.max[0])/2,(box.min[1]+box.max[1])/2,(box.min[2]+box.max[2])/2);
+  const he=[(box.max[0]-box.min[0])/2,(box.max[1]-box.min[1])/2,(box.max[2]-box.min[2])/2];
+  const c=wc.clone().applyMatrix4(inv);
+  const A=wc.clone().add(new THREE.Vector3(he[0],0,0)).applyMatrix4(inv).sub(c);
+  const B=wc.clone().add(new THREE.Vector3(0,he[1],0)).applyMatrix4(inv).sub(c);
+  const C=wc.clone().add(new THREE.Vector3(0,0,he[2])).applyMatrix4(inv).sub(c);
+  return {c:[c.x,c.y,c.z], A:[A.x,A.y,A.z], B:[B.x,B.y,B.z], C:[C.x,C.y,C.z]};
+}
+function wsPaintInit(){ if(!WS.paint)WS.paint={on:false,box:null,group:null,edges:null,handles:[],color:0xc81e2a,drag:null}; }
+function wsPaintResetBox(it){
+  it.pivot.updateWorldMatrix(true,false);
+  const box=new THREE.Box3().setFromObject(it.pivot);
+  const c=box.getCenter(new THREE.Vector3()), s=box.getSize(new THREE.Vector3());
+  WS.paint.box={min:[c.x-s.x*0.3,c.y-s.y*0.3,c.z-s.z*0.3], max:[c.x+s.x*0.3,c.y+s.y*0.3,c.z+s.z*0.3]};
+}
+function wsPaintBuildGizmo(){
+  const grp=new THREE.Group();
+  const edges=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(1,1,1)),
+    new THREE.LineBasicMaterial({color:0x39cfea,transparent:true,opacity:0.95,depthTest:false}));
+  edges.renderOrder=998; grp.add(edges);
+  const handles=[];
+  for(let i=0;i<8;i++){ const s=new THREE.Mesh(new THREE.SphereGeometry(1,10,8),
+      new THREE.MeshBasicMaterial({color:0x7fecff,depthTest:false})); s.renderOrder=999; s.userData.corner=i; grp.add(s); handles.push(s); }
+  const ctr=new THREE.Mesh(new THREE.SphereGeometry(1,10,8), new THREE.MeshBasicMaterial({color:0xffb020,depthTest:false}));
+  ctr.renderOrder=999; ctr.userData.corner=-2; grp.add(ctr); handles.push(ctr);
+  WS.scene.add(grp); WS.paint.group=grp; WS.paint.edges=edges; WS.paint.handles=handles;
+}
+function wsPaintUpdateGizmo(){
+  const b=WS.paint.box; if(!WS.paint.edges||!b)return;
+  const cx=(b.min[0]+b.max[0])/2, cy=(b.min[1]+b.max[1])/2, cz=(b.min[2]+b.max[2])/2;
+  const sx=Math.max(0.2,b.max[0]-b.min[0]), sy=Math.max(0.2,b.max[1]-b.min[1]), sz=Math.max(0.2,b.max[2]-b.min[2]);
+  WS.paint.edges.position.set(cx,cy,cz); WS.paint.edges.scale.set(sx,sy,sz);
+  const hs=Math.max(sx,sy,sz)*0.03+WS.ext*0.006;
+  for(let i=0;i<8;i++){ const h=WS.paint.handles[i];
+    h.position.set(i&1?b.max[0]:b.min[0], i&2?b.max[1]:b.min[1], i&4?b.max[2]:b.min[2]); h.scale.setScalar(hs); }
+  const ctr=WS.paint.handles[8]; ctr.position.set(cx,cy,cz); ctr.scale.setScalar(hs*1.15);
+}
+function wsPaintToggle(on){
+  wsPaintInit();
+  const want = on===undefined ? !WS.paint.on : on;
+  const it=wsSelItem();
+  if(want && !it){toast("Select a part first, then paint regions on it.");return;}
+  WS.paint.on=want;
+  if(want){
+    if(!WS.paint.box) wsPaintResetBox(it);
+    if(!WS.paint.group) wsPaintBuildGizmo();
+    WS.paint.group.visible=true; wsPaintUpdateGizmo();
+    const ci=document.getElementById("wsColor"); if(ci)WS.paint.color=parseInt(ci.value.slice(1),16);
+  } else if(WS.paint.group) WS.paint.group.visible=false;
+  const pp=document.getElementById("wsPaintPanel"); if(pp)pp.style.display=want?"block":"none";
+  const btn=document.getElementById("wsPaintBtn"); if(btn)btn.classList.toggle("active",want);
+  wsRequestRender();
+}
+function wsPaintPick(e){
+  if(!WS.paint||!WS.paint.on||!WS.paint.handles.length)return null;
+  const rect=WS.renderer.domElement.getBoundingClientRect();
+  WS.ray.setFromCamera({x:((e.clientX-rect.left)/rect.width)*2-1,y:-((e.clientY-rect.top)/rect.height)*2+1}, WS.cameraObj);
+  const hit=WS.ray.intersectObjects(WS.paint.handles,false)[0];
+  return hit?{corner:hit.object.userData.corner}:null;
+}
+function wsPaintApply(){
+  const it=wsSelItem(); if(!it||!WS.paint||!WS.paint.box){toast("Frame a region on a part first.");return;}
+  const rg=wsWorldBoxToLocal(it, WS.paint.box); rg.color=WS.paint.color>>>0&0xffffff; rg._c=new THREE.Color(rg.color);
+  if(!it.paints)it.paints=[]; it.paints.push(rg); wsRecolor(it);
+  wsPushUndo(()=>{ (it.paints||[]).pop(); wsRecolor(it); wsRequestRender(); });
+  wsRequestRender(); toast(`Painted the region ${wsHex(rg.color).toUpperCase()}.`);
+}
+function wsPaintClearAll(){ const it=wsSelItem(); if(!it||!it.paints||!it.paints.length){toast("No painted regions on this part.");return;}
+  const prev=it.paints; it.paints=[]; wsRecolor(it);
+  wsPushUndo(()=>{ it.paints=prev; wsRecolor(it); wsRequestRender(); }); wsRequestRender(); toast("Cleared this part's painted regions."); }
+function wsBoxMesh(l,w,h,color){const pivot=new THREE.Group();
+  const g=new THREE.BoxGeometry(l,h,w);   // model axes: L→x, H→y(up), W→z(depth)
+  const mesh=new THREE.Mesh(g,new THREE.MeshStandardMaterial({color:color??WS_STEEL,metalness:.1,roughness:.62,side:THREE.DoubleSide}));
+  pivot.add(mesh); return {pivot,shell:mesh,meshes:[mesh]};}
+function wsBoxSyncUI(it){ if(!it||!it.box)return;
+  document.getElementById("wsBoxL").value=Math.round(it.box.l);
+  document.getElementById("wsBoxW").value=Math.round(it.box.w);
+  document.getElementById("wsBoxH").value=Math.round(it.box.h);}
+function wsRebuildBox(it,dims,record){ if(!it||!it.box)return;
+  if(record){const prev={...it.box}; wsPushUndo(()=>{wsRebuildBox(it,prev,false); if(WS.sel===it.id)wsBoxSyncUI(it);});}
+  it.box={l:Math.max(1,dims.l),w:Math.max(1,dims.w),h:Math.max(1,dims.h)};
+  const old=it.shell.geometry; it.shell.geometry=new THREE.BoxGeometry(it.box.l,it.box.h,it.box.w); old.dispose();
+  wsFloor(it,true); wsRecomputeExtent(); if(WS.sel===it.id)wsBoxSyncUI(it); wsRequestRender();}
+function wsAddBox(dims,name,xform,color){wsCommitSession();wsRequestRender();
+  const l=(dims&&dims.l)||WS.gridStep*4, w=(dims&&dims.w)||WS.gridStep*4, h=(dims&&dims.h)||WS.gridStep*4;
+  const {pivot,shell,meshes}=wsBoxMesh(l,w,h,color);
+  const it={id:WS.nextId++,name:name||("box-"+WS.nextId),box:{l,w,h},profile:null,shell,meshes,pivot,
+    pos:xform?{...xform.pos}:{x:0,y:0,z:0},rot:xform?{...xform.rot}:{x:0,y:0,z:0},scale:xform&&xform.scale?xform.scale:1,
+    color:(color??WS_STEEL)>>>0&0xffffff};
+  meshes.forEach(me=>me.userData.instId=it.id);
+  WS.scene.add(pivot); WS.inst.push(it); wsApply(it); wsApplyColor(it,it.color,false);
+  if(!xform)wsFloor(it,true);
+  wsRecomputeExtent(); if(WS.inst.length===1)wsRecenter();
+  wsSelect(it.id); wsRenderParts();
+  wsPushUndo(()=>wsDelete(it.id));   // undo right after adding removes the box
+  return it;
+}
+/* An STL / raw-mesh part. Oriented like the studio (model-Z → world-Y) so a model exported
+   from the studio drops back in upright. Colourable and movable exactly like any other part. */
+function wsMeshPart(positions,color){
+  const pivot=new THREE.Group(), oriented=new THREE.Group(); oriented.rotation.x=-Math.PI/2; pivot.add(oriented);
+  const p=positions instanceof Float32Array?positions:new Float32Array(positions);
+  const geo=new THREE.BufferGeometry(); geo.setAttribute("position",new THREE.Float32BufferAttribute(p,3)); geo.computeVertexNormals();
+  const mesh=new THREE.Mesh(geo,new THREE.MeshStandardMaterial({color:color??WS_STEEL,metalness:.1,roughness:.62,side:THREE.DoubleSide}));
+  oriented.add(mesh); return {pivot,shell:mesh,meshes:[mesh]};
+}
+function wsAddMesh(positions,name,xform,color,path){wsCommitSession();wsRequestRender();
+  const {pivot,shell,meshes}=wsMeshPart(positions,color);
+  const it={id:WS.nextId++,name:name||("mesh-"+WS.nextId),
+    mesh:{positions:positions instanceof Float32Array?positions:new Float32Array(positions),path:path||null},
+    profile:null,box:null,shell,meshes,pivot,
+    pos:xform?{...xform.pos}:{x:0,y:0,z:0},rot:xform?{...xform.rot}:{x:0,y:0,z:0},scale:xform&&xform.scale?xform.scale:1,
+    color:(color??WS_STEEL)>>>0&0xffffff};
+  meshes.forEach(me=>me.userData.instId=it.id);
+  WS.scene.add(pivot); WS.inst.push(it); wsApply(it); wsApplyColor(it,it.color,false);
+  if(!xform)wsFloor(it,true);
+  wsRecomputeExtent(); if(WS.inst.length===1)wsRecenter();
+  wsSelect(it.id); wsRenderParts();
+  wsPushUndo(()=>wsDelete(it.id));
+  return it;
+}
+function wsAdd(profile,name,xform){wsCommitSession();wsRequestRender();
+  const {pivot,shell,meshes}=wsMeshFor(profile);
+  const it={id:WS.nextId++,name:name||("part-"+WS.nextId),profile,shell,meshes,pivot,
+    pos:xform?{...xform.pos}:{x:0,y:0,z:0},rot:xform?{...xform.rot}:{x:0,y:0,z:0},scale:xform&&xform.scale?xform.scale:1,
+    color:WS_STEEL};                          // shell starts steel; bottom keeps its accent until you colour it
+  meshes.forEach(me=>me.userData.instId=it.id);
+  WS.scene.add(pivot); WS.inst.push(it); wsApply(it);
+  if(!xform)wsFloor(it,true);
+  wsRecomputeExtent(); if(WS.inst.length===1)wsRecenter();
+  wsSelect(it.id); wsRenderParts();
+  return it;
+}
+function wsApply(it){wsRequestRender();it.pivot.position.set(it.pos.x,it.pos.y,it.pos.z);
+  it.pivot.rotation.set(it.rot.x*Math.PI/180,it.rot.y*Math.PI/180,it.rot.z*Math.PI/180);
+  it.pivot.scale.setScalar(it.scale||1);}
+function wsFloor(it,silent){it.pivot.updateWorldMatrix(true,true);const b=new THREE.Box3().setFromObject(it.pivot);
+  if(isFinite(b.min.y)){it.pos.y-=b.min.y;wsApply(it);} if(!silent){wsRecomputeExtent();wsSyncInputs();}}
+function wsSelect(id){WS.sel=id;wsRequestRender();
+  for(const it of WS.inst)it.shell.material.emissive.setHex(it.id===id?0x1f3326:0x000000);
+  const it=WS.inst.find(x=>x.id===id);
+  document.getElementById("wsXform").style.display=it?"block":"none";
+  if(it){document.getElementById("wsSelName").textContent=it.name;wsSyncInputs();
+    const bs=document.getElementById("wsBoxSize"); if(bs)bs.style.display=it.box?"block":"none";
+    if(it.box)wsBoxSyncUI(it);
+    wsColorSyncUI(it);
+    if(WS.paint&&WS.paint.on){wsPaintResetBox(it);wsPaintUpdateGizmo();}   // reframe on the part you moved to
+  } else if(WS.paint&&WS.paint.on){wsPaintToggle(false);}                  // clicking off ends painting
+  wsRenderParts();
+}
+function wsSyncInputs(){const it=WS.inst.find(x=>x.id===WS.sel);if(!it)return;
+  const v=(id,val)=>document.getElementById(id).value=Math.round(val*10)/10;
+  v("wsPX",it.pos.x);v("wsPY",it.pos.y);v("wsPZ",it.pos.z);v("wsRX",it.rot.x);v("wsRY",it.rot.y);v("wsRZ",it.rot.z);
+  document.getElementById("wsSC").value=it.scale||1;
+  const info=document.getElementById("wsInfo");if(info)info.textContent=`grid ${WS.gridStep} mm cubes · ${WS.inst.length} part(s)`;
+}
+function wsDelete(id){const i=WS.inst.findIndex(x=>x.id===id);if(i<0)return;const it=WS.inst[i];
+  WS.scene.remove(it.pivot);it.meshes.forEach(me=>{me.geometry.dispose();me.material.dispose();});
+  WS.inst.splice(i,1);if(WS.sel===id){WS.sel=null;document.getElementById("wsXform").style.display="none";}
+  wsRecomputeExtent();wsRenderParts();}
+function wsDuplicate(id){const it=WS.inst.find(x=>x.id===id);if(!it)return;
+  const xform={pos:{x:it.pos.x+WS.gridStep*3,y:it.pos.y,z:it.pos.z},rot:{...it.rot},scale:it.scale};
+  let n;
+  if(it.box){n=wsAddBox({...it.box},it.name+" copy",xform,it.color);}
+  else if(it.mesh){n=wsAddMesh(it.mesh.positions,it.name+" copy",xform,it.color,it.mesh.path);}
+  else{n=wsAdd(JSON.parse(JSON.stringify(it.profile)),it.name+" copy",xform); wsApplyColor(n,it.color,false);}
+  if(n&&it.paints&&it.paints.length){                       // the copy keeps its painted regions
+    n.paints=it.paints.map(p=>({c:[...p.c],A:[...p.A],B:[...p.B],C:[...p.C],color:p.color})); wsRecolor(n); wsRequestRender(); }
+  return n;}
+function wsRenderParts(){const host=document.getElementById("wsParts");if(!host)return;
+  document.getElementById("wsCount").textContent=WS.inst.length?`(${WS.inst.length})`:"";host.innerHTML="";
+  WS.inst.forEach(it=>{const row=document.createElement("div");row.className="ws-row"+(it.id===WS.sel?" sel":"");
+    row.innerHTML='<span class="nm"></span><button title="delete">⌫</button>';
+    row.querySelector(".nm").textContent=it.name;
+    row.querySelector(".nm").onclick=()=>{if(it.id!==WS.sel)wsCommitSession();wsSelect(it.id);};
+    row.querySelector("button").onclick=()=>wsDelete(it.id);host.appendChild(row);});}
+/* =========================================================================
+   MODEL PREVIEWS + UNIFIED LIBRARY
+   Renders each saved model to a small thumbnail offscreen, and lists every
+   model you have — on this device, in the cloud, and in the shared repo — as
+   clickable preview cards. Click one to drop it into the Workshop.
+   ========================================================================= */
+/* Parse an STL file (binary OR ASCII) into a flat Float32Array of triangle-soup vertices.
+   Binary layout: 80-byte header, uint32 triangle count, then per triangle 12B normal +
+   3×12B vertices + 2B attribute. ASCII: "vertex x y z" lines. Pure + headless-testable. */
+function parseSTL(buf){
+  const dv=new DataView(buf), n=buf.byteLength;
+  const readBinary=(tris)=>{const pos=new Float32Array(tris*9); let o=84,p=0;
+    for(let i=0;i<tris;i++){o+=12; for(let k=0;k<9;k++){pos[p++]=dv.getFloat32(o,true);o+=4;} o+=2;} return pos;};
+  if(n>=84){const tris=dv.getUint32(80,true); if(84+tris*50===n) return readBinary(tris);}   // exact size ⇒ binary
+  const txt=new TextDecoder().decode(new Uint8Array(buf));
+  if(/^\s*solid/i.test(txt)&&/vertex/i.test(txt)){
+    const nums=[]; const re=/vertex\s+(-?[\d.eE+]+)\s+(-?[\d.eE+]+)\s+(-?[\d.eE+]+)/g; let m;
+    while((m=re.exec(txt)))nums.push(+m[1],+m[2],+m[3]);
+    if(nums.length>=9) return new Float32Array(nums);
+  }
+  if(n>=84){const tris=dv.getUint32(80,true); if(84+tris*50<=n) return readBinary(tris);}    // trust header as a fallback
+  throw new Error("not a readable STL");
+}
+// a display mesh from raw triangle-soup positions, oriented like the studio shows models
+function meshFromPositions(positions,color){
+  const p=positions instanceof Float32Array?positions:new Float32Array(positions);
+  const geo=new THREE.BufferGeometry();
+  geo.setAttribute("position",new THREE.BufferAttribute(p,3)); geo.computeVertexNormals();
+  const mesh=new THREE.Mesh(geo,new THREE.MeshStandardMaterial({color:color??0x9fb0c4,metalness:.1,roughness:.62,side:THREE.DoubleSide}));
+  mesh.rotation.set(-Math.PI/2,0,0); return mesh;
+}
+function boxThumbMesh(box,color){
+  return new THREE.Mesh(new THREE.BoxGeometry(box.l,box.h,box.w),
+    new THREE.MeshStandardMaterial({color:color??0x9fb0c4,metalness:.1,roughness:.62,side:THREE.DoubleSide}));
+}
+const THUMB={renderer:null,scene:null,cam:null,cache:{},queue:[],busy:false};
+function thumbInit(){
+  if(THUMB.renderer)return true;
+  try{
+    const c=document.createElement("canvas");c.width=192;c.height=144;
+    THUMB.renderer=new THREE.WebGLRenderer({canvas:c,antialias:true,alpha:true,preserveDrawingBuffer:true});
+    THUMB.renderer.setPixelRatio(1);THUMB.renderer.setSize(192,144,false);
+    THUMB.scene=new THREE.Scene();
+    THUMB.scene.add(new THREE.AmbientLight(0xffffff,0.78));
+    const d=new THREE.DirectionalLight(0xffffff,0.85);d.position.set(1.1,1.5,1.3);THUMB.scene.add(d);
+    const d2=new THREE.DirectionalLight(0xffffff,0.28);d2.position.set(-1,-0.6,-0.8);THUMB.scene.add(d2);
+    THUMB.cam=new THREE.PerspectiveCamera(36,192/144,0.5,20000);
+    THUMB.cam.up.set(0,1,0);
+    return true;
+  }catch(_){return false;}   // no WebGL context available -> cards fall back to a glyph
+}
+// geometry for one profile, oriented the same way the studio shows it. Thumbnails use the
+// coarse "fast" hull so a heavy repo model renders in a few ms instead of ~700.
+function thumbMeshFor(profile,color){
+  const src=(profile.mode==="projection")?{...profile,hullFast:true}:profile;
+  const g=makeBody(src);
+  const geo=new THREE.BufferGeometry();
+  geo.setAttribute("position",new THREE.BufferAttribute(g.positions,3));
+  geo.setIndex(g.indices);geo.computeVertexNormals();
+  const mesh=new THREE.Mesh(geo,new THREE.MeshStandardMaterial({color:color??0x9fb0c4,metalness:0.1,roughness:0.62,side:THREE.DoubleSide}));
+  mesh.rotation.set(-Math.PI/2,0,0);
+  return mesh;
+}
+function renderThumb(doc){
+  if(!thumbInit())return null;
+  const root=new THREE.Group();
+  try{
+    if(doc&&doc.stl&&doc.positions){ root.add(meshFromPositions(doc.positions,doc.color)); }   // an STL mesh
+    else if(doc&&doc.parts&&doc.parts.length){                 // assembly: every part in place
+      doc.parts.slice(0,16).forEach(p=>{
+        let m=null;
+        if(p.profile)m=thumbMeshFor(p.profile,p.color);
+        else if(p.box)m=boxThumbMesh(p.box,p.color);
+        else if(p.meshPositions)m=meshFromPositions(new Float32Array(p.meshPositions),p.color);
+        if(!m)return;                                           // repo-referenced mesh parts are skipped in the preview
+        const pivot=new THREE.Group(); pivot.add(m);
+        if(p.pos)pivot.position.set(p.pos.x||0,p.pos.y||0,p.pos.z||0);
+        if(p.rot)pivot.rotation.set(p.rot.x||0,p.rot.y||0,p.rot.z||0);
+        if(p.scale)pivot.scale.setScalar(p.scale||1);
+        root.add(pivot);
+      });
+    } else if(doc){ root.add(thumbMeshFor(doc)); }
+  }catch(_){ return null; }
+  if(!root.children.length)return null;
+  THUMB.scene.add(root);
+  const bb=new THREE.Box3().setFromObject(root);
+  let url=null;
+  if(isFinite(bb.min.x)){
+    const c=bb.getCenter(new THREE.Vector3()),sz=bb.getSize(new THREE.Vector3());
+    const r=Math.max(sz.x,sz.y,sz.z)*1.55||100;
+    THUMB.cam.position.set(c.x+r*0.72,c.y+r*0.5,c.z+r*0.78);
+    THUMB.cam.lookAt(c);THUMB.cam.updateProjectionMatrix();
+    THUMB.renderer.render(THUMB.scene,THUMB.cam);
+    try{url=THUMB.renderer.domElement.toDataURL("image/webp",0.72);}catch(_){}
+    if(!url||url.length<200){try{url=THUMB.renderer.domElement.toDataURL("image/png");}catch(_){url=null;}}  // webp unsupported ⇒ png
+  }
+  THUMB.scene.remove(root);
+  root.traverse(o=>{if(o.geometry)o.geometry.dispose();if(o.material)o.material.dispose();});
+  return url;
+}
+// one thumbnail at a time, off the critical path, so a big library never janks
+function thumbEnqueue(key,getDoc,imgEl,badge){
+  if(THUMB.cache[key]){imgEl.src=THUMB.cache[key];imgEl.style.opacity=1;return;}
+  THUMB.queue.push({key,getDoc,imgEl,badge});
+  thumbPump();
+}
+async function thumbPump(){
+  if(THUMB.busy||!THUMB.queue.length)return;
+  THUMB.busy=true;
+  const job=THUMB.queue.shift();
+  try{
+    if(!document.body.contains(job.imgEl))throw new Error("gone");   // list re-rendered
+    const doc=await job.getDoc();
+    const url=doc?renderThumb(doc):null;
+    if(url){THUMB.cache[job.key]=url;job.imgEl.src=url;job.imgEl.style.opacity=1;if(job.badge)job.badge.remove();}
+    else if(job.badge)job.badge.textContent="no preview";
+  }catch(_){ if(job.badge)job.badge.textContent="—"; }
+  THUMB.busy=false;
+  if(THUMB.queue.length)setTimeout(thumbPump,16);                    // yield a frame between renders
+}
+
+/* ---- unified library: this device + cloud + shared repo ---- */
+const SRC_LABEL={local:"device",cloud:"cloud",repo:"repo"};
+// The repo stores a category as a slugged folder ("car-frame") while device/cloud keep the
+// typed label ("Car frame"). Fold them together so one model never shows twice, and pick
+// the nicest spelling per category. Pure + testable.
+function libCanonical(out){
+  const norm=x=>(x||"").toLowerCase().replace(/[\s_\-]+/g,"");
+  const rank={local:0,cloud:1,repo:2};
+  const label=new Map();
+  out.forEach(it=>{const ck=norm(it.category); const cur=label.get(ck);
+    if(!cur || rank[it.src]<rank[cur.src])label.set(ck,{src:it.src,text:it.category});});
+  const seen=new Map();
+  for(const it of out){
+    it.ckey=norm(it.category); it.category=(label.get(it.ckey)||{text:it.category}).text;
+    const k=norm(it.name)+"|"+it.ckey, prev=seen.get(k);
+    if(!prev || rank[it.src]<rank[prev.src])seen.set(k,it);      // device > cloud > repo
+  }
+  return [...seen.values()].sort((a,b)=>(a.category+a.name).localeCompare(b.category+b.name));
+}
+async function uniLibItems(){
+  const out=[];
+  (LIB.items||[]).forEach((it,i)=>out.push({src:"local",name:it.name,category:it.category||"uncategorized",
+    kind:it.kind||"object",key:"local:"+it.name+":"+(it.category||""),getDoc:async()=>it.data,idx:i}));
+  if(typeof CLOUD!=="undefined"&&CLOUD.ok()){
+    try{ (await CLOUD.list()).forEach(r=>out.push({src:"cloud",name:r.name,category:r.category||"uncategorized",
+      kind:r.kind||"object",key:"cloud:"+r.id,getDoc:async()=>{const row=await CLOUD.get(r.id);return row&&row.data;}}));
+    }catch(_){}
+  }
+  if(typeof GHLIB!=="undefined"&&GHLIB.repo){
+    try{
+      const now=Date.now();
+      if(!uniLibItems._repo || now-uniLibItems._repoAt>60000){uniLibItems._repo=await GHLIB.list();uniLibItems._repoAt=now;}
+      (uniLibItems._repo||[]).forEach(f=>out.push({src:"repo",name:f.name,category:(f.path.split("/").slice(-2,-1)[0]||"repo"),
+        kind:f.kind,key:"repo:"+f.path,
+        getDoc: f.kind==="stl" ? (async()=>GHLIB.fetchSTL(f.path)) : (async()=>GHLIB.fetchDoc(f.path))}));
+    }catch(_){}
+  }
+  return libCanonical(out);
+}
+async function wsRenderLib(){
+  if(typeof refreshCategories==="function")refreshCategories();
+  const host=document.getElementById("wsLib"); if(!host)return;
+  host.innerHTML='<div class="hint" style="opacity:.6;padding:4px 0">Loading library…</div>';
+  const items=await uniLibItems();
+  host.innerHTML="";
+  if(!items.length){host.innerHTML='<div class="hint" style="opacity:.6;padding:4px 0">No saved models yet. Build one, then <b>Save current model to library</b>.</div>';return;}
+  const groups={};
+  items.forEach(it=>{(groups[it.category]=groups[it.category]||[]).push(it);});
+  Object.keys(groups).forEach(cat=>{
+    const h=document.createElement("div");h.className="ws-lbl";h.style.margin="8px 0 4px";
+    h.textContent=`${cat} (${groups[cat].length})`;host.appendChild(h);
+    const grid=document.createElement("div");grid.className="lib-grid";host.appendChild(grid);
+    groups[cat].forEach(it=>{
+      const card=document.createElement("div");card.className="lib-card";card.title=`${it.name} · ${SRC_LABEL[it.src]}`;
+      card.innerHTML=`<div class="ph"><img alt=""><span class="wait">…</span></div>
+        <span class="nm"></span><span class="src ${it.src}">${SRC_LABEL[it.src]}${it.kind==="assembly"?" · asm":it.kind==="stl"?" · stl":""}</span>
+        ${it.src==="local"?'<button class="del" title="remove from this device">×</button>':""}`;
+      card.querySelector(".nm").textContent=it.name;
+      const img=card.querySelector("img"), wait=card.querySelector(".wait");
+      card.onclick=async ()=>{
+        try{
+          const doc=await it.getDoc(); if(!doc)throw new Error("couldn't load it");
+          if(doc.stl){wsAddMesh(doc.positions,it.name,null,undefined,doc.path);toast(`Added “${it.name}” (STL mesh) to the workshop.`);}
+          else if(it.kind==="assembly"||(doc.parts&&doc.parts.length))wsLoadAssembly(doc);
+          else {wsAdd(doc,it.name);toast(`Added “${it.name}” to the workshop.`);}
+        }catch(e){toast("Couldn't open that model: "+e.message);}
+      };
+      const del=card.querySelector(".del");
+      if(del)del.onclick=e=>{e.stopPropagation();
+        if(!confirm(`Remove “${it.name}” from this device? (Cloud and repo copies stay.)`))return;
+        LIB.removeAt(it.idx); delete THUMB.cache[it.key]; wsRenderLib();};
+      grid.appendChild(card);
+      thumbEnqueue(it.key,it.getDoc,img,wait);
+    });
+  });
+}
+
+function wsLoadAssembly(asm){wsRequestRender();if(!asm||!asm.parts){toast("Not a valid assembly file.");return;}
+  const restore=(it,p)=>{ if(!it)return; if(p.paints&&p.paints.length){
+      it.paints=p.paints.map(r=>({c:r.c,A:r.A,B:r.B,C:r.C,color:r.color>>>0&0xffffff})); wsRecolor(it); wsRequestRender(); } };
+  asm.parts.forEach(p=>{
+    if(p.kind==="box"||p.box){ restore(wsAddBox(p.box,p.name,{pos:p.pos,rot:p.rot,scale:p.scale},p.color),p); }
+    else if(p.kind==="mesh"||p.meshPositions||p.meshPath){
+      if(p.meshPath&&typeof GHLIB!=="undefined"){ GHLIB.fetchSTL(p.meshPath)
+        .then(d=>restore(wsAddMesh(d.positions,p.name,{pos:p.pos,rot:p.rot,scale:p.scale},p.color,p.meshPath),p))
+        .catch(()=>toast(`Couldn't fetch mesh part “${p.name}” from the repo.`)); }
+      else if(p.meshPositions){ restore(wsAddMesh(new Float32Array(p.meshPositions),p.name,{pos:p.pos,rot:p.rot,scale:p.scale},p.color),p); }
+    }
+    else { const it=wsAdd(p.profile,p.name,{pos:p.pos,rot:p.rot,scale:p.scale}); if(p.color!=null)wsApplyColor(it,p.color,false); restore(it,p); }
+  });
+  if(asm.name)document.getElementById("wsName").value=asm.name;
+  wsCommitSession();
+  toast(`Loaded assembly “${asm.name||"?"}” · ${asm.parts.length} parts`);}
+function wsExportSTL(){const tris=[],v=new THREE.Vector3();
+  for(const it of WS.inst){it.pivot.updateWorldMatrix(true,true);
+    it.meshes.forEach(me=>{const pos=me.geometry.attributes.position,idx=me.geometry.index,mw=me.matrixWorld;
+      const get=k=>{v.set(pos.getX(k),pos.getY(k),pos.getZ(k)).applyMatrix4(mw);return[v.x,v.y,v.z];};
+      if(idx){for(let k=0;k<idx.count;k++)tris.push(get(idx.getX(k)));}else{for(let k=0;k<pos.count;k++)tris.push(get(k));}});}
+  if(!tris.length){toast("Nothing to export — add parts first.");return;}
+  const positions=new Float32Array(tris.length*3);tris.forEach((t,k)=>{positions[k*3]=t[0];positions[k*3+1]=t[1];positions[k*3+2]=t[2];});
+  download(toSTL(positions,tris.map((_,k)=>k)),((document.getElementById("wsName").value||"assembly").trim())+".stl");
+  toast(`Combined STL · <span class="mono">${(tris.length/3).toLocaleString()} tris · ${WS.inst.length} part(s)</span>`);}
+function wsSaveAssembly(){if(!WS.inst.length){toast("Add parts first.");return;}
+  const name=(document.getElementById("wsName").value||"assembly").trim();
+  const asm={schema:"lee3d.assembly/v1",units:"mm",name,category:(projCat.value||"Assemblies").trim(),parts:WS.inst.map(it=>{
+    const base={name:it.name,pos:it.pos,rot:it.rot,scale:it.scale,color:it.color,
+      paints:(it.paints&&it.paints.length)?it.paints.map(p=>({c:p.c,A:p.A,B:p.B,C:p.C,color:p.color})):undefined};
+    if(it.box) return {...base,kind:"box",box:it.box};
+    if(it.mesh) return {...base,kind:"mesh",                       // repo STL ⇒ tiny path ref; otherwise embed the geometry
+      meshPath:it.mesh.path||undefined, meshPositions:it.mesh.path?undefined:Array.from(it.mesh.positions)};
+    return {...base,profile:it.profile};
+  })};
+  download(new Blob([JSON.stringify(asm,null,2)],{type:"application/json"}),name+".assembly.json");
+  LIB.add(name,"assembly",asm,asm.category);wsRenderLib();
+  if(typeof CLOUD!=="undefined"&&CLOUD.ok())CLOUD.upsert(name,"assembly",asm,asm.category).then(()=>toast(`“${name}” also saved to cloud`)).catch(e=>toast("Cloud push failed: "+e.message));
+  toast(`Saved assembly “${name}” (${asm.parts.length} parts) to the library.`);}
+
+function wsNDC(e){const r=document.getElementById("wsgl").getBoundingClientRect();return{x:((e.clientX-r.left)/r.width)*2-1,y:-((e.clientY-r.top)/r.height)*2+1};}
+function wsPick(e){const n=wsNDC(e);WS.ray.setFromCamera(n,WS.cameraObj);const meshes=[];WS.inst.forEach(it=>it.meshes.forEach(m=>meshes.push(m)));
+  const hits=WS.ray.intersectObjects(meshes,false);if(!hits.length)return null;
+  const id=hits[0].object.userData.instId;const it=WS.inst.find(x=>x.id===id);return it?{it,point:hits[0].point}:null;}
+function wsGround(e){const n=wsNDC(e);WS.ray.setFromCamera(n,WS.cameraObj);const p=new THREE.Vector3();
+  return WS.ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0,1,0),0),p)?p:null;}
+function wsPaintRayPlane(e,plane){
+  const rect=WS.renderer.domElement.getBoundingClientRect();
+  WS.ray.setFromCamera({x:((e.clientX-rect.left)/rect.width)*2-1,y:-((e.clientY-rect.top)/rect.height)*2+1}, WS.cameraObj);
+  const P=new THREE.Vector3(); return WS.ray.ray.intersectPlane(plane,P)?P:null;
+}
+function wsBindPointer(cnv){
+  cnv.addEventListener("contextmenu",e=>e.preventDefault());
+  cnv.addEventListener("pointerdown",e=>{cnv.setPointerCapture(e.pointerId);WS.last={x:e.clientX,y:e.clientY};WS.downX=e.clientX;WS.downY=e.clientY;WS.moved=false;
+    if(e.button===2||e.shiftKey){WS.mode=2;return;}
+    if(WS.paint&&WS.paint.on){                            // drag a box handle to resize/move the selection
+      const ph=wsPaintPick(e);
+      if(ph){ WS.mode=5; const b=WS.paint.box;
+        const anchor=ph.corner===-2
+          ? new THREE.Vector3((b.min[0]+b.max[0])/2,(b.min[1]+b.max[1])/2,(b.min[2]+b.max[2])/2)
+          : new THREE.Vector3(ph.corner&1?b.max[0]:b.min[0], ph.corner&2?b.max[1]:b.min[1], ph.corner&4?b.max[2]:b.min[2]);
+        const nrm=new THREE.Vector3(); WS.cameraObj.getWorldDirection(nrm);
+        const plane=new THREE.Plane().setFromNormalAndCoplanarPoint(nrm,anchor);
+        WS.paint.drag={corner:ph.corner, plane, start:wsPaintRayPlane(e,plane)||anchor, box0:{min:[...b.min],max:[...b.max]}};
+        return; }
+    }
+    const hit=wsPick(e);
+    if(hit){if(hit.it.id!==WS.sel)wsCommitSession();      // switching parts locks in the last one's edits
+      wsSelect(hit.it.id);WS.mode=3;const gp=wsGround(e);WS.moveOff=gp?{x:gp.x-hit.it.pos.x,z:gp.z-hit.it.pos.z}:{x:0,z:0};}
+    else WS.mode=1;});
+  cnv.addEventListener("pointermove",e=>{if(!WS.mode)return;const dx=e.clientX-WS.last.x,dy=e.clientY-WS.last.y;WS.last={x:e.clientX,y:e.clientY};
+    if(!WS.moved && Math.hypot(e.clientX-WS.downX,e.clientY-WS.downY)>4)WS.moved=true;
+    if(WS.mode===5 && WS.paint&&WS.paint.drag){
+      const d=WS.paint.drag, P=wsPaintRayPlane(e,d.plane); if(!P)return; const b=WS.paint.box, MIN=2;
+      if(d.corner===-2){ const ax=P.x-d.start.x,ay=P.y-d.start.y,az=P.z-d.start.z;
+        b.min=[d.box0.min[0]+ax,d.box0.min[1]+ay,d.box0.min[2]+az]; b.max=[d.box0.max[0]+ax,d.box0.max[1]+ay,d.box0.max[2]+az]; }
+      else{
+        if(d.corner&1)b.max[0]=Math.max(P.x,b.min[0]+MIN); else b.min[0]=Math.min(P.x,b.max[0]-MIN);
+        if(d.corner&2)b.max[1]=Math.max(P.y,b.min[1]+MIN); else b.min[1]=Math.min(P.y,b.max[1]-MIN);
+        if(d.corner&4)b.max[2]=Math.max(P.z,b.min[2]+MIN); else b.min[2]=Math.min(P.z,b.max[2]-MIN);
+      }
+      wsPaintUpdateGizmo(); wsRequestRender(); return;
+    }
+    if(WS.mode===1){WS.cam.az-=dx*0.008;WS.cam.pol-=dy*0.008;wsUpdateCam();}
+    else if(WS.mode===2){const s=WS.cam.rad*0.0016,fwd=new THREE.Vector3();WS.cameraObj.getWorldDirection(fwd);
+      const right=new THREE.Vector3().crossVectors(fwd,new THREE.Vector3(0,1,0)).normalize();
+      const upv=new THREE.Vector3().crossVectors(right,fwd).normalize();
+      WS.target.addScaledVector(right,-dx*s);WS.target.addScaledVector(upv,dy*s);wsUpdateCam();}
+    else if(WS.mode===3){const it=WS.inst.find(x=>x.id===WS.sel),gp=wsGround(e);if(it&&gp){it.pos.x=gp.x-WS.moveOff.x;it.pos.z=gp.z-WS.moveOff.z;wsApply(it);wsSyncInputs();if(WS.paint&&WS.paint.on)wsPaintUpdateGizmo();}}});
+  const end=()=>{ if(WS.paint)WS.paint.drag=null;
+    if(WS.mode===1 && !WS.moved && WS.sel!=null){wsCommitSession();wsSelect(null);}  // tap empty space = click off
+    WS.mode=0;};
+  cnv.addEventListener("pointerup",end);cnv.addEventListener("pointerleave",end);
+  cnv.addEventListener("wheel",e=>{e.preventDefault();WS.cam.rad*=(1+Math.sign(e.deltaY)*0.09);wsUpdateCam();},{passive:false});
+}
+
+/* workshop UI wiring */
+document.getElementById("wsAddCur").onclick=()=>{const p=fullProfile();wsAdd(JSON.parse(JSON.stringify(p)),p.name||("part-"+WS.nextId));};
+document.getElementById("wsLibRefresh").onclick=()=>{uniLibItems._repo=null;THUMB.cache={};wsRenderLib();toast("Library refreshed.");};
+document.getElementById("wsSaveCur").onclick=()=>{const p=fullProfile();LIB.add(p.name||"object","object",JSON.parse(JSON.stringify(p)),p.category);wsRenderLib();if(typeof CLOUD!=="undefined"&&CLOUD.ok())CLOUD.upsert(p.name||"object","object",p,p.category).catch(()=>{});toast(`Saved “${p.name||"object"}” to the library${(typeof CLOUD!=="undefined"&&CLOUD.ok())?"  + cloud":""}.`);};
+document.getElementById("wsFile").onchange=e=>{const picked=[...e.target.files]; e.target.value=""; picked.forEach(file=>{const r=new FileReader();
+  r.onload=()=>{try{const d=JSON.parse(r.result);
+    if(d.schema&&d.schema.indexOf("assembly")>=0){LIB.add(d.name||"assembly","assembly",d,d.category);wsLoadAssembly(d);}
+    else{const nm=d.name||file.name.replace(/\.json$/,"");LIB.add(nm,"object",d,d.category);wsAdd(d,nm);}wsRenderLib();}
+    catch(_){toast("Couldn't read "+file.name);}};r.readAsText(file);});e.target.value="";};
+document.getElementById("wsGridOn").addEventListener("change",e=>{WS.gridOn=e.target.checked;wsBuildGrid();});
+document.getElementById("wsStep").addEventListener("change",e=>{WS.gridStep=+e.target.value;document.getElementById("wsStepV").textContent=e.target.value;wsRecomputeExtent();});
+["wsPX","wsPY","wsPZ","wsRX","wsRY","wsRZ","wsSC"].forEach(id=>document.getElementById(id).addEventListener("input",()=>{
+  const it=WS.inst.find(x=>x.id===WS.sel);if(!it)return;const g=k=>+document.getElementById(k).value||0;
+  it.pos.x=g("wsPX");it.pos.y=g("wsPY");it.pos.z=g("wsPZ");it.rot.x=g("wsRX");it.rot.y=g("wsRY");it.rot.z=g("wsRZ");it.scale=g("wsSC")||1;wsApply(it);}));
+document.getElementById("wsFloor").onclick=()=>{const it=WS.inst.find(x=>x.id===WS.sel);if(it)wsFloor(it);};
+document.getElementById("wsDup").onclick=()=>{if(WS.sel)wsDuplicate(WS.sel);};
+document.getElementById("wsDel").onclick=()=>{if(WS.sel)wsDelete(WS.sel);};
+document.getElementById("wsSave").onclick=wsSaveAssembly;
+document.getElementById("wsSTL").onclick=wsExportSTL;
+/* Site plan underlay. Reading the file as a data URL rather than an object URL so the texture
+   survives the page's own lifetime without a revoke to get wrong. */
+(function(){
+  const f=document.getElementById("wsPlanFile"), w=document.getElementById("wsPlanW"),
+        wv=document.getElementById("wsPlanWv"), sc=document.getElementById("wsPlanScale"),
+        hide=document.getElementById("wsPlanHide"), clr=document.getElementById("wsPlanClear");
+  if(!f) return;
+  f.onchange=e=>{
+    const file=e.target.files&&e.target.files[0]; if(!file) return;
+    const r=new FileReader();
+    r.onload=()=>{ wsPlanSet(r.result);
+      toast("Plan on the floor. Set how wide it is in real life and the scale it is drawn at."); };
+    r.onerror=()=>toast("Could not read that image.");
+    r.readAsDataURL(file);
+  };
+  // every control writes its own readout and then re-applies; one path, no duplicated maths
+  const pairs=[["wsPlanW","wsPlanWv"],["wsPlanX","wsPlanXv"],["wsPlanZ","wsPlanZv"],
+               ["wsPlanR","wsPlanRv"],["wsPlanO","wsPlanOv"]];
+  const sync=()=>{ for(const [i,o] of pairs){ const a=document.getElementById(i),
+      b=document.getElementById(o); if(a&&b)b.textContent=a.value; } wsPlanApply(); };
+  for(const [i] of pairs){ const el=document.getElementById(i); if(el) el.oninput=sync; }
+  if(sc) sc.oninput=sync;
+  if(hide) hide.onclick=()=>{ if(!WS.planMesh){toast("No plan loaded.");return;}
+    WS.planMesh.visible=!WS.planMesh.visible;
+    hide.textContent=WS.planMesh.visible?"Hide":"Show"; wsRequestRender(); };
+  if(clr) clr.onclick=()=>{ wsPlanClear(); if(hide)hide.textContent="Hide"; toast("Plan removed."); };
+})();
+document.getElementById("wsRecenter").onclick=wsRecenter;
+document.getElementById("wsZoomIn").onclick=()=>{WS.cam.rad*=0.8;wsUpdateCam();};
+document.getElementById("wsZoomOut").onclick=()=>{WS.cam.rad*=1.25;wsUpdateCam();};
+
+/* HOLOGRAPHIC full-model preview — pops the whole assembly up as a slowly turning cyan hologram. */
+const HOLO={renderer:null,scene:null,cam:null,raf:0,group:null,t:0,radius:300};
+function openHologram(){
+  if(!WS.inst.length){toast("Add parts to the workshop first — then project them as a hologram.");return;}
+  const ov=document.getElementById("holoOverlay"); ov.classList.add("on"); ov.setAttribute("aria-hidden","false");
+  const cnv=document.getElementById("holoCanvas");
+  if(!HOLO.renderer){
+    HOLO.renderer=new THREE.WebGLRenderer({canvas:cnv,antialias:true,alpha:true});
+    HOLO.scene=new THREE.Scene();
+    HOLO.cam=new THREE.PerspectiveCamera(45,1,0.1,500000);
+    HOLO.scene.add(new THREE.HemisphereLight(0x9fd8ff,0x0a1018,1.15));
+    const dl=new THREE.DirectionalLight(0x8fe0ff,0.75); dl.position.set(1,2,1.5); HOLO.scene.add(dl);
+  }
+  if(HOLO.group){HOLO.scene.remove(HOLO.group);
+    HOLO.group.traverse(o=>{if(o.geometry)o.geometry.dispose();if(o.material&&o.material.dispose)o.material.dispose();});}
+  HOLO.group=new THREE.Group();
+  const box=new THREE.Box3();
+  for(const it of WS.inst)for(const m of it.meshes){
+    m.updateWorldMatrix(true,false);
+    const g=m.geometry.clone(); g.applyMatrix4(m.matrixWorld);
+    const skin=new THREE.Mesh(g,new THREE.MeshStandardMaterial({color:0x2aa8c8,emissive:0x0b3a49,
+      emissiveIntensity:0.9,metalness:0.2,roughness:0.35,transparent:true,opacity:0.8,side:THREE.DoubleSide}));
+    const wire=new THREE.Mesh(g,new THREE.MeshBasicMaterial({color:0x7fecff,wireframe:true,transparent:true,opacity:0.12}));
+    HOLO.group.add(skin); HOLO.group.add(wire); box.expandByObject(skin);
+  }
+  HOLO.scene.add(HOLO.group);
+  const c=box.getCenter(new THREE.Vector3()), sz=box.getSize(new THREE.Vector3());
+  HOLO.group.position.set(-c.x,-c.y,-c.z);
+  HOLO.radius=Math.max(sz.x,sz.y,sz.z)*1.7||300;
+  document.getElementById("holoTitle").textContent=((projName&&projName.value)||"MODEL").toUpperCase()+"  ·  HOLOGRAM";
+  holoResize(); cancelAnimationFrame(HOLO.raf); HOLO.t=0; holoLoop();
+}
+function holoResize(){ if(!HOLO.renderer)return; const cnv=document.getElementById("holoCanvas");
+  const w=cnv.clientWidth||window.innerWidth, h=cnv.clientHeight||window.innerHeight;
+  HOLO.renderer.setPixelRatio(Math.min(2,window.devicePixelRatio||1)); HOLO.renderer.setSize(w,h,false);
+  HOLO.cam.aspect=w/h; HOLO.cam.updateProjectionMatrix(); }
+function holoLoop(){ HOLO.raf=requestAnimationFrame(holoLoop); HOLO.t+=0.006;
+  const r=HOLO.radius, az=HOLO.t, pol=1.12;
+  HOLO.cam.position.set(Math.sin(az)*Math.sin(pol)*r, Math.cos(pol)*r+r*0.34, Math.cos(az)*Math.sin(pol)*r);
+  HOLO.cam.lookAt(0,0,0); HOLO.renderer.render(HOLO.scene,HOLO.cam); }
+function closeHologram(){ cancelAnimationFrame(HOLO.raf); HOLO.raf=0;
+  const ov=document.getElementById("holoOverlay"); ov.classList.remove("on"); ov.setAttribute("aria-hidden","true"); }
+document.getElementById("wsHolo").onclick=openHologram;
+document.getElementById("holoClose").onclick=closeHologram;
+document.getElementById("holoOverlay").addEventListener("click",e=>{if(e.target.id==="holoOverlay")closeHologram();});
+window.addEventListener("keydown",e=>{if(e.key==="Escape"&&document.getElementById("holoOverlay").classList.contains("on"))closeHologram();});
+window.addEventListener("resize",()=>{if(document.getElementById("holoOverlay").classList.contains("on"))holoResize();});
+
+/* box + colour + undo wiring */
+document.getElementById("wsAddBox").onclick=()=>wsAddBox();
+["wsBoxL","wsBoxW","wsBoxH"].forEach(id=>document.getElementById(id).addEventListener("change",()=>{
+  const it=wsSelItem(); if(!it||!it.box)return;
+  wsRebuildBox(it,{l:+document.getElementById("wsBoxL").value||it.box.l,
+                   w:+document.getElementById("wsBoxW").value||it.box.w,
+                   h:+document.getElementById("wsBoxH").value||it.box.h}, true);
+  wsSyncInputs();
+}));
+let wsPickStart=null;
+const wsColorEl=document.getElementById("wsColor");
+wsColorEl.addEventListener("input",()=>{const it=wsSelItem(); if(!it)return;
+  if(WS.paint&&WS.paint.on){wsPaintSetColor(parseInt(wsColorEl.value.slice(1),16));return;}
+  if(wsPickStart==null)wsPickStart=it.color; wsApplyColor(it,parseInt(wsColorEl.value.slice(1),16),false);});   // live preview
+wsColorEl.addEventListener("change",()=>{const it=wsSelItem(); if(!it){wsPickStart=null;return;}
+  if(WS.paint&&WS.paint.on){wsPickStart=null;return;}
+  const prev=wsPickStart; wsPickStart=null;
+  if(prev!=null && prev!==it.color)wsPushUndo(()=>wsApplyColor(it,prev,false));   // one undo step for the whole drag
+  wsColorSyncUI(it);});
+document.getElementById("wsHex").addEventListener("change",e=>{const it=wsSelItem(); if(!it)return;
+  const h=e.target.value.trim().replace(/^#/,""); if(!/^[0-9a-fA-F]{6}$/.test(h)){wsColorSyncUI(it);toast("Enter a 6-digit hex colour, e.g. #C81E2A.");return;}
+  if(WS.paint&&WS.paint.on){wsPaintSetColor(parseInt(h,16));return;}
+  wsApplyColor(it,parseInt(h,16),true);});
+document.getElementById("wsColorReset").onclick=()=>{const it=wsSelItem(); if(it)wsApplyColor(it,WS_STEEL,true);};
+document.getElementById("wsUndo").onclick=wsUndo;
+document.getElementById("wsPaintBtn").onclick=()=>wsPaintToggle();
+document.getElementById("wsPaintGo").onclick=wsPaintApply;
+document.getElementById("wsPaintClear").onclick=wsPaintClearAll;
+
+/* =========================================================================
+   CLOUD DATABASE — Supabase (Postgres via PostgREST, no SDK / zero-build)
+   ========================================================================= */
+/* Safe to run more than once, and safe to run against a table that already exists.
+   The old version was create-table-only with the unique constraint inline, so on an
+   existing table the whole statement was skipped and the constraint never appeared —
+   which is exactly how you end up with a table that looks right and rejects every save. */
+const SB_SQL=`-- Run in Supabase → SQL editor. Safe to run again on an existing table.
+create table if not exists lee3d_projects (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  category text not null default 'uncategorized',
+  kind text not null default 'object',
+  data jsonb not null,
+  updated_at timestamptz default now()
+);
+
+-- Saving the same project twice has to UPDATE it, not add a duplicate, and that needs
+-- this constraint. Added separately so it also lands on a table you already made.
+-- If it errors on duplicates, clear them first, then run it again.
+alter table lee3d_projects drop constraint if exists lee3d_projects_name_category_key;
+alter table lee3d_projects add  constraint lee3d_projects_name_category_key
+  unique (name, category);
+
+alter table lee3d_projects enable row level security;
+-- personal/prototype: let the anon key read + write.
+-- for multi-user, replace with auth-based row policies.
+drop policy if exists "lee3d public rw" on lee3d_projects;
+create policy "lee3d public rw" on lee3d_projects
+  for all using (true) with check (true);`;
+
+const CLOUD={
+  cfg:{url:"",key:""},
+  hardwired:false,
+  load(){
+    const hw={url:window.LEE3D_CFG("supabaseUrl"),key:window.LEE3D_CFG("supabaseKey")};
+    if(hw.url && hw.key){
+      this.cfg.url=hw.url; this.cfg.key=hw.key; this.hardwired=true; return;   // injected at deploy — not stored on device
+    }
+    try{const c=JSON.parse(localStorage.getItem("lee3d.supabase")||"{}");this.cfg.url=c.url||"";this.cfg.key=c.key||"";}catch(_){}
+  },
+  save(){ if(this.hardwired)return; try{localStorage.setItem("lee3d.supabase",JSON.stringify(this.cfg));}catch(_){}},
+  ok(){return !!(this.cfg.url&&this.cfg.key);},
+  base(){return this.cfg.url.replace(/\/+$/,"")+"/rest/v1/lee3d_projects";},
+  headers(extra){return Object.assign({apikey:this.cfg.key,Authorization:"Bearer "+this.cfg.key,"Content-Type":"application/json"},extra||{});},
+  /* SAVE ONE PROJECT, WHETHER OR NOT THE TABLE HAS THE UNIQUE CONSTRAINT.
+     This used to be a bare PostgREST upsert: POST ?on_conflict=name,category with
+     Prefer: resolution=merge-duplicates. That compiles to ON CONFLICT (name,category) DO
+     UPDATE, and Postgres refuses that unless a unique index covers exactly those columns —
+     error 42P10, "no unique or exclusion constraint matching the ON CONFLICT
+     specification". The setup SQL below does declare the constraint, but it is written as
+     CREATE TABLE IF NOT EXISTS: run against a table that already exists (one made in the
+     Supabase table editor, say) the whole statement is a no-op and the constraint is never
+     added. The table then looks perfect — right columns, right types — and every single
+     cloud save fails.
+     So: try the fast path, and if the constraint isn't there, do the upsert by hand —
+     look the row up, PATCH it if it exists, INSERT it if it doesn't. Same result, one
+     extra round trip, and it works on a table nobody migrated. */
+  async upsert(name,kind,data,category){
+    const cat=category||"uncategorized";
+    const row={name,kind,category:cat,data,updated_at:new Date().toISOString()};
+    const r=await fetch(this.base()+"?on_conflict=name,category",{method:"POST",
+      headers:this.headers({Prefer:"resolution=merge-duplicates,return=representation"}),
+      body:JSON.stringify([row])});
+    if(r.ok)return (await r.json())[0];
+    const msg=(await r.text()).slice(0,300);
+    // 42P10 is the missing constraint. Anything else is a real error and should surface.
+    if(!/42P10|no unique or exclusion constraint/i.test(msg))
+      throw new Error(this.explain(r.status,msg));
+    return await this.upsertByHand(row);
+  },
+  async upsertByHand(row){
+    const q=`?name=eq.${encodeURIComponent(row.name)}&category=eq.${encodeURIComponent(row.category)}&select=id`;
+    const f=await fetch(this.base()+q,{headers:this.headers()});
+    if(!f.ok)throw new Error(this.explain(f.status,(await f.text()).slice(0,200)));
+    const hit=(await f.json())[0];
+    const r=hit
+      ? await fetch(this.base()+"?id=eq."+hit.id,{method:"PATCH",
+          headers:this.headers({Prefer:"return=representation"}),body:JSON.stringify(row)})
+      : await fetch(this.base(),{method:"POST",
+          headers:this.headers({Prefer:"return=representation"}),body:JSON.stringify([row])});
+    if(!r.ok)throw new Error(this.explain(r.status,(await r.text()).slice(0,200)));
+    const j=await r.json();
+    return Array.isArray(j)?j[0]:j;
+  },
+  /* Say what the status actually means. A 401/403 here is almost always row-level security
+     switched on with no policy behind it, which reads as "connected" and then refuses every
+     write — and the raw PostgREST body doesn't say so. */
+  explain(status,body){
+    if(status===401||status===403)
+      return `Supabase refused it (${status}). The table most likely has row-level security on `
+           + `with no policy allowing the anon key. Open the SQL shown under “Help” and run the `
+           + `policy part. ${body}`;
+    if(status===404)
+      return `No lee3d_projects table at that URL (404). Run the SQL under “Help” once. ${body}`;
+    return "HTTP "+status+" "+body;
+  },
+  async list(){const r=await fetch(this.base()+"?select=id,name,kind,category,updated_at&order=updated_at.desc",{headers:this.headers()});
+    if(!r.ok)throw new Error("HTTP "+r.status);return await r.json();},
+  async get(id){const r=await fetch(this.base()+"?id=eq."+id+"&select=*",{headers:this.headers()});
+    if(!r.ok)throw new Error("HTTP "+r.status);return (await r.json())[0];},
+  async del(id){const r=await fetch(this.base()+"?id=eq."+id,{method:"DELETE",headers:this.headers()});
+    if(!r.ok)throw new Error("HTTP "+r.status);}
+};
+
+function sbStatus(txt,color){const el=document.getElementById("sbState");if(el){el.textContent=txt;el.style.color=color||"var(--ink-faint)";}}
+function sbLoadRow(row){const d=row.data;
+  if(d&&d.schema&&String(d.schema).indexOf("assembly")>=0){switchTab("workshop");wsInit();requestAnimationFrame(wsResize);wsLoadAssembly(d);toast(`Loaded assembly “${row.name}” from cloud.`);}
+  else{applyProfile(d);switchTab("three");toast(`Loaded “${row.name}” from cloud — resume editing.`);}}
+async function sbRefreshList(){const host=document.getElementById("sbList");if(!host)return;
+  if(!CLOUD.ok()){host.innerHTML='<div class="hint" style="opacity:.6">Connect to Supabase to see saved projects.</div>';return;}
+  try{const rows=await CLOUD.list();
+    window.__cloudCats=[...new Set(rows.map(r=>r.category).filter(Boolean))];refreshCategories();
+    host.innerHTML="";
+    if(!rows.length){host.innerHTML='<div class="hint" style="opacity:.6">No cloud projects yet.</div>';return;}
+    const groups={};rows.forEach(r=>{const c=r.category||"uncategorized";(groups[c]=groups[c]||[]).push(r);});
+    Object.keys(groups).sort((a,b)=>a.localeCompare(b)).forEach(cat=>{
+      const h=document.createElement("div");h.className="ws-lbl";h.style.marginTop="8px";h.textContent=cat+" ("+groups[cat].length+")";host.appendChild(h);
+      groups[cat].forEach(row=>{const el=document.createElement("div");el.className="ws-row";
+        el.innerHTML='<span class="nm"></span><span class="tg"></span><button title="delete">×</button>';
+        el.querySelector(".nm").textContent=row.name;el.querySelector(".tg").textContent=row.kind==="assembly"?"asm":"obj";
+        el.querySelector(".nm").title="load";
+        el.querySelector(".nm").onclick=async ()=>{try{sbLoadRow(await CLOUD.get(row.id));}catch(e){toast("Load failed: "+e.message);}};
+        el.querySelector("button").onclick=async ()=>{if(!confirm('Delete "'+row.name+'" from the cloud?'))return;try{await CLOUD.del(row.id);sbRefreshList();}catch(e){toast("Delete failed: "+e.message);}};
+        host.appendChild(el);});
+    });
+  }catch(e){toast("Couldn't list cloud: "+e.message);sbStatus("error","var(--warn)");}}
+
+document.getElementById("sbHelp").onclick=e=>{e.preventDefault();const pre=document.getElementById("sbSql");
+  pre.textContent=SB_SQL;pre.style.display=pre.style.display==="none"?"block":"none";};
+document.getElementById("sbConnect").onclick=async ()=>{
+  CLOUD.cfg.url=document.getElementById("sbUrl").value.trim();CLOUD.cfg.key=document.getElementById("sbKey").value.trim();CLOUD.save();
+  if(!CLOUD.ok()){sbStatus("not set");return;}
+  sbStatus("connecting…","var(--ink-dim)");
+  try{await CLOUD.list();sbStatus("connected ✓","var(--good)");toast("Cloud connected.");sbRefreshList();}
+  catch(e){sbStatus("error","var(--warn)");toast("Couldn't reach Supabase: "+e.message);}};
+document.getElementById("sbSave").onclick=async ()=>{
+  if(!CLOUD.ok()){toast("Add your Supabase URL + anon key first (then Connect).");return;}
+  const p=fullProfile(),name=(projName.value||"untitled-object").trim();
+  try{await CLOUD.upsert(name,"object",p,p.category);toast(`Saved “${name}” to the cloud ✓`);sbRefreshList();}
+  catch(e){toast("Cloud save failed: "+e.message);}};
+document.getElementById("sbRefresh").onclick=sbRefreshList;
+
+/* restore cloud config on load */
+CLOUD.load();
+(function(){const u=document.getElementById("sbUrl"),k=document.getElementById("sbKey"),c=document.getElementById("sbConnect");
+  if(CLOUD.hardwired){
+    [u,k,c].forEach(el=>{if(el)el.style.display="none";});
+    sbStatus("hard-wired via deploy config ✓","var(--good)");
+  } else { if(u)u.value=CLOUD.cfg.url; if(k)k.value=CLOUD.cfg.key; }
+  if(CLOUD.ok()){sbStatus(CLOUD.hardwired?"connecting… (deploy config)":"connecting…","var(--ink-dim)");
+    CLOUD.list().then(()=>{sbStatus(CLOUD.hardwired?"connected ✓ (deploy config)":"connected ✓","var(--good)");sbRefreshList();}).catch(()=>sbStatus("offline","var(--warn)"));}
+})();
+
+/* =========================================================================
+   SCULPT — trim / add / smooth brush on the 3D shell.
+   Displaces outer+inner vertices together along the outer normal, so wall
+   thickness and topology are preserved (the shell stays watertight).
+   ========================================================================= */
+const SC={on:false, mode:"add", radius:14, strength:1.4, sym:true, off:null, io:0,
+  baseOuter:null, baseInner:null, baseNrm:null, ring:null,
+  strokes:null, hullWork:null, hullBase:null, hullNrm:null, hullAdj:null, hullVC:0};
+const scRay=new THREE.Raycaster();
+
+function computeOuterNormals(outer,N,M){
+  const rows=M+1, gi=(i,j)=>i*rows+j, nrm=outer.map(()=>[0,0,0]);
+  const sub=(P,Q)=>[P[0]-Q[0],P[1]-Q[1],P[2]-Q[2]], crs=(U,V)=>[U[1]*V[2]-U[2]*V[1],U[2]*V[0]-U[0]*V[2],U[0]*V[1]-U[1]*V[0]];
+  for(let i=0;i<N;i++)for(let j=0;j<M;j++){const a=gi(i,j),b=gi(i+1,j),c=gi(i+1,j+1),d=gi(i,j+1);
+    for(const [x,y,z] of [[a,b,c],[a,c,d]]){const n=crs(sub(outer[y],outer[x]),sub(outer[z],outer[x]));
+      for(const k of [x,y,z]){nrm[k][0]+=n[0];nrm[k][1]+=n[1];nrm[k][2]+=n[2];}}}
+  for(const n of nrm){const l=Math.hypot(n[0],n[1],n[2])||1;n[0]/=l;n[1]/=l;n[2]/=l;}
+  return nrm;
+}
+function sculptCache(){
+  if(S.mode==="projection"){                          // hull: cache the built surface for live strokes
+    if(!bodyMesh)return;
+    const posAttr=bodyMesh.geometry.attributes.position, idx=bodyMesh.geometry.index;
+    const total=posAttr.count, hollow=(S.hullHollow!==false), vc=hollow?Math.floor(total/2):total;
+    SC.hullVC=vc;
+    SC.hullWork=new Float32Array(posAttr.array);       // full working copy (outer [+ inner])
+    SC.hullBase=new Float32Array(posAttr.array.subarray(0,vc*3));
+    const otri=[]; if(idx){const ia=idx.array; for(let q=0;q<ia.length;q+=3){if(ia[q]<vc&&ia[q+1]<vc&&ia[q+2]<vc)otri.push(ia[q],ia[q+1],ia[q+2]);}}
+    SC.hullNrm=hullVertexNormals(SC.hullBase,otri);
+    SC.hullAdj=hullAdjacency(SC.hullBase,otri);
+    if(!SC.strokes)SC.strokes=[];
+    return;
+  }
+  const N=Math.max(8,S.st|0), M=Math.max(6,S.seg|0), io=(N+1)*(M+1);
+  const prof=currentProfile(); prof.sculpt=null;               // base = the un-sculpted shape
+  const g=makeBody(prof);
+  SC.io=io; SC.baseOuter=[]; SC.baseInner=[];
+  for(let k=0;k<io;k++)SC.baseOuter.push([g.positions[k*3],g.positions[k*3+1],g.positions[k*3+2]]);
+  for(let k=0;k<io;k++)SC.baseInner.push([g.positions[(io+k)*3],g.positions[(io+k)*3+1],g.positions[(io+k)*3+2]]);
+  SC.baseNrm=computeOuterNormals(SC.baseOuter,N,M);
+  if(!SC.off || SC.off.length!==io) SC.off=new Float32Array(io);
+}
+function applySculptLive(){
+  if(S.mode==="projection"){
+    if(!bodyMesh||!SC.hullWork)return;
+    const pos=bodyMesh.geometry.attributes.position;
+    if(pos.array.length===SC.hullWork.length){ pos.array.set(SC.hullWork); pos.needsUpdate=true;
+      bodyMesh.geometry.computeVertexNormals(); bodyMesh.geometry.computeBoundingBox(); requestRender(); }
+    return;
+  }
+  if(!bodyMesh||!SC.baseOuter)return;
+  const pos=bodyMesh.geometry.attributes.position, io=SC.io;
+  if(pos.count<2*io)return;
+  for(let k=0;k<io;k++){const b=SC.baseOuter[k],bi=SC.baseInner[k],n=SC.baseNrm[k],o=SC.off[k];
+    pos.setXYZ(k, b[0]+n[0]*o, b[1]+n[1]*o, b[2]+n[2]*o);
+    pos.setXYZ(io+k, bi[0]+n[0]*o, bi[1]+n[1]*o, bi[2]+n[2]*o);}
+  pos.needsUpdate=true; bodyMesh.geometry.computeVertexNormals(); bodyMesh.geometry.computeBoundingBox(); requestRender();
+}
+// the ring that follows your cursor across the surface — you can see the brush before
+// you commit to a stroke, which is the difference between painting and guessing
+function scEnsureRing(){
+  if(SC.ring||typeof scene==="undefined"||!scene)return;
+  const g=new THREE.RingGeometry(0.9,1,48);
+  const m=new THREE.MeshBasicMaterial({color:0xFF7A2F,side:THREE.DoubleSide,transparent:true,opacity:0.95,depthTest:false});
+  SC.ring=new THREE.Mesh(g,m); SC.ring.renderOrder=999; SC.ring.visible=false; scene.add(SC.ring);
+}
+function scHitAt(e){
+  if(!bodyMesh)return null;
+  const rect=glCanvas.getBoundingClientRect();
+  scRay.setFromCamera({x:((e.clientX-rect.left)/rect.width)*2-1, y:-((e.clientY-rect.top)/rect.height)*2+1}, camera);
+  return scRay.intersectObject(bodyMesh,false)[0]||null;
+}
+function scShowRing(hit){
+  scEnsureRing(); if(!SC.ring)return;
+  if(!hit||!SC.on){ if(SC.ring.visible){SC.ring.visible=false;requestRender();} return; }
+  SC.ring.visible=true;
+  SC.ring.position.copy(hit.point);
+  const n=hit.face?hit.face.normal.clone().transformDirection(bodyMesh.matrixWorld):new THREE.Vector3(0,1,0);
+  SC.ring.lookAt(hit.point.clone().add(n));
+  SC.ring.scale.setScalar(SC.radius);
+  SC.ring.material.color.setHex(SC.mode==="trim"?0x46B7D9:SC.mode==="smooth"?0xE8C547:0xFF7A2F);
+  requestRender();
+}
+function sculptDab(e){
+  if(S.mode==="projection"){
+    if(!bodyMesh||!SC.hullWork)return false;
+    const rect=glCanvas.getBoundingClientRect();
+    scRay.setFromCamera({x:((e.clientX-rect.left)/rect.width)*2-1, y:-((e.clientY-rect.top)/rect.height)*2+1}, camera);
+    const hit=scRay.intersectObject(bodyMesh,false)[0]; if(!hit)return false;
+    const inv=new THREE.Matrix4().copy(bodyMesh.matrixWorld).invert();
+    const lp=hit.point.clone().applyMatrix4(inv);
+    const base={x:lp.x,y:lp.y,z:lp.z,r:SC.radius,amt:SC.strength,mode:SC.mode};
+    const strokes=SC.sym?[base,{x:base.x,y:-base.y,z:base.z,r:base.r,amt:base.amt,mode:base.mode}]:[base];
+    for(const s of strokes){ applyStroke(SC.hullWork,SC.hullNrm,SC.hullAdj,s,SC.hullVC); SC.strokes.push(s); }
+    applySculptLive(); return true;
+  }
+  if(!bodyMesh||!SC.baseOuter)return false;
+  const rect=glCanvas.getBoundingClientRect();
+  const nd={x:((e.clientX-rect.left)/rect.width)*2-1, y:-((e.clientY-rect.top)/rect.height)*2+1};
+  scRay.setFromCamera(nd,camera);
+  const hit=scRay.intersectObject(bodyMesh,false)[0]; if(!hit)return false;
+  const inv=new THREE.Matrix4().copy(bodyMesh.matrixWorld).invert();
+  const lp=hit.point.clone().applyMatrix4(inv);
+  const r=SC.radius, r2=r*r, io=SC.io, N=Math.max(8,S.st|0), M=Math.max(6,S.seg|0), rows=M+1;
+  if(SC.mode==="smooth"){
+    const gi=(i,j)=>i*rows+j;
+    for(let k=0;k<io;k++){const P=SC.baseOuter[k];const dx=P[0]-lp.x,dy=P[1]-lp.y,dz=P[2]-lp.z,d2=dx*dx+dy*dy+dz*dz;
+      if(d2<r2){const i=Math.floor(k/rows),j=k%rows;let s=0,c=0;
+        for(const [di,dj] of [[1,0],[-1,0],[0,1],[0,-1]]){const ni=i+di,nj=j+dj;if(ni>=0&&ni<=N&&nj>=0&&nj<=M){s+=SC.off[gi(ni,nj)];c++;}}
+        const avg=c?s/c:SC.off[k], fall=1-Math.sqrt(d2)/r;
+        SC.off[k]+=(avg-SC.off[k])*Math.min(1,SC.strength*0.4)*fall;}}
+  } else {
+    const str=SC.strength*(SC.mode==="trim"?-1:1);
+    // symmetry mirrors the BRUSH across the centreline, so both sides get an identical
+    // stroke and no vertex can be hit twice
+    const tips=[lp]; if(SC.sym)tips.push({x:lp.x,y:-lp.y,z:lp.z});
+    for(let k=0;k<io;k++){
+      const P=SC.baseOuter[k]; let best=0;
+      for(const c of tips){
+        const dx=P[0]-c.x,dy=P[1]-c.y,dz=P[2]-c.z,d2=dx*dx+dy*dy+dz*dz;
+        if(d2<r2){const fall=1-Math.sqrt(d2)/r, e2=str*fall*fall; if(Math.abs(e2)>Math.abs(best))best=e2;}
+      }
+      if(best)SC.off[k]+=best;
+    }
+  }
+  applySculptLive(); return true;
+}
+function commitSculpt(){ requestRebuild(); }        // clean re-bake + refresh readouts
+function clearSculpt(){ SC.off=null; SC.strokes=null; SC.hullWork=null; requestRebuild(); toast("Sculpt cleared — back to the traced shape."); }
+
+function setSculpt(on){
+  if(on && S.mode!=="projection" && S.shape==="revolve"){toast("Sculpt needs a shell surface — switch off Round object (revolve) first.");document.getElementById("tSculpt").classList.remove("on");return;}
+  SC.on=on;
+  document.getElementById("scPanel").style.display=on?"block":"none";
+  document.getElementById("tSculpt").classList.toggle("on",on);
+  const st=document.getElementById("sSt"), sg=document.getElementById("sSeg");
+  if(st)st.disabled=on; if(sg)sg.disabled=on;           // lock mesh resolution while sculpting
+  const ov=document.getElementById("dims");
+  if(on){sculptCache();toast("Paint mode — drag on the model. The ring is your brush; <b>[</b>/<b>]</b> resize it.");}
+  else if(SC.ring){SC.ring.visible=false;requestRender();}
+}
+
+/* sculpt UI wiring */
+document.getElementById("tSculpt").onclick=()=>setSculpt(!SC.on);
+document.querySelectorAll("#scMode button").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll("#scMode button").forEach(x=>x.classList.remove("on"));b.classList.add("on");SC.mode=b.dataset.m;});
+document.getElementById("scR").addEventListener("input",e=>{SC.radius=+e.target.value;document.getElementById("vScR").textContent=e.target.value;});
+document.getElementById("scS").addEventListener("input",e=>{SC.strength=+e.target.value;document.getElementById("vScS").textContent=(+e.target.value).toFixed(1);});
+document.getElementById("scSym").addEventListener("change",e=>{SC.sym=e.target.checked;});
+document.getElementById("scClear").onclick=clearSculpt;
+// [ and ] resize the brush, the way every paint tool does
+window.addEventListener("keydown",e=>{
+  if(!SC.on||e.target.tagName==="INPUT"||e.target.tagName==="TEXTAREA")return;
+  if(e.key!=="["&&e.key!=="]")return;
+  SC.radius=Math.max(3,Math.min(80, SC.radius*(e.key==="["?0.85:1.18)));
+  const el=document.getElementById("scR"); if(el)el.value=Math.round(SC.radius);
+  const v=document.getElementById("vScR"); if(v)v.textContent=Math.round(SC.radius);
+  if(SC.ring&&SC.ring.visible){SC.ring.scale.setScalar(SC.radius);requestRender();}
+});
+
+/* =========================================================================
+   GITHUB LIBRARY — read *.profile.json / *.assembly.json from a public repo
+   (your LEE3D-Lib). Uses the GitHub API + raw.githubusercontent (no auth).
+   ========================================================================= */
+const GHLIB={ repo:"BEARME-A/LEE3D-Lib", branch:"main", loaded:false,
+  load(){try{const c=JSON.parse(localStorage.getItem("lee3d.ghlib")||"{}");if(c.repo)this.repo=c.repo;}catch(_){}},
+  persist(){try{localStorage.setItem("lee3d.ghlib",JSON.stringify({repo:this.repo}));}catch(_){}},
+  async tree(branch){const [o,r]=this.repo.split("/");
+    const res=await fetch(`https://api.github.com/repos/${o}/${r}/git/trees/${branch}?recursive=1`,{headers:{Accept:"application/vnd.github+json"}});
+    if(!res.ok)throw new Error("HTTP "+res.status); return res.json();},
+  async list(){
+    let branch="main",data;
+    try{data=await this.tree("main");}
+    catch(e){ if((""+e.message).match(/40[49]/)){branch="master";data=await this.tree("master");} else throw e; }
+    this.branch=branch;
+    const files=(data.tree||[]).filter(t=>t.type==="blob"&&/\.(profile\.json|assembly\.json|stl)$/i.test(t.path));
+    return files.map(t=>{const stl=/\.stl$/i.test(t.path);
+      return {path:t.path, name:t.path.split("/").pop().replace(/\.(profile\.json|assembly\.json|stl)$/i,""),
+              kind: stl?"stl":(/\.assembly\.json$/i.test(t.path)?"assembly":"object")};});
+  },
+  async fetchDoc(path){const [o,r]=this.repo.split("/");
+    const res=await fetch(`https://raw.githubusercontent.com/${o}/${r}/${this.branch}/${path}`);
+    if(!res.ok)throw new Error("HTTP "+res.status); return res.json();},
+  async fetchSTL(path){const [o,r]=this.repo.split("/");
+    const res=await fetch(`https://raw.githubusercontent.com/${o}/${r}/${this.branch}/${path}`);
+    if(!res.ok)throw new Error("HTTP "+res.status);
+    const buf=await res.arrayBuffer();
+    return {stl:true, positions:parseSTL(buf), path, name:path.split("/").pop().replace(/\.stl$/i,"")};}
+};
+function ghState(t,c){const el=document.getElementById("ghState");if(el){el.textContent=t;el.style.color=c||"var(--ink-faint)";}}
+async function ghRefresh(silent){
+  GHLIB.repo=(document.getElementById("ghRepo").value||"BEARME-A/LEE3D-Lib").trim(); GHLIB.persist();
+  if(!/^[^/\s]+\/[^/\s]+$/.test(GHLIB.repo)){ghState("use owner/repo","var(--warn)");return;}
+  ghState("loading…","var(--ink-dim)");
+  try{
+    const items=await GHLIB.list(); GHLIB.loaded=true;
+    const host=document.getElementById("ghList"); host.innerHTML="";
+    if(!items.length){host.innerHTML='<div class="hint" style="opacity:.6">No <code>*.profile.json</code> / <code>*.assembly.json</code> / <code>*.stl</code> found in this repo. Export a model (or drop an STL) and commit it, then Refresh.</div>';ghState(`0 models · ${GHLIB.branch}`,"var(--ink-dim)");return;}
+    items.forEach(it=>{const el=document.createElement("div");el.className="ws-row";
+      el.innerHTML='<span class="nm"></span><span class="tg"></span>';
+      el.querySelector(".nm").textContent=it.name; el.querySelector(".nm").title=it.path;
+      el.querySelector(".tg").textContent=it.kind==="stl"?"stl":(it.kind==="assembly"?"asm":"obj");
+      el.querySelector(".nm").onclick=async ()=>{try{
+        if(it.kind==="stl"){const d=await GHLIB.fetchSTL(it.path);switchTab("workshop");wsInit();requestAnimationFrame(wsResize);wsAddMesh(d.positions,it.name,null,undefined,it.path);toast(`Added “${it.name}” (STL mesh) to the workshop.`);return;}
+        const d=await GHLIB.fetchDoc(it.path);
+        if(d&&d.schema&&(""+d.schema).indexOf("assembly")>=0){switchTab("workshop");wsInit();requestAnimationFrame(wsResize);wsLoadAssembly(d);toast(`Loaded assembly “${it.name}” from the repo.`);}
+        else{applyProfile(d);switchTab("three");toast(`Loaded “${it.name}” from the repo — resume editing.`);}
+      }catch(e){toast("Load failed: "+e.message);}};
+      host.appendChild(el);});
+    ghState(`${items.length} model(s) · ${GHLIB.branch}`,"var(--good)");
+  }catch(e){ghState("error: "+e.message,"var(--warn)"); if(!silent)toast("Couldn't read repo: "+e.message+" (public repos only; GitHub API allows ~60 loads/hour without a token).");}
+}
+document.getElementById("ghRefresh").onclick=()=>ghRefresh(false);
+
+/* --- write-back: commit the current model to the repo via the Contents API --- */
+function ghTok(){return (document.getElementById("ghToken").value||"").trim();}
+(function(){try{const t=localStorage.getItem("lee3d.ghtoken");if(t){document.getElementById("ghToken").value=t;document.getElementById("ghRemember").checked=true;}}catch(_){}})();
+function ghRememberSync(){const on=document.getElementById("ghRemember").checked;
+  try{ if(on)localStorage.setItem("lee3d.ghtoken",ghTok()); else localStorage.removeItem("lee3d.ghtoken"); }catch(_){}}
+document.getElementById("ghRemember").addEventListener("change",ghRememberSync);
+document.getElementById("ghToken").addEventListener("input",()=>{if(document.getElementById("ghRemember").checked)ghRememberSync();refreshPublishUI();});
+document.getElementById("backendUrl").addEventListener("input",()=>refreshPublishUI());
+// Publishing to the shared repo needs a GitHub WRITE token. That can never live in this
+// page — a static site's source is readable by anyone, so it would hand the whole repo to
+// the internet (and GitHub's secret scanning revokes exposed tokens anyway). The backend
+// already holds one server-side, so we go through it: then nobody needs to paste anything.
+// Where a publish can go, in order of preference. The backend is preferred because the
+// token lives on the server there, so everyone can publish with nothing to set up.
+function publishRoute(hasBackend,hasToken){ return hasBackend?"backend":(hasToken?"token":null); }
+async function publishViaBackend(){
+  const base=(typeof beBase==="function")?beBase():""; if(!base)return false;
+  const doc=fullProfile(), name=slug(doc.name||"object"), cat=slug(doc.category||"misc");
+  const path=`json/${cat}/${name}.profile.json`;
+  ghState("publishing…","var(--ink-dim)");
+  const r=await fetch(base+"/library/commit",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({path,content_base64:b64utf8(JSON.stringify(doc,null,2)),message:`LEE3D: ${name}`})});
+  if(!r.ok)throw new Error("HTTP "+r.status+" "+(await r.text()).slice(0,120));
+  const j=await r.json().catch(()=>({}));
+  toast(`Published “${name}” to the shared library ✓ <span class="mono">${j.path||path}</span>`);
+  ghState("published ✓","var(--good)");
+  uniLibItems._repo=null; ghRefresh(true); if(typeof wsRenderLib==="function")wsRenderLib();
+  return true;
+}
+async function publishToLibrary(){
+  const route=publishRoute(!!(typeof beBase==="function"&&beBase()), !!(typeof ghTok==="function"&&ghTok()));
+  if(route==="backend"){
+    try{ await publishViaBackend(); }
+    catch(e){ ghState("publish failed","var(--warn)"); toast("Publish failed: "+e.message); }
+    return;
+  }
+  if(route==="token") return ghCommitCurrent();          // the repo owner's own browser
+  toast("Publishing to the shared library needs the backend running — then it works for everyone with nothing to set up. (Your model is still safe: <b>Save</b> keeps it on this device and in the cloud.)");
+}
+async function ghCommitCurrent(){
+  const token=ghTok(); if(!token){toast("Paste a GitHub token with Contents: write first.");return;}
+  GHLIB.repo=(document.getElementById("ghRepo").value||"BEARME-A/LEE3D-Lib").trim();
+  if(!/^[^/\s]+\/[^/\s]+$/.test(GHLIB.repo)){ghState("use owner/repo","var(--warn)");return;}
+  if(!GHLIB.loaded){try{await GHLIB.list();}catch(_){}}          // resolve default branch (main/master)
+  const [o,r]=GHLIB.repo.split("/"), branch=GHLIB.branch||"main";
+  const doc=fullProfile(), name=slug(doc.name||"object"), cat=slug(doc.category||"misc");
+  const path=`json/${cat}/${name}.profile.json`;
+  const url=`https://api.github.com/repos/${o}/${r}/contents/${path}`;
+  const hdr={Authorization:"Bearer "+token, Accept:"application/vnd.github+json"};
+  ghState("saving to repo…","var(--ink-dim)");
+  try{
+    let sha; const g=await fetch(url+"?ref="+branch,{headers:hdr}); if(g.ok){sha=(await g.json()).sha;}
+    const body={message:`studio: save ${name}`, content:b64utf8(JSON.stringify(doc,null,2)), branch};
+    if(sha)body.sha=sha;
+    const res=await fetch(url,{method:"PUT",headers:{...hdr,"Content-Type":"application/json"},body:JSON.stringify(body)});
+    if(!res.ok){
+      /* GitHub's own wording here is "Resource not accessible by personal access token",
+         which describes nothing you can act on. With a fine-grained token it means one of
+         exactly two things, and the first is the usual one: the token was scoped to a
+         DIFFERENT repository than the one being written to. A token made against the
+         backend repo cannot write to the library repo, and GitHub reports that as 403
+         rather than 404 so as not to confirm the repo exists. */
+      if(res.status===403||res.status===404){
+        ghState("token can't write here","var(--warn)");
+        toast(`GitHub refused (${res.status}). A fine-grained token has to name <b>${GHLIB.repo}</b> itself under `
+            + `<b>Repository access</b>, and grant <b>Contents: Read and write</b> — Metadata-only is the default `
+            + `and won't do. A token scoped to a different repo gives exactly this error.`);
+        return;
+      }
+      if(res.status===401){ ghState("bad token","var(--warn)");
+        toast("GitHub rejected the token itself (401) — it may be expired, or pasted with a character missing."); return; }
+      if(res.status===409){ ghState("out of date","var(--warn)");
+        toast("That file changed in the repo since this page loaded. Refresh the library list and save again."); return; }
+      throw new Error("HTTP "+res.status+" "+(await res.text()).slice(0,140));
+    }
+    toast(`${sha?"Updated":"Saved"} “${name}” in ${GHLIB.repo} → ${path} ✓`);
+    ghState("saved ✓","var(--good)"); ghRefresh(true);
+  }catch(e){ghState("write error","var(--warn)");toast("Repo save failed: "+e.message);}
+}
+document.getElementById("ghCommit").onclick=ghCommitCurrent;
+document.getElementById("ghPublish").onclick=publishToLibrary;
+GHLIB.load(); document.getElementById("ghRepo").value=GHLIB.repo;
+// lazily fetch the first time the Library section is opened (keeps GitHub API calls minimal)
+(function(){const det=document.getElementById("ghRefresh").closest("details");
+  if(det)det.addEventListener("toggle",()=>{if(det.open&&!GHLIB.loaded)ghRefresh(true);});})();
+
+/* =========================================================================
+   BOOT
+   ========================================================================= */
+if(!window.THREE){
+  document.getElementById("viewThree").innerHTML=
+    '<div style="display:grid;place-items:center;height:100%;color:var(--ink-dim);text-align:center;padding:24px">'+
+    '3D library failed to load.<br>Check your network, then reload — the rest of the tool still works.</div>';
+}else{
+  initThree();rebuild();frameModel();
+  updateEdgeLabels();setTraceStatus();updateImpStatus();refreshSecUI();probeBackend();syncViewSize();
+  refreshCategories();
+  applyWiredConfig();
+  syncSize();          // size sliders start in the right state (disabled until traced)
+  syncWallUI();
+  refreshCrispUI();
+  featRender();
+  window.addEventListener("resize",()=>{
+    if(!document.getElementById("viewTrace").classList.contains("hide"))fitTrace();
+    if(!document.getElementById("viewImport").classList.contains("hide")&&IMP.img){layoutSheet();renderCrops();}
+    if(WS&&WS.ready&&!document.getElementById("viewWorkshop").classList.contains("hide"))wsResize();
+  });
+}
+</script>
+</body>
+</html>
