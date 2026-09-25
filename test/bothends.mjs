@@ -131,28 +131,78 @@ const BLOCK = {
   hullQuality:"normal", closedBottom:true, hullHollow:false
 };
 
+// A pocket over the middle of the top face: 40 x 24mm on a 100 x 60 body.
+const POCKET = (depth) => [{name:"roof panel", view:"top", depth,
+                            poly:[[0.3,0.3],[0.7,0.3],[0.7,0.7],[0.3,0.7]]}];
+
+// THE REAL TRACED CAR, LOADED FROM LEE3D-Lib BY BOTH ENDS.
+//
+// **Not from this repo's own test/fixture-hollow.json.** There are two copies of that fixture,
+// one here and one in the library, and as of 2026-09-25 they have DRIFTED — c058374f against
+// 68f75b4a. Loading whichever is nearest would have each end building a different car, which is
+// the exact fixture fault that made an earlier run of this comparison report 42%. One file,
+// read by both, and the Python side reads the same path.
+function loadCar() {
+  for (const base of ["LEE3D-Lib", "LEE3D-Lib-main"]) {
+    const f = path.join(HERE, "..", "..", base, "schema", "fixture-hollow.json");
+    try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch (_) { /* try the next */ }
+  }
+  return null;                       // the Python side skips the car rows and says why
+}
+const CAR = loadCar();
+
+// `body` groups cases for CALIBRATION. A dual contour's edge rounding is a property of the
+// SHAPE, not a constant: a box loses ~3.1% to twelve sharp edges and a traced car ~0.5%,
+// because a car is mostly curve. One global deficit would under-correct the block or
+// over-correct the car, so each body carries its own solid and is compared against that.
 const CASES = {
-  "block solid":             {},
-  "block hollow w5":         {hullHollow:true, wallThickness:5},
-  "block hollow w5 floor15": {hullHollow:true, wallThickness:5, wallTop:5, wallSide:5, wallBottom:15},
-  "block hollow w5 roof15":  {hullHollow:true, wallThickness:5, wallTop:15, wallSide:5, wallBottom:5},
-  "block hollow w5 side12":  {hullHollow:true, wallThickness:5, wallTop:5, wallSide:12, wallBottom:5},
-  "block hollow w5 open":    {hullHollow:true, wallThickness:5, closedBottom:false, openUnderside:true},
-  "block hollow w14 open":   {hullHollow:true, wallThickness:14, closedBottom:false, openUnderside:true},
+  "block solid":             {body:"block", p:{}},
+  "block hollow w5":         {body:"block", p:{hullHollow:true, wallThickness:5}},
+  "block hollow w5 floor15": {body:"block", p:{hullHollow:true, wallThickness:5, wallTop:5, wallSide:5, wallBottom:15}},
+  "block hollow w5 roof15":  {body:"block", p:{hullHollow:true, wallThickness:5, wallTop:15, wallSide:5, wallBottom:5}},
+  "block hollow w5 side12":  {body:"block", p:{hullHollow:true, wallThickness:5, wallTop:5, wallSide:12, wallBottom:5}},
+  "block hollow w5 open":    {body:"block", p:{hullHollow:true, wallThickness:5, closedBottom:false, openUnderside:true}},
+  "block hollow w14 open":   {body:"block", p:{hullHollow:true, wallThickness:14, closedBottom:false, openUnderside:true}},
+  // A pocket SHALLOWER than the wall is the control: it cannot break through at either end, so
+  // a gap here would be something else entirely and not the divergence being watched.
+  // CARVING A SOLID IS THE CONTROL, and it is the only pocket case the two ends agree on.
+  // Both simply remove the prism: the studio measured 4.60 cm3 against the kernel's 4.80, a 4%
+  // grid difference. Every HOLLOW pocket case diverges, including a shallow one, because this
+  // end pushes the cavity down to keep the wall and the kernel does not — so without a solid
+  // pair the feature-delta check would report every row and prove nothing.
+  "block solid pocket5":     {body:"block", p:{hullHollow:false, features:POCKET(-5)}},
+  "block hollow w5 pocket2": {body:"block", p:{hullHollow:true, wallThickness:5, features:POCKET(-2)}},
+  // And one AS DEEP as the wall. This end pushes the cavity down and keeps the wall; the kernel
+  // cuts into the cavity and leaves a hole. Measured: a ray up the pocket centre finds the roof
+  // 35.0-40.0 in the kernel without it, and NOTHING with it.
+  "block hollow w5 pocket5": {body:"block", p:{hullHollow:true, wallThickness:5, features:POCKET(-5)}},
+
+  // THE REAL CAR: 200mm, 153 pockets at 2.5mm, open underside, as saved at a 4.2mm wall.
+  "car solid":               {body:"car", car:true, p:{hullHollow:false, features:null}},
+  "car hollow w4.2":         {body:"car", car:true, p:{hullHollow:true}},
+  // Collin's own configuration. The wall drops BELOW the pocket depth, which is the regime no
+  // library fixture reaches as saved and the one his working model is actually in.
+  "car hollow w2.1":         {body:"car", car:true,
+                              p:{hullHollow:true, wallThickness:2.1, wallTop:2.1, wallSide:2.1, wallBottom:2.1}},
+  "car hollow w2.1 nofeat":  {body:"car", car:true,
+                              p:{hullHollow:true, wallThickness:2.1, wallTop:2.1, wallSide:2.1, wallBottom:2.1,
+                                 features:null}},
 };
 
 const out = {};
-for (const [name, extra] of Object.entries(CASES)) {
+for (const [name, c] of Object.entries(CASES)) {
+  if (c.car && !CAR) { out[name] = {body: c.body, skipped: "LEE3D-Lib is not checked out beside this repo"}; continue; }
   try {
-    const g = API.makeVisualHull({ ...BLOCK, ...extra });
+    const base = c.car ? { ...CAR, hullQuality:"normal" } : BLOCK;
+    const g = API.makeVisualHull({ ...base, ...c.p });
     const P = g.positions;
     let lo = [1e9,1e9,1e9], hi = [-1e9,-1e9,-1e9];
     for (let i = 0; i < P.length; i += 3)
       for (let k = 0; k < 3; k++) { if (P[i+k] < lo[k]) lo[k] = P[i+k]; if (P[i+k] > hi[k]) hi[k] = P[i+k]; }
-    out[name] = { cm3: +(g.volume/1000).toFixed(3), res: g.hullRes,
+    out[name] = { body: c.body, cm3: +(g.volume/1000).toFixed(3), res: g.hullRes,
                   bbox: [0,1,2].map(k => +(hi[k]-lo[k]).toFixed(3)) };
   } catch (e) {
-    out[name] = { error: String(e && e.message || e) };
+    out[name] = { body: c.body, error: String(e && e.message || e) };
   }
 }
 console.log(JSON.stringify({ missing: MISSING, cases: out }, null, 2));
