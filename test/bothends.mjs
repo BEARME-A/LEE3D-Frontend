@@ -137,11 +137,15 @@ const POCKET = (depth) => [{name:"roof panel", view:"top", depth,
 
 // THE REAL TRACED CAR, LOADED FROM LEE3D-Lib BY BOTH ENDS.
 //
-// **Not from this repo's own test/fixture-hollow.json.** There are two copies of that fixture,
-// one here and one in the library, and as of 2026-09-25 they have DRIFTED — c058374f against
-// 68f75b4a. Loading whichever is nearest would have each end building a different car, which is
-// the exact fixture fault that made an earlier run of this comparison report 42%. One file,
-// read by both, and the Python side reads the same path.
+// **Not from this repo's own test/fixture-hollow.json**, and on principle rather than because
+// the two differ in substance. They do differ by md5 — c058374f against 68f75b4a — and I
+// reported that as DRIFT before opening them. It is ONE TRAILING NEWLINE: 621302 bytes against
+// 621301, identical after rstrip, parsed objects equal. STATUS.md recorded exactly that on
+// 2026-08-16 and I published a cause from a hash mismatch without checking.
+//
+// Reading one file on both sides is still right: two copies of a fixture is two things that CAN
+// drift, and the day one of them gains a key the comparison silently stops comparing the same
+// car. That is the reason to do it, not the emergency I described.
 function loadCar() {
   for (const base of ["LEE3D-Lib", "LEE3D-Lib-main"]) {
     const f = path.join(HERE, "..", "..", base, "schema", "fixture-hollow.json");
