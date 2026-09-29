@@ -731,7 +731,7 @@ t("export: every header the backend sends about a difference is read here", () =
   const block = decomment(src.slice(i, i + 5000));
   for (const hdr of ["X-LEE3D-Through-Cuts", "X-LEE3D-Symmetric-Only", "X-LEE3D-Hollow-Failed",
                      "X-LEE3D-Pockets-Through-Wall", "X-LEE3D-Unusable-Views",
-                     "X-LEE3D-Skipped"]) {
+                     "X-LEE3D-Skipped", "X-LEE3D-Wall-Min", "X-LEE3D-Wall-Thin"]) {
     ok(block.includes(`headers.get("${hdr}")`),
        `${hdr} is sent by the backend and nothing here READS it — the STEP can differ from the `
        + `preview in that way and the person is never told`);
