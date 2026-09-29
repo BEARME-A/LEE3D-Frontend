@@ -8401,7 +8401,25 @@ function impPdfRenderList(){
 /* PICKING A DETAIL OUT OF A DRAWING SET.
    Two calls: one to read a page, one to crop the detail chosen from it. The detail list and
    the crop index the SAME list, so a person cannot be shown one drawing and handed another. */
+/* READING A PDF NEEDS THE BACKEND, and saying so is the whole point of this guard.
+   `beBase()` is empty until BACKEND_URL is substituted at deploy time, and `fetch("" + "/import/
+   pdf/sheet")` is a RELATIVE url — on GitHub Pages that hits the 404 page and comes back as a
+   perfectly ordinary failed response. The caller then reported "the backend could not read page
+   1 (404)", which says the backend rejected the file when there is no backend at all. Somebody
+   would go looking at their PDF.
+   Guarded in both fetchers rather than only at the call site, because either can be reached
+   from the console and a wrong answer here is expensive to chase. */
+function beReady(){ return !!beBase(); }
+/* NO SPACES AROUND THE `=`. `grabConst` in the suite matches `^const NAME=` literally, so
+   `const X = 1` extracts as nothing and the failure arrives later as a pile of unrelated
+   geometry errors rather than as "you forgot to list it". The file records that trap about
+   HOLLOW_WALL_CELLS; matching the style costs nothing and removes the landmine. */
+const NO_BACKEND="reading a PDF needs the exact backend, and none is configured. "
+  + "Set BACKEND_URL (a repo variable) and redeploy, or paste an address into Settings. "
+  + "Tracing an image still works without it.";
+
 async function impPdfSheet(file, page){
+  if(!beReady()) throw new Error(NO_BACKEND);
   const fd = new FormData();
   fd.append("file", file); fd.append("page", String(page));
   const r = await fetch(beBase() + "/import/pdf/sheet", {method:"POST", body:fd});
@@ -8409,6 +8427,7 @@ async function impPdfSheet(file, page){
   return r.json();
 }
 async function impPdfCrop(file, page, index, dpi){
+  if(!beReady()) throw new Error(NO_BACKEND);
   const fd = new FormData();
   fd.append("file", file); fd.append("page", String(page));
   fd.append("detail", String(index)); fd.append("dpi", String(dpi || 200));
@@ -8440,7 +8459,12 @@ async function impPdfPick(file, nm){
         + "Everything else here works without one.");
     return;
   }
-  toast(`Reading <b>${htmlSafe(nm)}</b>…`);
+  if(!beReady()){ toast(`<b>${htmlSafe(nm)}</b> — ${NO_BACKEND}`); return; }
+  /* A free Render service sleeps and takes about half a minute to wake, during which this sits
+     silent on a 16MB upload and looks hung. Say so once, up front, rather than leaving somebody
+     to decide whether it is broken. */
+  toast(`Reading <b>${htmlSafe(nm)}</b>… the first read after a while can take ~30s `
+      + `while the backend wakes up.`);
   let sheet = null, page = 0;
   /* WALK FORWARD to the first page that HAS details: page 1 of a set is usually a cover or a
      site plan, and offering those as something to trace would be a dead end.
