@@ -780,8 +780,15 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
     <div class="view" id="viewImport">
       <div class="trace-wrap">
         <div class="trace-bar wrap">
+          <!-- `.pdf` IS FIRST IN THE ACCEPT LIST ON PURPOSE. Without it the OS file dialog
+               greys PDFs out and they cannot be SELECTED at all, however well the code reads
+               them — `loadImageFile` routes `application/pdf` straight to `impPdfPick`, and
+               that path was reachable only by drag-and-drop. Reported from a desktop as "it's
+               not allowing me to import a pdf", which is exactly what it was doing.
+               Leading with `.pdf` rather than appending it also matters on Safari, which uses
+               the first entry for the dialog's default filter. -->
           <label class="btn" id="iLoad" for="sheetFile">⤓ Load sheet</label>
-          <input type="file" id="sheetFile" class="filepick" accept="image/*,image/svg+xml,.svg,.dxf,.png,.jpg,.jpeg,.heic,.webp" multiple>
+          <input type="file" id="sheetFile" class="filepick" accept=".pdf,application/pdf,image/*,image/svg+xml,.svg,.dxf,.png,.jpg,.jpeg,.heic,.webp" multiple>
           <div class="seg" id="unitSeg" style="margin:0;width:172px;flex:0 0 auto">
             <button data-u="mm" class="on">mm</button>
             <button data-u="cm">cm</button>
@@ -909,7 +916,7 @@ window.LEE3D_CFG=k=>{const v=(window.LEE3D_CONFIG||{})[k]; return (v&&v.indexOf(
           </span>
           <button class="btn ghost" id="bRot" title="Rotate this view 90° — use it if the object is drawn sideways">⟳ 90°</button>
           <label class="btn ghost" id="pickImg" for="imgFile" style="display:none">Drawing</label>
-          <input type="file" id="imgFile" class="filepick" accept="image/*,image/svg+xml,.svg,.dxf,.png,.jpg,.jpeg,.heic,.webp">
+          <input type="file" id="imgFile" class="filepick" accept=".pdf,application/pdf,image/*,image/svg+xml,.svg,.dxf,.png,.jpg,.jpeg,.heic,.webp">
           <span id="imgOpField" style="display:none;align-items:center;gap:6px;font-size:11px;color:var(--ink-dim)">
             <span>fade</span><input type="range" id="sOp" min="10" max="100" value="55" style="width:70px"><span id="vOp" class="mono">55</span>
             <button class="btn ghost" id="refInv" title="Flip the drawing's light/dark if the auto-contrast guessed wrong" style="padding:3px 7px">◐</button>
@@ -7168,6 +7175,14 @@ function loadImageFile(file){
     loadDXFFile(file).catch(err=>toast("Couldn't read that DXF: "+err.message));
     return;
   }
+  /* A PDF IS A DRAWING HERE TOO. `loadSheet` has routed PDFs to the importer since it was
+     built; this one never did, and would have said "Drop a drawing (SVG, PNG, JPEG) or a saved
+     .json model." — turning away the one format that carries its own scale, dimensions and
+     sheet number. Both pickers now OFFER pdf, so both have to handle it: a picker that lets
+     you choose a file the handler then refuses is worse than one that greys it out. */
+  if(/\.pdf$/i.test(file.name||"")||file.type==="application/pdf"){
+    impPdfPick(file, file.name||"drawing.pdf"); return;
+  }
   if(/\.json$/i.test(file.name||"")||file.type==="application/json"){                       // a saved model
     const r=new FileReader();
     r.onload=()=>{ try{ const d=JSON.parse(r.result);
@@ -7176,7 +7191,7 @@ function loadImageFile(file){
     }catch(e){toast("That JSON isn't a LEE3D model: "+e.message);} };
     r.readAsText(file); return;
   }
-  if(!file.type.startsWith("image/")){toast("Drop a drawing (SVG, PNG, JPEG) or a saved .json model.");return;}
+  if(!file.type.startsWith("image/")){toast("Drop a drawing (PDF, SVG, PNG, JPEG) or a saved .json model.");return;}
   const url=URL.createObjectURL(file);const img=new Image();
   img.onload=()=>{setRefImage(cv(),img);document.getElementById("imgOpField").style.display="inline-flex";
     switchTab("trace");fitTrace();
