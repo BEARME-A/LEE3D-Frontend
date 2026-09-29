@@ -8134,6 +8134,11 @@ document.getElementById("buildServer").onclick=async ()=>{
     const thru=+(r.headers.get("X-LEE3D-Pockets-Through-Wall")||0);
     const unusable=+(r.headers.get("X-LEE3D-Unusable-Views")||0);
     const skipped=+(r.headers.get("X-LEE3D-Skipped")||0);
+    /* THE WALL IN THE PART THAT PRINTS, measured on the exact solid rather than on the mesh the
+       thin-wall banner reads. For a load-bearing piece that is the whole distinction, and the
+       two can disagree: the banner watches the preview's surface and this watches the STEP. */
+    const wallMin=parseFloat(r.headers.get("X-LEE3D-Wall-Min")||"");
+    const wallThin=+(r.headers.get("X-LEE3D-Wall-Thin")||0);
     const warn=[];
     if(hollowFailed) warn.push("the shell could not be built, so this file is <b>solid</b> — "
       + "it will use far more material than the preview says");
@@ -8144,6 +8149,13 @@ document.getElementById("buildServer").onclick=async ()=>{
       + "so the part is <b>fatter</b> than the preview");
     if(skipped) warn.push(`${skipped} feature${skipped>1?"s have":" has"} no depth `
       + "(a mask or a label), so nothing was cut for "+(skipped>1?"them":"it"));
+    /* Only when it is materially under what was asked. A wall that came out at the thickness
+       requested is not news, and a banner that fires on every export stops being read — which
+       this file already records about the thin-wall warning. */
+    if(isFinite(wallMin) && S.wall > 0 && wallMin < S.wall*0.6)
+      warn.push(`the thinnest wall in this file is <b>${wallMin.toFixed(2)} mm</b> where you `
+        + `asked for ${fmtLen(S.wall)}${wallThin>1?` (${wallThin} spots)`:""} — measured on the `
+        + "exact solid, not on the preview. This spot may snap when printed or handled");
     download(await r.blob(), name+".step");
     // The exact build intersects ONE side outline. If a right-hand drawing was traced, the
     // STEP is a symmetric body and the preview beside it is not — say so rather than hand
