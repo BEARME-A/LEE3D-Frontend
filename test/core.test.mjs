@@ -869,6 +869,58 @@ t("deploy: the four connection placeholders are still what deploy.yml substitute
   }
 });
 
+t("drawing: a PDF can actually be CHOSEN, not only dropped", () => {
+  /* REPORTED FROM A DESKTOP: "it's not allowing me to import a pdf". It was not the importer.
+     Both file pickers carried `accept="image/*,...,.dxf"` with no pdf in it, so the OS dialog
+     GREYED PDFs OUT and one could never be selected — however well the code behind them reads
+     one. The PDF path was reachable only by drag-and-drop, which is why it tested fine.
+
+     And `loadImageFile` did not route PDFs at all; it would have said "Drop a drawing (SVG,
+     PNG, JPEG)". So widening the accept list alone would have offered a file the handler then
+     refused, which is worse than greying it out.
+
+     THE INVARIANT, and it is what this test pins: **a picker may not offer a format its
+     handler will not take.** Checked in both directions, because this failed in both. */
+  // ONLY HTML COMMENTS ARE STRIPPED HERE, and that is not an oversight. The block-comment
+  // stripper used elsewhere in this file ate the very tags under test: a mime glob of the form
+  // image-slash-star opens a block comment, so the stripper ran from inside an accept attribute
+  // to the next closing delimiter further down the file and swallowed the imgFile input whole.
+  // The test failed with "imgFile must still be a file picker", which was true of the stripped
+  // text and false of the app. A regex comment stripper is not safe on a file full of mime globs.
+  //
+  // These are LINE comments for the same reason. Writing the closing delimiter inside a block
+  // comment in order to explain it ends the comment there, and the rest becomes code — which is
+  // what the first version of this note did, and the suite would not even parse.
+  const src = html.replace(/<!--[\s\S]*?-->/g, " ");
+
+  for (const id of ["sheetFile", "imgFile"]) {
+    const m = src.match(new RegExp('id="' + id + '"[^>]*accept="([^"]*)"'));
+    ok(m, `${id} must still be a file picker with an accept list`);
+    ok(/\.pdf/i.test(m[1]),
+       `${id} does not accept .pdf, so the file dialog greys PDFs out and one cannot be `
+       + `chosen at all — which is what "it won't let me import a pdf" actually was`);
+    ok(/^\.pdf/i.test(m[1]),
+       `${id}: .pdf has to come FIRST — Safari uses the leading entry as the dialog's default `
+       + `filter, so appending it still hides PDFs behind "all files"`);
+  }
+
+  // and both handlers behind those pickers must take one
+  for (const fn of ["loadSheet", "loadImageFile"]) {
+    const i = src.indexOf("function " + fn + "(");
+    ok(i > 0, `${fn} must be findable`);
+    let d = 0, j = src.indexOf("{", i), end = j;
+    for (; end < src.length; end++) {
+      if (src[end] === "{") d++;
+      else if (src[end] === "}" && --d === 0) break;
+    }
+    const body = src.slice(i, end);
+    ok(/impPdfPick\(/.test(body),
+       `${fn} is behind a picker that now offers .pdf and it does not route one to the `
+       + `importer. A picker that offers a file its handler refuses is worse than one that `
+       + `greys it out.`);
+  }
+});
+
 t("drawing: reading a PDF stops at the end of the document, not at page 12", () => {
   /* The walk ran to page 12 whatever the file held, with ONE try around the whole loop. Asking
      for a page past the end is a 400, so on any shorter set where no page carries titled
