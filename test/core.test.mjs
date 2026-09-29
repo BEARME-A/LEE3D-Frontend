@@ -869,6 +869,42 @@ t("deploy: the four connection placeholders are still what deploy.yml substitute
   }
 });
 
+t("drawing: with no backend configured, the PDF path says SO", () => {
+  // `beBase()` is empty until BACKEND_URL is substituted at deploy time, and
+  // `fetch("" + "/import/pdf/sheet")` is a RELATIVE url. On GitHub Pages that hits the 404 page
+  // and comes back as an ordinary failed response, so the reader reported
+  //     "the backend could not read page 1 (404)"
+  // which says the backend rejected the file when there is no backend at all. Somebody would go
+  // looking at their PDF. The most likely failure on the path being tested right now, wearing
+  // the most misleading message available.
+  //
+  // Source-level and POSITIONAL: what matters is that the check happens BEFORE the fetch, which
+  // no value can express. HTML comments only — a mime glob opens a block comment, see the test
+  // above.
+  const src = html.replace(/<!--[\s\S]*?-->/g, " ");
+
+  for (const fn of ["impPdfSheet", "impPdfCrop"]) {
+    const i = src.indexOf("async function " + fn + "(");
+    ok(i > 0, fn + " must be findable");
+    const body = src.slice(i, i + 700);
+    const guard = body.indexOf("beReady()");
+    const call = body.indexOf("fetch(");
+    ok(guard > 0 && call > guard,
+       fn + " must refuse before it fetches — an empty base makes the url RELATIVE, and a 404 "
+       + "from GitHub Pages reads as the backend rejecting the file");
+  }
+
+  const p = src.indexOf("async function impPdfPick(");
+  ok(p > 0, "impPdfPick must be findable");
+  const pick = src.slice(p, p + 1200);
+  ok(/beReady\(\)/.test(pick),
+     "impPdfPick has to check before it starts walking pages, or the first page's failure is "
+     + "what tells the person, in the wrong words");
+  ok(/~30s|30s/.test(pick),
+     "and it should say the first read can be slow — a sleeping free-tier service takes about "
+     + "half a minute, during which a 16MB upload sits silent and looks hung");
+});
+
 t("drawing: a PDF can actually be CHOSEN, not only dropped", () => {
   /* REPORTED FROM A DESKTOP: "it's not allowing me to import a pdf". It was not the importer.
      Both file pickers carried `accept="image/*,...,.dxf"` with no pdf in it, so the OS dialog
