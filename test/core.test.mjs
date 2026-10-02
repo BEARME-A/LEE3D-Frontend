@@ -869,6 +869,51 @@ t("deploy: the four connection placeholders are still what deploy.yml substitute
   }
 });
 
+t("drawing: every sheet in a set is reachable, not just the first with a detail", () => {
+  // Reported from a desktop with the real 8-page permit set: the picker landed on L301B — a
+  // grading plan with one marginal detail — and there was NO WAY to reach any other page. The
+  // column and the wayfinding sign, 10 and 9 details carrying 92 and 93 dimensions, sit three
+  // and five pages further on. The importer had read them all correctly for weeks and the
+  // studio would only ever show the first.
+  //
+  // The backend already knew how many pages there were: `extract_geometry` has returned
+  // `page_count` all along and `read_sheet` dropped it, so a client could not tell page 3 of 8
+  // from the only page there is. It is on the sheet contract now as `page.count`.
+  const src = html.replace(/<!--[\s\S]*?-->/g, " ");
+
+  ok(/async function impPdfGoPage\(/.test(src),
+     "there has to be a way to open another page of the same file");
+  const i = src.indexOf("async function impPdfGoPage(");
+  const body = src.slice(i, i + 1100);
+  ok(/page\.count/.test(body),
+     "the walk has to be bounded by the document, not by a guess — asking past the end is a 400");
+  ok(/impPdfSheet\(/.test(body),
+     "and it reads the page it was asked for, one round trip, rather than scanning the set: "
+     + "somebody who wants page 6 should not pay for pages 2 through 5");
+
+  // and the renderer has to OFFER it, or the function is another thing nothing calls.
+  // BRACE-MATCHED, not a fixed window: a 2200-character slice ran off the end of the function
+  // into unrelated code and failed on an `innerHTML` that was never in the renderer at all.
+  // A window is a guess about length; the braces are the function.
+  const r = src.indexOf("function impPdfRenderList(");
+  ok(r > 0, "impPdfRenderList must be findable");
+  let depth = 0, end = src.indexOf("{", r);
+  for (; end < src.length; end++) {
+    if (src[end] === "{") depth++;
+    else if (src[end] === "}" && --depth === 0) break;
+  }
+  const rend = src.slice(r, end);
+  ok(/impPdfGoPage\(/.test(rend), "the picker must show the controls that call it");
+  ok(/page\.count|total/.test(rend), "and say which page of how many you are on");
+  // MATCH THE SINK, NOT THE WORD. The first version asserted the renderer contains no
+  // "innerHTML" and fired on the comment that documents the safe practice — the line reading
+  // "straight from a PDF — never innerHTML". A test for a word's absence is beaten by prose
+  // about that word, which is now the fourth time in this file, and the rule that survives all
+  // four is the same: match what the code DOES. An assignment is the sink; a mention is not.
+  ok(!/\.innerHTML\s*=/.test(rend),
+     "a sheet number comes out of a PDF — this panel builds DOM and never assigns markup");
+});
+
 t("drawing: with no backend configured, the PDF path says SO", () => {
   // `beBase()` is empty until BACKEND_URL is substituted at deploy time, and
   // `fetch("" + "/import/pdf/sheet")` is a RELATIVE url. On GitHub Pages that hits the 404 page
