@@ -8370,6 +8370,34 @@ function impPdfRenderList(){
   if(!st || !box) return;
   const host = document.getElementById("pdfPickList");
   host.textContent = "";
+
+  /* PAGE NAVIGATION, because the sheet you want is rarely the first one carrying a detail.
+     Built as DOM rather than markup for the same reason the list below is: a sheet number
+     comes out of a PDF and this app puts untrusted strings in with textContent. */
+  const total = (st.sheet.page && st.sheet.page.count) || null;
+  if(total && total > 1){
+    const nav = document.createElement("div");
+    nav.style.cssText = "display:flex;align-items:center;gap:6px;margin:0 0 8px";
+    const mk = (label, to, on) => {
+      const b = document.createElement("button");
+      b.className = "mini"; b.textContent = label; b.disabled = !on;
+      if(on) b.addEventListener("click", () => impPdfGoPage(to));
+      return b;
+    };
+    nav.appendChild(mk("‹ Prev sheet", st.page - 1, st.page > 0));
+    const where = document.createElement("span");
+    where.className = "mono"; where.style.cssText = "flex:1;text-align:center;opacity:.8";
+    where.textContent = `page ${st.page + 1} of ${total}`;
+    nav.appendChild(where);
+    nav.appendChild(mk("Next sheet ›", st.page + 1, st.page + 1 < total));
+    host.appendChild(nav);
+    const hint = document.createElement("p");
+    hint.className = "hint"; hint.style.cssText = "margin:0 0 8px";
+    hint.textContent = "A permit set puts its details several pages in — step through to find "
+                     + "the sheet you want. Each page is read when you open it.";
+    host.appendChild(hint);
+  }
+
   const items = impPdfListItems(st.sheet);
   if(!items.length){
     const p = document.createElement("p");
@@ -8454,11 +8482,6 @@ function impPdfSummary(sheet){
 }
 
 async function impPdfPick(file, nm){
-  if(!beBase()){
-    toast("Reading a PDF needs the backend — set its address in <b>Settings</b> first. "
-        + "Everything else here works without one.");
-    return;
-  }
   if(!beReady()){ toast(`<b>${htmlSafe(nm)}</b> — ${NO_BACKEND}`); return; }
   /* A free Render service sleeps and takes about half a minute to wake, during which this sits
      silent on a 16MB upload and looks hung. Say so once, up front, rather than leaving somebody
@@ -8495,6 +8518,30 @@ async function impPdfPick(file, nm){
   switchTab("import");
   impPdfRenderList();
   return sheet;
+}
+
+/* GO TO A PARTICULAR PAGE OF THE SAME FILE.
+   `impPdfPick` lands on the FIRST page carrying titled details and used to stop there, with no
+   way to reach any other. On a real permit set that is a dead end: Dylan's L301B is a grading
+   plan with one marginal detail, and the column and the wayfinding sign — 10 and 9 details,
+   92 and 93 dimensions — are three and five pages further on. The importer read them all
+   perfectly and the studio would only ever show the first.
+   One read per page actually looked at, rather than scanning the set up front: a scan is eight
+   round trips with the whole file each time, and someone who wants page 6 should not pay for
+   pages 2 through 5. */
+async function impPdfGoPage(page){
+  const st = IMP.pdf; if(!st) return;
+  const total = (st.sheet && st.sheet.page && st.sheet.page.count) || null;
+  if(page < 0 || (total && page >= total)) return;
+  toast(`Reading page ${page + 1}${total ? ` of ${total}` : ""}…`);
+  let got = null;
+  try{ got = await impPdfSheet(st.file, page); }
+  catch(err){ toast(`Page ${page + 1}: ${htmlSafe(err.message)}`); return; }
+  st.page = page; st.sheet = got;
+  impPdfRenderList();
+  const n = (got.details || []).length;
+  if(!n) toast(`Page ${page + 1} carries no titled details — it is a plan or a schedule. `
+             + `Use the arrows to try another.`);
 }
 
 /* Crop one detail and hand it to the tracer as a reference page, with the scale it was drawn
