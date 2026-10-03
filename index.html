@@ -7991,15 +7991,30 @@ function applyWiredConfig(){
 // workflow log to find out a secret name was mistyped.
 function wiringReport(){
   const el=document.getElementById("wireState"); if(!el)return;
-  const sb=!!(window.LEE3D_CFG("supabaseUrl")&&window.LEE3D_CFG("supabaseKey"));
-  const be=!!window.LEE3D_CFG("backendUrl");
-  const repo=!!window.LEE3D_CFG("libRepo");
-  const row=(ok,name,fix)=>`<div style="margin:2px 0">${ok?'<b style="color:var(--good)">✓ wired</b>':'<b style="color:var(--warn)">— not wired</b>'} · <b>${name}</b>${ok?"":` <span style="opacity:.7">${fix}</span>`}</div>`;
+  /* THREE STATES, NOT TWO, because there are three and the panel asserted the wrong one.
+     This read ONLY `LEE3D_CFG` — the deploy-time config — so an address typed into the field
+     below never changed it. Reported from a desktop where the PDF importer was demonstrably
+     working off a pasted URL while this line said "— not wired · Publish + exact build".
+     The UI was making a false claim about its own state, which is the one thing a status
+     panel must not do.
+     `wired` and `this browser` are genuinely different and both worth saying: a deploy-time
+     value works for everyone and follows you across devices, a typed one works right now and
+     is gone on the next machine. Collapsing them to "wired" would hide the thing that still
+     needs doing; collapsing them to "not wired" is what it was doing. */
+  const val=id=>{const el=document.getElementById(id); return (el&&el.value||"").trim();};
+  const state=(deployed,typed)=>deployed?"deploy":(typed?"browser":null);
+  const sb=state(!!(window.LEE3D_CFG("supabaseUrl")&&window.LEE3D_CFG("supabaseKey")),
+                 !!(val("sbUrl")&&val("sbKey")));
+  const be=state(!!window.LEE3D_CFG("backendUrl"), !!val("backendUrl"));
+  const repo=state(!!window.LEE3D_CFG("libRepo"), !!val("libRepo"));
+  const BADGE={deploy:'<b style="color:var(--good)">✓ wired</b>',
+               browser:'<b style="color:var(--good)">✓ this browser</b>'};
+  const row=(st,name,fix)=>`<div style="margin:2px 0">${BADGE[st]||'<b style="color:var(--warn)">— not wired</b>'} · <b>${name}</b>${st==="deploy"?"":` <span style="opacity:.7">${st==="browser"?"working now, but only here — "+fix+" to keep it":fix}</span>`}</div>`;
   el.innerHTML =
     row(sb,"Cloud saves", "→ add repo <b>Secrets</b> <code>SUPABASE_URL</code> + <code>SUPABASE_ANON_KEY</code>, then push")+
     row(be,"Publish + exact build", "→ add repo <b>Variable</b> <code>BACKEND_URL</code> = your Render URL")+
     row(repo,"Shared library", "→ add repo <b>Variable</b> <code>LIB_REPO</code> (defaults to BEARME-A/LEE3D-Lib)")+
-    ((sb&&be)?'<div style="margin-top:4px;opacity:.75">Nothing to paste — this is all wired at deploy.</div>'
+    ((sb==="deploy"&&be==="deploy")?'<div style="margin-top:4px;opacity:.75">Nothing to paste — this is all wired at deploy.</div>'
              :'<div style="margin-top:4px;opacity:.75">Secrets and Variables are different tabs under <b>Settings → Secrets and variables → Actions</b>. A value typed below works, but only in this browser.</div>');
 }
 // The publish button appears when the backend can do it for everyone (token server-side),
@@ -10419,7 +10434,12 @@ function ghRememberSync(){const on=document.getElementById("ghRemember").checked
   try{ if(on)localStorage.setItem("lee3d.ghtoken",ghTok()); else localStorage.removeItem("lee3d.ghtoken"); }catch(_){}}
 document.getElementById("ghRemember").addEventListener("change",ghRememberSync);
 document.getElementById("ghToken").addEventListener("input",()=>{if(document.getElementById("ghRemember").checked)ghRememberSync();refreshPublishUI();});
-document.getElementById("backendUrl").addEventListener("input",()=>refreshPublishUI());
+/* AND REFRESH THE BADGES TOO. This listener updated the publish button and left the wiring
+   panel asserting "not wired" about a backend that was answering — the panel simply never ran
+   again after load. A status line that cannot change is not a status line. */
+document.getElementById("backendUrl").addEventListener("input",()=>{refreshPublishUI();wiringReport();});
+["sbUrl","sbKey","libRepo"].forEach(id=>{const el=document.getElementById(id);
+  if(el)el.addEventListener("input",()=>wiringReport());});
 // Publishing to the shared repo needs a GitHub WRITE token. That can never live in this
 // page — a static site's source is readable by anyone, so it would hand the whole repo to
 // the internet (and GitHub's secret scanning revokes exposed tokens anyway). The backend
