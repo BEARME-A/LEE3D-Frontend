@@ -869,6 +869,47 @@ t("deploy: the four connection placeholders are still what deploy.yml substitute
   }
 });
 
+t("settings: the wiring panel reports what is usable NOW, not what was set at deploy", () => {
+  // Reported from a desktop screenshot: the rail read "— not wired · Publish + exact build"
+  // while the PDF importer was demonstrably working off an address pasted into the field right
+  // below it. `wiringReport()` read only `LEE3D_CFG(...)` — the deploy-time config — so a typed
+  // value could never change it, and the listener on that field refreshed the publish button
+  // and not the panel. **A status line that cannot change is not a status line**, and one that
+  // asserts the opposite of what the app is doing is worse than none.
+  //
+  // THREE STATES, because there are three: wired at deploy (works everywhere, follows you),
+  // this browser only (works now, gone on the next machine), and not wired. Collapsing the
+  // middle one into "wired" would hide the repo variable still worth setting; collapsing it
+  // into "not wired" is the bug.
+  const src = html.replace(/<!--[\s\S]*?-->/g, " ");
+  const i = src.indexOf("function wiringReport(");
+  ok(i > 0, "wiringReport must be findable");
+  let depth = 0, end = src.indexOf("{", i);
+  for (; end < src.length; end++) {
+    if (src[end] === "{") depth++;
+    else if (src[end] === "}" && --depth === 0) break;
+  }
+  const body = src.slice(i, end);
+
+  // NAME THE INPUTS. The first version asserted the body contains `getElementById`, which was
+  // satisfied by `getElementById("wireState")` on its own first line — so gutting the input
+  // reads left the test green. A generic token is not a behaviour; this is the same mistake as
+  // matching the word `innerHTML` instead of the assignment, two tests ago.
+  for (const id of ["backendUrl", "sbUrl"]) {
+    ok(body.includes('"' + id + '"'),
+       `wiringReport must read the ${id} field, not only the deploy-time config — otherwise a `
+       + `pasted address leaves the panel claiming the thing the app is currently using is not `
+       + `wired, which is what was reported`);
+  }
+  ok(/this browser/.test(body),
+     "a typed value works now and only here — say that rather than calling it wired or unwired");
+
+  // and it has to be able to RUN again
+  ok(/addEventListener\("input",\s*\(\)\s*=>\s*\{[^}]*wiringReport\(\)/.test(src)
+     || /wiringReport\(\)\s*;?\s*\}\s*\)\s*;/.test(src),
+     "typing an address must refresh the panel; it used to refresh only the publish button");
+});
+
 t("drawing: every sheet in a set is reachable, not just the first with a detail", () => {
   // Reported from a desktop with the real 8-page permit set: the picker landed on L301B — a
   // grading plan with one marginal detail — and there was NO WAY to reach any other page. The
